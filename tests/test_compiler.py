@@ -2701,10 +2701,49 @@ print xs
             "ABC 9\n2\n[1, 2, 14]\n",
         ),
         "import_repeated": ("import math\nimport math\nprint math.floor(2.5)\n", "2\n"),
+        "run_bodies": (
+            """function greet(string who) returns void
+    print "hello", who
+end
+function run() returns void
+    print "ran"
+end
+var x = 3
+if x > 5 run greet("big")
+else if x > 2 run greet("medium")
+else run greet("small")
+if x == 3 run print "three" else run print "other", x
+if x == 4 run print "four"
+if true then
+    if x == 1 run print "one"
+else
+    print "wrong else"
+end
+if false then
+    print "no"
+else run print "else run"
+for i in [1, 2] run print i
+for k, v in {"a": 1} run print k, v
+var items = [7, 8]
+while items.length > 0 run print items.pop()
+var score = 0
+when score > 2 run print "score", score
+score = 1
+score = 5
+if true run run()
+""",
+            "hello medium\nthree\nelse run\n1\n2\na 1\n8\n7\nscore 5\nran\n",
+        ),
     }
 )
 NEGATIVE.update(
     {
+        "run_assignment": ("var x = 0\nif true run x = 1\n", "'run' expects a function call"),
+        "run_keyword": ("function f() returns int\n    if true run return 1\n    return 0\nend\n",
+                        "'run' expects a function call, such as 'run greet()', not 'return'"),
+        "run_not_call": ("var x = 0\nwhile x < 1 run x\n", "'run' expects a function call"),
+        "run_empty": ("for i in [1] run\n", "'run' expects a function call"),
+        "run_then_end": ("if true run print 1\nend\n", "unexpected keyword 'end'"),
         "throw_with_no_message_field": (
             "class Plain\n    int x = 0\nend\nthrow Plain(1) with \"m\"\n",
             "needs an error type with a message field",
@@ -3263,6 +3302,18 @@ print web.route("POST", "/echo", echo, 0, "::1")
         self.assertEqual(self.command("fmt", messy).returncode, 0)
         self.assertEqual(messy.read_text(encoding="utf-8"), expected)
         self.assertEqual(self.command("fmt", "--check", messy).returncode, 0)
+        # `run` bodies open no block; an `if ... run` chain continues with `else ... run`.
+        messy.write_text(
+            "if true then\nif a run f()\n# note\nelse if b run g()\nelse run h()\n"
+            "for i in xs run f(i)\nwhile c run g()\nwhen d run h()\nf()\nend\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(self.command("fmt", messy).returncode, 0)
+        self.assertEqual(
+            messy.read_text(encoding="utf-8"),
+            "if true then\n    if a run f()\n    # note\n    else if b run g()\n    else run h()\n"
+            "    for i in xs run f(i)\n    while c run g()\n    when d run h()\n    f()\nend\n",
+        )
         # A line opening with a delimiter is not a continuation line.
         messy.write_text("print 1\n[int, int] p = [1, 2]\n(print)(p)\n", encoding="utf-8")
         self.assertEqual(self.command("fmt", "--check", messy).returncode, 0)

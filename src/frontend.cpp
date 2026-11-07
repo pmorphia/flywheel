@@ -1340,6 +1340,7 @@ EP Parser::outer() {
         } while (accept(","));
         const auto &last = *n->args.back();
         if ((last.kind == "name" || last.kind == "member") &&
+            !(peek().kind == "id" && peek().text == "else") &&
             (peek().kind == "id" || peek().kind == "int" || peek().kind == "real" ||
              peek().kind == "string" || peek().kind == "char" || peek().kind == "markup"))
             throw Error(peek().loc, "nested calls require parentheses around their arguments");
@@ -1375,6 +1376,77 @@ std::vector<SP> Parser::block() {
         out.push_back(std::move(t));
     }
     return out;
+}
+bool Parser::runs() {
+    if (peek().text != "run" || peek().kind != "id")
+        return false;
+    take();
+    return true;
+}
+// `if/while/for/when ... run call`: the body is one function call, written after `run` with no
+// `end`. It cannot be a keyword statement, a declaration, or an assignment.
+std::vector<SP> Parser::runBody() {
+    auto loc = peek().loc;
+    static const std::string usage = "'run' expects a function call, such as 'run greet()'";
+    if (peek().kind == "nl" || peek().kind == "eof")
+        throw Error(loc, usage);
+    if (peek().kind == "id") {
+        static const std::set<std::string> keywords = {
+            "import", "var",    "const",    "class",   "function", "component", "return",
+            "if",     "then",   "else",     "while",   "do",       "for",       "end",
+            "break",  "continue", "try",    "catch",   "finally",  "throw",     "match",
+            "case",   "defer",  "when",     "reactive", "computed", "assert",
+            "enum",   "interface"};
+        if (keywords.count(peek().text) && !(peek().text == "function" && peek(1).text == "("))
+            throw Error(loc, usage + ", not '" + peek().text + "'");
+    }
+    auto s = std::make_unique<Stmt>();
+    s->loc = loc;
+    s->kind = "expr";
+    s->target = outer();
+    if (peek().kind == "op" && (peek().text == "=" || peek().text == "+=" || peek().text == "-=" ||
+                                peek().text == "*=" || peek().text == "/=" ||
+                                peek().text == "//=" || peek().text == "%="))
+        throw Error(peek().loc, usage + "; assignments need 'then' or 'do' ... 'end'");
+    if (s->target->kind != "call")
+        throw Error(loc, usage);
+    std::vector<SP> body;
+    body.push_back(std::move(s));
+    return body;
+}
+// After `if condition run call`, the chain continues with `else run call` or
+// `else if condition run call`, on the same line or the next. Any other `else` belongs to an
+// enclosing `if ... then`, so a run chain never takes a block `else` by accident.
+void Parser::runElse(Stmt &s) {
+    auto saved = pos;
+    newlines();
+    if (peek().text == "else" && peek().kind == "id") {
+        auto elsePos = pos;
+        take();
+        if (runs()) {
+            s.other = runBody();
+            finish();
+            return;
+        }
+        if (peek().text == "if" && peek().kind == "id") {
+            auto ifPos = pos;
+            take();
+            bool chained = false;
+            try {
+                expression();
+                chained = peek().text == "run" && peek().kind == "id";
+            } catch (const Error &) {
+            }
+            pos = ifPos;
+            if (chained) {
+                s.other.push_back(statement());
+                return;
+            }
+        }
+        pos = elsePos;
+    }
+    pos = saved;
+    finish();
 }
 SP Parser::statement() {
     auto s = std::make_unique<Stmt>();
@@ -1506,12 +1578,22 @@ SP Parser::statement() {
     if (accept("if")) {
         s->kind = "if";
         s->expr = expression();
+        if (runs()) {
+            s->body = runBody();
+            runElse(*s);
+            return s;
+        }
         expect("then");
         finish();
         s->body = block();
         if (accept("else")) {
             if (peek().text == "if") {
                 s->other.push_back(statement());
+                return s;
+            }
+            if (runs()) {
+                s->other = runBody();
+                finish();
                 return s;
             }
             finish();
@@ -1566,6 +1648,11 @@ SP Parser::statement() {
     if (accept("while")) {
         s->kind = "while";
         s->expr = expression();
+        if (runs()) {
+            s->body = runBody();
+            finish();
+            return s;
+        }
         expect("do");
         finish();
         s->body = block();
@@ -1584,6 +1671,11 @@ SP Parser::statement() {
             s->op = identifier().text; // for key, value in map / for index, item in array
         expect("in");
         s->expr = expression();
+        if (runs()) {
+            s->body = runBody();
+            finish();
+            return s;
+        }
         expect("do");
         finish();
         s->body = block();
@@ -1631,6 +1723,15 @@ SP Parser::statement() {
                 condition = expression();
         } catch (const Error &) {
             condition.reset();
+        }
+        if (condition && peek().text == "run" && peek().kind == "id") {
+            s->kind = "when";
+            s->loc = loc;
+            s->expr = std::move(condition);
+            take();
+            s->body = runBody();
+            finish();
+            return s;
         }
         if (condition && peek().text == "do") {
             take();

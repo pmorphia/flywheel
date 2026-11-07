@@ -131,7 +131,7 @@ print describe(Token.Number(1500)), "{label}: {count:>4}"
 
 ## Reactive variables and units
 
-`reactive` variables can be watched: `when condition do ... end` runs each time the condition becomes true (a plain variable the condition reads becomes reactive), and `computed` values follow their expression. `bool alive/dead = true` declares a bool with a negated alias. Units of measure are checked at compile time and apply to every numeric type: `unitns`, `unit`, and `unitconv` declare dimensions, units, and relations, the `metric`, `imperial`, and `time` modules declare common ones, and `100m + 2km`, `distance in cm`, and `100m / 10s` work while `100m + 10s` is a compile error. `time.sleep` takes seconds or a time quantity (`time.sleep 500ms`). See [reactive variables](docs/reactive.md) and [units](docs/units.md).
+`reactive` variables can be watched: `when condition do ... end` runs each time the condition becomes true (a plain variable the condition reads becomes reactive; `when condition run call()` runs one call, as `if`, `else`, `while`, and `for` can too), and `computed` values follow their expression. `bool alive/dead = true` declares a bool with a negated alias. Units of measure are checked at compile time and apply to every numeric type: `unitns`, `unit`, and `unitconv` declare dimensions, units, and relations, the `metric`, `imperial`, and `time` modules declare common ones, and `100m + 2km`, `distance in cm`, and `100m / 10s` work while `100m + 10s` is a compile error. `time.sleep` takes seconds or a time quantity (`time.sleep 500ms`). See [reactive variables](docs/reactive.md) and [units](docs/units.md).
 
 ```flywheel
 reactive bool playerAlive/playerDead = true

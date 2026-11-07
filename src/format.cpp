@@ -5,7 +5,7 @@
 namespace fw {
 namespace {
 struct Block {
-    std::string kind; // "block", "interface", "match", or "case"
+    std::string kind; // "block", "interface", "match", "case", or "runif"
     int depth;        // delimiter depth of the opening line; deeper lines are continuations
 };
 // Index of the ')' matching the '(' at `open` within one line's tokens, or npos.
@@ -108,10 +108,12 @@ std::string format(const std::string &source) {
         auto &line = byLine[n];
         auto content = trim(raw, !endsInside[n]);
         if (line.empty()) {
-            // Blank and comment-only lines follow the surrounding block.
+            // Blank and comment-only lines follow the surrounding block. A pending
+            // `if ... run` chain opens no block.
+            size_t open = stack.size() - (!stack.empty() && stack.back().kind == "runif" ? 1 : 0);
             out.push_back(content.empty()
                               ? std::string()
-                              : indent(stack.size() + (lastDepth > (stack.empty() ? 0 : stack.back().depth))) +
+                              : indent(open + (lastDepth > (stack.empty() ? 0 : stack.back().depth))) +
                                     content);
             continue;
         }
@@ -122,6 +124,17 @@ std::string format(const std::string &source) {
             ++first;
         auto &keyword = line[first]->text;
         bool isKeyword = line[first]->kind == "id";
+        // `if/while/for/when ... run call` and `else run call` hold their one call on the line
+        // itself: no block, no `end`.
+        bool runs = false;
+        if (isKeyword && line.back()->text != "do" && line.back()->text != "then")
+            for (size_t i = first + 1; i + 1 < line.size() && !runs; ++i)
+                runs = line[i]->kind == "id" && line[i]->text == "run" &&
+                       line[i]->depth == line[first]->depth;
+        // An `if ... run` chain continues only with `else ... run`.
+        if (!stack.empty() && stack.back().kind == "runif" &&
+            !(isKeyword && keyword == "else" && runs))
+            stack.pop_back();
         size_t level = stack.size();
         int closed = -1; // delimiter depth of the block an `end` closes
         if (isKeyword && keyword == "end" && !stack.empty()) {
@@ -155,6 +168,16 @@ std::string format(const std::string &source) {
         auto depth = line[first]->depth;
         if (!isKeyword || keyword == "end" || keyword == "case") {
             // closes or continues an existing block
+        } else if (keyword == "else" && runs) {
+            // `else run call` ends the chain; `else if condition run call` continues it.
+            if (!stack.empty())
+                stack.pop_back();
+            if (first + 1 < line.size() && line[first + 1]->text == "if")
+                stack.push_back({"runif", depth});
+        } else if (keyword == "if" && runs)
+            stack.push_back({"runif", depth});
+        else if ((keyword == "while" || keyword == "for") && runs) {
+            // one call, no block
         } else if (keyword == "match")
             stack.push_back({"match", depth});
         else if (keyword == "class" || keyword == "enum" || keyword == "elements" ||

@@ -41,7 +41,7 @@ var other = first \
 
 Semicolons separate statements at the top grouping level. UTF-8 source is validated and strings are UTF-8. Identifiers may contain non-ASCII letters; see [characters and strings](types.md#characters-and-strings). String `length` and `len` count characters (Unicode scalar values), not bytes. `'x'` is a `char` literal; `{name}` inside a string interpolates, but a `{` followed by whitespace is a literal brace, as is a `}` with whitespace on either side, so `"{ name }"` is the text `{ name }` and CSS or JavaScript such as `"p { color: {c}; }"` reads naturally (the `{c}` still interpolates). The same rule applies to markup text. Write `{{` / `}}` for a literal brace with no space beside it, as in compact JSON.
 
-A number directly followed by an identifier, with no space between them, is a quantity literal: `100m`, `15time.s` (see [units](units.md)). An exponent needs digits (`1e5`, `2E-3`), so `5eV` is a quantity. `when`, `reactive`, `computed` ([reactive variables](reactive.md)), `error` (at the top level, [error types](errors.md#declaring-error-types)), `with` (after `throw`), and `unitns`, `unit`, `unitconv` (at the top level) are soft keywords. They keep their meaning only in those positions and remain usable as names elsewhere.
+A number directly followed by an identifier, with no space between them, is a quantity literal: `100m`, `15time.s` (see [units](units.md)). An exponent needs digits (`1e5`, `2E-3`), so `5eV` is a quantity. `when`, `reactive`, `computed` ([reactive variables](reactive.md)), `run` (after a condition or `else`, [one-call bodies](#collections-and-control-flow)), `error` (at the top level, [error types](errors.md#declaring-error-types)), `with` (after `throw`), and `unitns`, `unit`, `unitconv` (at the top level) are soft keywords. They keep their meaning only in those positions and remain usable as names elsewhere.
 
 ## Calls and construction
 
@@ -134,6 +134,19 @@ The block is the enclosing `if`, loop, `try`, or function body, so a `defer` ins
 ## Collections and control flow
 
 Arrays infer a homogeneous common type, or use the declared element type. Empty arrays require context. Heterogeneous literals infer tuples, with compile-time integer indices. Maps use `{key: value}` literals and sets `{a, b}`; `{}` is an empty map or set, depending on the expected type. See [collections](collections.md). Arrays use shared mutable identity and checked indices; `s[a..b]` and `s[a..<b]` slice strings and sequences.
+
+`if`, `else`, `while`, `for`, and `when` also take a one-call body after `run` (a soft keyword, still usable as a name) in place of `then`/`do` ... `end`. The body is a single function call, with no `end`; keyword statements, declarations, and assignments need the block form:
+
+```flywheel
+if x > 5 run greet("big")
+else if x > 2 run greet("medium")
+else run greet("small")
+for item in items run print item
+while queue.length > 0 run handle(queue.pop())
+when score > 10 run celebrate()
+```
+
+An `if ... run` chain continues only with `else run` or `else if ... run`, on the same line or the next; any other `else` belongs to an enclosing `if ... then`. `if c then ... else run f()` ends the `if` without `end`.
 
 `for` creates a fresh lexical binding and evaluates the iterable once. Arrays, tuples, strings (by character), maps (by key), sets, and classes with an iterator protocol are iterable. `for key, value in map` and `for index, item in array` bind two names.
 

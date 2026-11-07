@@ -2,7 +2,7 @@
 
 ## `reactive`, `when`, and `computed`
 
-A `reactive` variable can be watched. `when condition do ... end` runs its body each time the condition **becomes** true, and `computed` declares a value derived from reactive variables:
+A `reactive` variable can be watched. `when condition do ... end` runs its body each time the condition **becomes** true (`when condition run call()` runs one call, with no `end`), and `computed` declares a value derived from reactive variables:
 
 ```flywheel
 reactive int score = 0

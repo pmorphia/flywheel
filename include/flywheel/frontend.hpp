@@ -211,6 +211,9 @@ class Parser {
     EP stringExpr(const Token &t);
     SP statement();
     std::vector<SP> block();
+    bool runs();               // `run` (a soft keyword) introduces a one-call body
+    std::vector<SP> runBody(); // the call after `run`, with no `end`
+    void runElse(Stmt &s);     // `else run call` / `else if condition run call` after a run body
     std::vector<SP> pending; // extra statements produced by the last statement (destructuring)
     int temporaries = 0;
     Function function(const std::string &owner = "", bool signatureOnly = false);
