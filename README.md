@@ -39,7 +39,7 @@ build/flywheel run https://example.com/hello.fw  # or ssh://, sftp://, file://, 
 build/flywheel build -g app.fw -o app      # DWARF lines and locals for gdb/lldb
 build/flywheel run --race app.fw           # stop on data races between threads
 build/flywheel test --coverage             # run test_*.fw / *_test.fw files, report lines
-build/flywheel fmt --check src/*.fw        # indentation formatter
+build/flywheel format --check src/*.fw        # indentation formatter
 build/flywheel doc lib.fw -o lib.html      # HTML from documentation comments
 build/flywheel repl                        # interactive session
 build/flywheel lsp                         # language server for editors

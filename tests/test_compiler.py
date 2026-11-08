@@ -3298,10 +3298,11 @@ print web.route("POST", "/echo", echo, 0, "::1")
             "function main\n    var xs = [1,\n        2]\n    if true then\n        print xs\n    else\n        print 0\n    end\n"
             "    xs.each(function(int x)\n        print x\n    end)\n    var s = \"a  \n   b\"\nend\n"
         )
-        self.assertEqual(self.command("fmt", "--check", messy).returncode, 1)
-        self.assertEqual(self.command("fmt", messy).returncode, 0)
+        self.assertEqual(self.command("format", "--check", messy).returncode, 1)
+        self.assertEqual(self.command("format", messy).returncode, 0)
         self.assertEqual(messy.read_text(encoding="utf-8"), expected)
         self.assertEqual(self.command("fmt", "--check", messy).returncode, 0)
+        self.assertEqual(self.command("f", "--check", messy).returncode, 0)
         # `run` bodies open no block; an `if ... run` chain continues with `else ... run`.
         messy.write_text(
             "if true then\nif a run f()\n# note\nelse if b run g()\nelse run h()\n"
@@ -3317,6 +3318,19 @@ print web.route("POST", "/echo", echo, 0, "::1")
         # A line opening with a delimiter is not a continuation line.
         messy.write_text("print 1\n[int, int] p = [1, 2]\n(print)(p)\n", encoding="utf-8")
         self.assertEqual(self.command("fmt", "--check", messy).returncode, 0)
+
+        # Command aliases.
+        self.source.write_text("print 6 * 7\n", encoding="utf-8")
+        for alias in ("r", "run"):
+            result = self.command(alias, self.source)
+            self.assertEqual((result.returncode, result.stdout), (0, "42\n"), result.stderr)
+        self.assertEqual(self.command("c", self.source).returncode, 0)
+        for alias in ("v", "version", "--version"):
+            self.assertTrue(self.command(alias).stdout.startswith("Flywheel "), alias)
+        for alias in ("h", "help", "-h", "--help"):
+            result = self.command(alias)
+            self.assertEqual(result.returncode, 0, alias)
+            self.assertIn("format|fmt|f", result.stdout)
 
         self.source.write_text("function f() returns int\n    return 1\nend\nprint f()", encoding="utf-8")
         result = self.command("check", "-g", self.source, "--emit-ir", self.root / "debug.ll")

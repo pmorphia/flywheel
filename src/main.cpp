@@ -6,6 +6,7 @@
 #include <sstream>
 #include <filesystem>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <set>
 #include <llvm/Config/llvm-config.h>
@@ -646,29 +647,30 @@ int main(int argc, char **argv) {
     static int anchor;
     fw::setExecutablePath(llvm::sys::fs::getMainExecutable(argv[0], &anchor));
     std::string usage =
-        "Usage: flywheel run SOURCE [options] [-- program arguments]\n"
+        "Usage: flywheel run|r SOURCE [options] [-- program arguments]\n"
         "           compile and run\n"
-        "       flywheel build SOURCE [options] [-o output]\n"
+        "       flywheel build|b SOURCE [options] [-o output]\n"
         "           write an executable\n"
-        "       flywheel check SOURCE [options] [--emit-ir file.ll]\n"
+        "       flywheel check|c SOURCE [options] [--emit-ir file.ll]\n"
         "           type-check without running\n"
-        "       flywheel desktop SOURCE [options] [-- program arguments]\n"
+        "       flywheel desktop|d SOURCE [options] [-- program arguments]\n"
         "           show the returned page in a window\n"
-        "       flywheel serve SOURCE [--port N] [--host H] [options] [-- program arguments]\n"
+        "       flywheel serve|s SOURCE [--port N] [--host H] [options] [-- program arguments]\n"
         "           serve the returned page over HTTP\n"
-        "       flywheel export SOURCE OUTPUT [options] [program arguments]\n"
+        "       flywheel export|e SOURCE OUTPUT [options] [program arguments]\n"
         "           write the returned value to OUTPUT\n"
-        "       flywheel debug SOURCE [options] [-- program arguments]\n"
+        "       flywheel debug|db SOURCE [options] [-- program arguments]\n"
         "           print the returned value and run time\n"
-        "       flywheel test [files or directories] [-O0..3] [--coverage] [--race]\n"
+        "       flywheel test|t [files or directories] [-O0..3] [--coverage] [--race]\n"
         "           run test_*.fw and *_test.fw files\n"
-        "       flywheel fmt [--check] files...\n"
+        "       flywheel format|fmt|f [--check] files...\n"
         "           format source files\n"
         "       flywheel doc module.fw [-o output.html]\n"
         "           generate HTML documentation\n"
-        "       flywheel update [curl arguments]\n"
+        "       flywheel update|u [curl arguments]\n"
         "           reinstall from flywheel.polymorphia.dev\n"
-        "       flywheel repl | lsp | selftest | --version\n"
+        "       flywheel repl | lsp | selftest\n"
+        "       flywheel help|h|--help | version|v|--version\n"
         "\n"
         "SOURCE is a .fw/.fly path or a URL (https, http, ftp, ftps, sftp, ssh, scp, file).\n"
         "Use -s CODE (--source CODE) instead of SOURCE to run code from the command line.\n"
@@ -679,15 +681,28 @@ int main(int argc, char **argv) {
         "  --race           detect data races\n"
         "  -o FILE          output file (build, export)\n"
         "  --emit-ir FILE   write the LLVM IR\n";
-    if (argc == 2 && std::string(argv[1]) == "--version") {
-        std::cout << "Flywheel " FW_VERSION ", LLVM " LLVM_VERSION_STRING "\n";
-        return 0;
-    }
     if (argc < 2) {
         std::cerr << usage;
         return 2;
     }
+    // Short aliases; fmt is the old name of format.
+    static const std::map<std::string, std::string> aliases = {
+        {"r", "run"},     {"b", "build"},    {"c", "check"},       {"d", "desktop"},
+        {"s", "serve"},   {"e", "export"},   {"db", "debug"},      {"t", "test"},
+        {"f", "format"},  {"fmt", "format"}, {"u", "update"},      {"h", "help"},
+        {"-h", "help"},   {"--help", "help"}, {"v", "version"},    {"--version", "version"},
+    };
     std::string command = argv[1];
+    if (auto alias = aliases.find(command); alias != aliases.end())
+        command = alias->second;
+    if (command == "version" && argc == 2) {
+        std::cout << "Flywheel " FW_VERSION ", LLVM " LLVM_VERSION_STRING "\n";
+        return 0;
+    }
+    if (command == "help" && argc == 2) {
+        std::cout << usage;
+        return 0;
+    }
     if (command == "selftest") {
         auto python = llvm::sys::findProgramByName("python3");
         if (!python)
@@ -722,7 +737,7 @@ int main(int argc, char **argv) {
         return fw::docCommand(std::vector<std::string>(argv + 2, argv + argc));
     if (command == "repl")
         return repl(argv[0]);
-    if (command == "fmt") {
+    if (command == "format") {
         bool check = false;
         std::vector<std::string> files;
         for (int i = 2; i < argc; ++i) {

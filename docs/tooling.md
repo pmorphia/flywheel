@@ -1,5 +1,9 @@
 # Tooling
 
+## Command aliases
+
+Each `flywheel` command has a short alias: `r` (run), `b` (build), `c` (check), `d` (desktop), `s` (serve), `e` (export), `db` (debug), `t` (test), `f` or `fmt` (format), and `u` (update). `doc`, `repl`, `lsp`, and `selftest` have none. `help`, `h`, `-h`, and `--help` print the usage; `version`, `v`, and `--version` print the version.
+
 ## Testing
 
 `flywheel test [files or directories] [-O0..3]` discovers test files named `test_*.fw` or `*_test.fw` (or `.fly`), recursively under the given directories (default: the current directory, skipping `build` and hidden directories). In each file, every top-level function whose name starts with `test_` and that takes no arguments is a test. Each test runs in turn; a failure or error is reported and the remaining tests still run.
@@ -70,7 +74,7 @@ The compiler's own regression suite (Python, in `tests/`) runs with `flywheel se
 
 ## Formatting
 
-`flywheel fmt file...` re-indents files in place by block structure with four spaces per level; `flywheel fmt --check file...` only reports files that would change (exit status 1). Continuation lines (open brackets, trailing operators, `\`) get one extra level, lambda bodies inside call arguments are indented once, and trailing whitespace and extra blank lines at the end of the file are removed.
+`flywheel format file...` (also `fmt` or `f`) re-indents files in place by block structure with four spaces per level; `flywheel format --check file...` only reports files that would change (exit status 1). Continuation lines (open brackets, trailing operators, `\`) get one extra level, lambda bodies inside call arguments are indented once, and trailing whitespace and extra blank lines at the end of the file are removed.
 
 The formatter only changes indentation and trailing whitespace. Lines that start inside a multi-line string or markup literal are left exactly as written, so formatting never changes program output.
 
