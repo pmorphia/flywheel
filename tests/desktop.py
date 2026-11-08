@@ -247,7 +247,7 @@ int reports = 0
 var report = function(string text) returns string
     print "report " + text
     reports += 1
-    if reports == 2 then
+    if reports == 2 do
         desktop.quit()
     end
     return "ok"

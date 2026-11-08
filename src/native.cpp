@@ -784,7 +784,7 @@ ForeignModule scanForeign(const std::string &language, const std::string &path) 
         scanZig(text, m);
     static const std::set<std::string> reserved = {
         "import", "as",    "var",      "const",    "class",     "function", "component",  "returns",
-        "return", "if",    "then",     "else",     "while",     "do",       "for",        "in",
+        "return", "if",    "else",     "while",     "do",       "for",        "in",
         "end",    "break", "continue", "try",      "catch",     "finally",  "throw",      "inst",
         "attr",   "true",  "false",    "null",     "public",    "private",  "void",       "weak",
         "and",    "or",    "not",      "enum",     "interface", "extends",  "implements", "match",

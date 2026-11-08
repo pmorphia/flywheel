@@ -40,11 +40,11 @@ end
 
 function judge(Shape shape) returns Verdict
     match shape
-        case Square s if s.width > 3.0 then
+        case Square s if s.width > 3.0 do
             return Verdict.Large
-        case Circle c if c.radius < 1.0 then
+        case Circle c if c.radius < 1.0 do
             return Verdict.Small
-        else
+        else do
             return Verdict.Medium
     end
 end
@@ -58,7 +58,7 @@ class Stack<T>
         inst items.push(item)
     end
     function pop() returns T?
-        if inst items.length == 0 then
+        if inst items.length == 0 do
             return null
         end
         return inst items.pop()

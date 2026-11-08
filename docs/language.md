@@ -135,7 +135,7 @@ The block is the enclosing `if`, loop, `try`, or function body, so a `defer` ins
 
 Arrays infer a homogeneous common type, or use the declared element type. Empty arrays require context. Heterogeneous literals infer tuples, with compile-time integer indices. Maps use `{key: value}` literals and sets `{a, b}`; `{}` is an empty map or set, depending on the expected type. See [collections](collections.md). Arrays use shared mutable identity and checked indices; `s[a..b]` and `s[a..<b]` slice strings and sequences.
 
-`if`, `else`, `while`, `for`, and `when` also take a one-call body after `run` (a soft keyword, still usable as a name) in place of `then`/`do` ... `end`. The body is a single function call, with no `end`; keyword statements, declarations, and assignments need the block form:
+`if`, `else`, `while`, `for`, and `when` also take a one-call body after `run` (a soft keyword, still usable as a name) in place of `do` ... `end`. The body is a single function call, with no `end`; keyword statements, declarations, and assignments need the block form:
 
 ```flywheel
 if x > 5 run greet("big")
@@ -146,7 +146,7 @@ while queue.length > 0 run handle(queue.pop())
 when score > 10 run celebrate()
 ```
 
-An `if ... run` chain continues only with `else run` or `else if ... run`, on the same line or the next; any other `else` belongs to an enclosing `if ... then`. `if c then ... else run f()` ends the `if` without `end`.
+An `if ... run` chain continues only with `else run` or `else if ... run`, on the same line or the next; any other `else` belongs to an enclosing `if ... do`. `if c do ... else run f()` ends the `if` without `end`.
 
 `for` creates a fresh lexical binding and evaluates the iterable once. Arrays, tuples, strings (by character), maps (by key), sets, and classes with an iterator protocol are iterable. `for key, value in map` and `for index, item in array` bind two names.
 

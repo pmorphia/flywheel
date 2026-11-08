@@ -19,13 +19,13 @@ class Url
 
     # The port, or the scheme's default (80 for http, 443 for https, 0 if unknown).
     function effective_port returns int
-        if inst port != 0 then
+        if inst port != 0 do
             return inst port
         end
-        if inst scheme == "https" or inst scheme == "wss" then
+        if inst scheme == "https" or inst scheme == "wss" do
             return 443
         end
-        if inst scheme == "http" or inst scheme == "ws" then
+        if inst scheme == "http" or inst scheme == "ws" do
             return 80
         end
         return 0
@@ -34,28 +34,28 @@ class Url
     # The URL as text.
     function to_string returns string
         var out = ""
-        if inst scheme != "" then
+        if inst scheme != "" do
             out = inst scheme + ":"
         end
-        if inst host != "" or inst scheme == "file" then
+        if inst host != "" or inst scheme == "file" do
             out += "//"
-            if inst user != "" then
+            if inst user != "" do
                 out += inst user + "@"
             end
-            if inst host.contains(":") then
+            if inst host.contains(":") do
                 out += "[" + inst host + "]"
-            else
+            else do
                 out += inst host
             end
-            if inst port != 0 then
+            if inst port != 0 do
                 out += ":" + string(inst port)
             end
         end
         out += inst path
-        if inst query != "" then
+        if inst query != "" do
             out += "?" + inst query
         end
-        if inst fragment != "" then
+        if inst fragment != "" do
             out += "#" + inst fragment
         end
         return out
@@ -67,66 +67,66 @@ function parse(string text) returns Url
     var u = Url()
     var rest = text.trim()
     var hash = rest.find("#")
-    if hash >= 0 then
+    if hash >= 0 do
         u.fragment = rest.slice(hash + 1)
         rest = rest.slice(0, hash)
     end
     var question = rest.find("?")
-    if question >= 0 then
+    if question >= 0 do
         u.query = rest.slice(question + 1)
         rest = rest.slice(0, question)
     end
     var colon = rest.find(":")
     var slash = rest.find("/")
-    if colon > 0 and (slash < 0 or colon < slash) and valid_scheme(rest.slice(0, colon)) then
+    if colon > 0 and (slash < 0 or colon < slash) and valid_scheme(rest.slice(0, colon)) do
         u.scheme = rest.slice(0, colon).lower()
         rest = rest.slice(colon + 1)
     end
-    if rest.starts_with("//") then
+    if rest.starts_with("//") do
         rest = rest.slice(2)
         var end_ = rest.find("/")
         var authority = rest
-        if end_ >= 0 then
+        if end_ >= 0 do
             authority = rest.slice(0, end_)
             rest = rest.slice(end_)
-        else
+        else do
             rest = ""
         end
         var at = authority.find_last("@")
-        if at >= 0 then
+        if at >= 0 do
             u.user = authority.slice(0, at)
             authority = authority.slice(at + 1)
         end
         var port_text = ""
-        if authority.starts_with("[") then
+        if authority.starts_with("[") do
             var close = authority.find("]")
-            if close < 0 then
+            if close < 0 do
                 throw ValueError("invalid IPv6 host in URL '" + text + "'")
             end
             u.host = authority.slice(1, close)
             var after = authority.slice(close + 1)
-            if after.starts_with(":") then
+            if after.starts_with(":") do
                 port_text = after.slice(1)
-            else if after != "" then
+            else if after != "" do
                 throw ValueError("invalid text after IPv6 host in URL '" + text + "'")
             end
-        else
+        else do
             var p = authority.find_last(":")
-            if p >= 0 then
+            if p >= 0 do
                 u.host = authority.slice(0, p)
                 port_text = authority.slice(p + 1)
-            else
+            else do
                 u.host = authority
             end
             u.host = u.host.lower()
         end
-        if port_text != "" then
+        if port_text != "" do
             for c in port_text do
-                if c < '0' or c > '9' then
+                if c < '0' or c > '9' do
                     throw ValueError("invalid port in URL '" + text + "'")
                 end
             end
-            if port_text.length > 5 or int(port_text) > 65535 then
+            if port_text.length > 5 or int(port_text) > 65535 do
                 throw ValueError("invalid port in URL '" + text + "'")
             end
             u.port = int(port_text)
@@ -137,13 +137,13 @@ function parse(string text) returns Url
 end
 
 function valid_scheme(string s) returns bool
-    if s.length == 0 then
+    if s.length == 0 do
         return false
     end
     for i, c in s.chars() do
         var letter = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')
         var other = (c >= '0' and c <= '9') or c == '+' or c == '-' or c == '.'
-        if not letter and (i == 0 or not other) then
+        if not letter and (i == 0 or not other) do
             return false
         end
     end
@@ -153,7 +153,7 @@ end
 # Resolves a reference such as "../b?x=1" against a base URL (RFC 3986 section 5).
 function join(string base, string reference) returns string
     var r = parse(reference)
-    if r.scheme != "" then
+    if r.scheme != "" do
         r.path = remove_dots(r.path)
         return r.to_string()
     end
@@ -161,7 +161,7 @@ function join(string base, string reference) returns string
     var out = Url()
     out.scheme = b.scheme
     out.fragment = r.fragment
-    if reference.starts_with("//") then
+    if reference.starts_with("//") do
         out.user = r.user
         out.host = r.host
         out.port = r.port
@@ -172,21 +172,21 @@ function join(string base, string reference) returns string
     out.user = b.user
     out.host = b.host
     out.port = b.port
-    if r.path == "" then
+    if r.path == "" do
         out.path = b.path
         out.query = b.query
-        if reference.contains("?") then
+        if reference.contains("?") do
             out.query = r.query
         end
-    else
-        if r.path.starts_with("/") then
+    else do
+        if r.path.starts_with("/") do
             out.path = remove_dots(r.path)
-        else
+        else do
             var directory = ""
             var last = b.path.find_last("/")
-            if last >= 0 then
+            if last >= 0 do
                 directory = b.path.slice(0, last + 1)
-            else if b.host != "" then
+            else if b.host != "" do
                 directory = "/"
             end
             out.path = remove_dots(directory + r.path)
@@ -198,30 +198,30 @@ end
 
 # Removes "." and ".." segments from a path.
 function remove_dots(string path) returns string
-    if path == "" then
+    if path == "" do
         return ""
     end
     string[] output = []
     var segments = path.split("/")
     for i, segment in segments do
         var last = i == segments.length - 1
-        if segment == "." then
-            if last then
+        if segment == "." do
+            if last do
                 output.push("")
             end
-        else if segment == ".." then
-            if output.length > 1 or (output.length == 1 and output[0] != "") then
+        else if segment == ".." do
+            if output.length > 1 or (output.length == 1 and output[0] != "") do
                 output.pop()
             end
-            if last then
+            if last do
                 output.push("")
             end
-        else
+        else do
             output.push(segment)
         end
     end
     var result = "/".join(output)
-    if path.starts_with("/") and not result.starts_with("/") then
+    if path.starts_with("/") and not result.starts_with("/") do
         result = "/" + result
     end
     return result
@@ -240,17 +240,17 @@ end
 # Decodes `a=1&b=two+words` into a map (`+` is a space).
 function parse_query(string query) returns map<string, string>
     map<string, string> params = {}
-    if query == "" then
+    if query == "" do
         return params
     end
     for pair in query.split("&") do
-        if pair == "" then
+        if pair == "" do
             continue
         end
         var equals = pair.find("=")
-        if equals < 0 then
+        if equals < 0 do
             params[encoding.form_decode(pair)] = ""
-        else
+        else do
             params[encoding.form_decode(pair.slice(0, equals))] = encoding.form_decode(pair.slice(equals + 1))
         end
     end

@@ -298,11 +298,11 @@ class Lowerer {
                 auto armed = "__fwr_armed" + n, check = "__fwr_check" + n;
                 std::string text = "var " + armed + " = true\nvar " + check +
                                    " = function() returns void\n"
-                                   "    if __fwr_condition then\n"
-                                   "        if " + armed + " then\n"
+                                   "    if __fwr_condition do\n"
+                                   "        if " + armed + " do\n"
                                    "            " + armed + " = false\n"
                                    "        end\n"
-                                   "    else\n"
+                                   "    else do\n"
                                    "        " + armed + " = true\n"
                                    "    end\n"
                                    "end\n";

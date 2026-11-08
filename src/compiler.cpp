@@ -3927,7 +3927,7 @@ Val Compiler::expectError(Expr &e) {
                                                      : "var __fw_expect_r" + id + " = " + f + "()";
     auto text = "__FW_T? " + caught + " = null\ntry\n    " + call + "\ncatch __FW_T " + err +
                 "\n    " + caught + " = " + err + "\nend\nif " + caught +
-                " == null then\n    throw AssertionError(\"expected __FW_NAME, but nothing was "
+                " == null do\n    throw AssertionError(\"expected __FW_NAME, but nothing was "
                 "raised\")\nend\n";
     auto pos = text.find("__FW_NAME");
     text.replace(pos, 9, displayName(errorType));
@@ -5243,7 +5243,7 @@ void Compiler::statement(Stmt &s) {
         b.SetInsertPoint(end);
         if (yesEnds && noEnds)
             b.CreateUnreachable();
-        // `if x == null then return end` proves x non-null for the rest of the block.
+        // `if x == null do return end` proves x non-null for the rest of the block.
         else if (yesEnds && s.other.empty())
             narrow(whenFalse);
         return;

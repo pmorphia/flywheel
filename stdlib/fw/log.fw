@@ -21,7 +21,7 @@ end
 # Sets the level by name ("debug", "info", "warn", "error"), as from an environment variable.
 function set_level_name(string name)
     var found = Level.from_name(name.slice(0, 1).upper() + name.slice(1).lower())
-    if found == null then
+    if found == null do
         throw ValueError("unknown log level '" + name + "'")
     end
     threshold = found
@@ -49,29 +49,29 @@ end
 
 # Writes a message with optional key/value fields when its level is enabled.
 function write(Level level, string message, map<string, string> fields = {})
-    if not enabled(level) then
+    if not enabled(level) do
         return
     end
     var line = ""
-    if json_lines then
+    if json_lines do
         map<string, string> record = {"time": timestamp(), "level": level.name.lower(), "message": message}
         for key, value in fields do
             record[key] = value
         end
         line = json.encode(record)
-    else
+    else do
         line = timestamp() + " " + level.name.upper().pad_end(5) + " " + message
         for key, value in fields do
             var shown = value
-            if value.contains(" ") or value.contains("=") or value.contains("\"") or value == "" then
+            if value.contains(" ") or value.contains("=") or value.contains("\"") or value == "" do
                 shown = json.encode(value)
             end
             line += " " + key + "=" + shown
         end
     end
-    if destination == "" then
+    if destination == "" do
         io.write_error(line + "\n")
-    else
+    else do
         fs.append(destination, line + "\n")
     end
 end

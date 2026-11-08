@@ -12,26 +12,26 @@ function parse(string text, char separator = ',') returns string[][]
     bool started = false
     while i < chars.length do
         var c = chars[i]
-        if quoted then
-            if c == '"' then
-                if i + 1 < chars.length and chars[i + 1] == '"' then
+        if quoted do
+            if c == '"' do
+                if i + 1 < chars.length and chars[i + 1] == '"' do
                     field.push('"')
                     i += 1
-                else
+                else do
                     quoted = false
                 end
-            else
+            else do
                 field.push(c)
             end
-        else if c == '"' and field.length == 0 then
+        else if c == '"' and field.length == 0 do
             quoted = true
             started = true
-        else if c == separator then
+        else if c == separator do
             row.push("".join(field))
             field = []
             started = true
-        else if c == '\n' or c == '\r' then
-            if c == '\r' and i + 1 < chars.length and chars[i + 1] == '\n' then
+        else if c == '\n' or c == '\r' do
+            if c == '\r' and i + 1 < chars.length and chars[i + 1] == '\n' do
                 i += 1
             end
             row.push("".join(field))
@@ -39,16 +39,16 @@ function parse(string text, char separator = ',') returns string[][]
             row = []
             field = []
             started = false
-        else
+        else do
             field.push(c)
             started = true
         end
         i += 1
     end
-    if quoted then
+    if quoted do
         throw ValueError("CSV text ends inside a quoted field")
     end
-    if started or field.length > 0 or row.length > 0 then
+    if started or field.length > 0 or row.length > 0 do
         row.push("".join(field))
         rows.push(row)
     end
@@ -60,15 +60,15 @@ end
 function parse_records(string text, char separator = ',') returns map<string, string>[]
     var rows = parse(text, separator)
     map<string, string>[] records = []
-    if rows.length == 0 then
+    if rows.length == 0 do
         return records
     end
     var header = rows[0]
     for index, row in rows do
-        if index == 0 then
+        if index == 0 do
             continue
         end
-        if row.length != header.length then
+        if row.length != header.length do
             throw ValueError("CSV row {index + 1} has {row.length} fields; the header has {header.length}")
         end
         map<string, string> record = {}
@@ -82,7 +82,7 @@ end
 
 # Quotes a field when it contains the separator, a quote, or a line break.
 function quote(string field, char separator = ',') returns string
-    if field.contains(separator) or field.contains('"') or field.contains('\n') or field.contains('\r') then
+    if field.contains(separator) or field.contains('"') or field.contains('\n') or field.contains('\r') do
         return "\"" + field.replace("\"", "\"\"") + "\""
     end
     return field
@@ -103,7 +103,7 @@ function format(string[][] rows, char separator = ',') returns string
     for row in rows do
         lines.push(format_row(row, separator))
     end
-    if lines.length == 0 then
+    if lines.length == 0 do
         return ""
     end
     return "\r\n".join(lines) + "\r\n"

@@ -147,7 +147,7 @@ print shapes[0].area()
 
 `value is Type` tests the runtime class of a class or interface value (null is never an instance). `value as Type` is a checked cast: upcasts are free, downcasts raise `CastError` on mismatch, and `as Type?` yields null instead. Casting between unrelated classes is a compile error. For non-class types, `x is T` is decided statically; for a nullable primitive it tests for presence.
 
-Conditions narrow variables. Inside `if pet is Dog then`, `pet` has type `Dog`. A narrowed local cannot be reassigned in that block. A narrowed module global is re-checked on each read, because a call could change it.
+Conditions narrow variables. Inside `if pet is Dog do`, `pet` has type `Dog`. A narrowed local cannot be reassigned in that block. A narrowed module global is re-checked on each read, because a call could change it.
 
 ## Enums
 
@@ -177,11 +177,11 @@ end
 
 function area(Shape s) returns double
     match s
-        case Shape.Circle(r) then
+        case Shape.Circle(r) do
             return 3.14159 * r * r
-        case Shape.Rect(w, h) then
+        case Shape.Rect(w, h) do
             return w * h
-        case Shape.Empty then
+        case Shape.Empty do
             return 0.0
     end
 end
@@ -199,23 +199,23 @@ print shapes[1], Shape.Circle(2.0).radius   # Shape.Rect(width=2, height=3) 2
 ```flywheel
 function describe(Shape shape) returns string
     match shape
-        case Circle c if c.radius > 10.0 then
+        case Circle c if c.radius > 10.0 do
             return "big circle"
-        case Circle c then
+        case Circle c do
             return "circle"
-        case Square then
+        case Square do
             return "square"
     end
 end
 
 match code
-    case 0 then
+    case 0 do
         print "ok"
-    case 1, 2 then
+    case 1, 2 do
         print "warning"
-    case 3..9 then
+    case 3..9 do
         print "error"
-    else
+    else do
         print "unknown"
 end
 ```
@@ -234,7 +234,7 @@ Case patterns:
 | `case Shape.Circle(r)` | a member of an enum with data, binding (or comparing) its fields in order |
 | `case [x, y]` | a tuple or array with exactly that many elements, binding (or comparing) them |
 
-In the destructuring patterns, a bare name binds that element, `_` skips it, any other expression is compared with `==`, and patterns nest: `case [Shape.Rect(w, _), 0] then`. A tuple pattern whose parts all bind always matches tuples of that length; an array pattern also checks the length.
+In the destructuring patterns, a bare name binds that element, `_` skips it, any other expression is compared with `==`, and patterns nest: `case [Shape.Rect(w, _), 0] do`. A tuple pattern whose parts all bind always matches tuples of that length; an array pattern also checks the length.
 
 ### Destructuring declarations
 
@@ -249,7 +249,7 @@ end
 var (low, high) = min_max([3, 1, 2])
 ```
 
-Any case may add a guard: `case Circle c if c.radius > 1.0 then`. The subject is evaluated once. Cases are tried in order, and only the first matching case runs; there is no fallthrough.
+Any case may add a guard: `case Circle c if c.radius > 1.0 do`. The subject is evaluated once. Cases are tried in order, and only the first matching case runs; there is no fallthrough.
 
 Without `else`, a `match` must be exhaustive. The compiler checks enum members, `true`/`false`, `ok`/`error`, `null` plus a type pattern for nullable values, and every concrete class that can have the subject's static type. Guarded cases do not count toward exhaustiveness. A non-exhaustive match is a compile error naming the missing cases.
 
@@ -286,7 +286,7 @@ A type parameter can require an interface or base class (`T implements Named`, `
 function largest<T is comparable>(T[] items) returns T
     var best = items[0]
     for x in items do
-        if x > best then
+        if x > best do
             best = x
         end
     end
@@ -317,12 +317,12 @@ Any type can be made nullable with `?`: `int?`, `double?`, `bool?`, `char?`, `Co
 ```flywheel
 int? port = null
 print port ?? 8080          # ?? supplies a fallback when the left side is null
-if port != null then
+if port != null do
     print port + 1          # narrowed to int
 end
 function find(int[] xs, int x) returns int?
     for i, item in xs do
-        if item == x then
+        if item == x do
             return i
         end
     end
@@ -332,7 +332,7 @@ end
 
 Nullable primitives store present values in a small heap box, so `int?` costs an allocation; `null` costs nothing. `==` and `!=` compare presence and value (`a == 5` is false for null). Arithmetic and ordering need non-null operands: check for null, use `??`, or cast with `int(x)` (which raises `CastError` for null).
 
-Null checks narrow variables in `if`, `while`, and the right side of `and`/`or`: `if x != null then`, `while item != null do`, and `x != null and x > 0`. After `if x == null then return end` (an early exit), the rest of the block sees `x` as non-null. Narrowed reads are null-checked, so narrowing stays sound even if the variable is reassigned. Member access on a nullable class value is also checked automatically.
+Null checks narrow variables in `if`, `while`, and the right side of `and`/`or`: `if x != null do`, `while item != null do`, and `x != null and x > 0`. After `if x == null do return end` (an early exit), the rest of the block sees `x` as non-null. Narrowed reads are null-checked, so narrowing stays sound even if the variable is reassigned. Member access on a nullable class value is also checked automatically.
 
 `a ?? b` evaluates `b` only when `a` is null. The result is non-null unless `b` is nullable too.
 

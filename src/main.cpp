@@ -473,7 +473,7 @@ int runTests(std::vector<std::string> paths, const fw::Options &options, const c
             }
             if (fixtures.count("teardown_all"))
                 runner += "__fw_fixture_teardown_all()\n";
-            runner += "if __fw_failed > 0 then\n    throw AssertionError(string(__fw_failed) + "
+            runner += "if __fw_failed > 0 do\n    throw AssertionError(string(__fw_failed) + "
                       "\" of " +
                       std::to_string(tests.size()) + " test(s) failed\")\nend\n";
             auto extra = fw::Parser(fw::lex(runner)).parse();

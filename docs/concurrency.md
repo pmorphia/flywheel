@@ -56,7 +56,7 @@ A task that is never joined is joined when its last reference is released. A tas
 
 While spawned threads run, each operation on an array, map, set, class instance, global, or captured variable is atomic: `xs.push(x)` from several threads keeps every value, `xs.pop()` never returns the same item twice, and a value read into a variable or passed to a function stays alive even if another thread replaces it. Formatting, `json.encode`, casts, and copies read a snapshot of each collection. When no other thread is running these locks are skipped.
 
-Only single operations are atomic. A sequence such as `counter[0] += 1` (a read then a write), or `if xs.length > 0 then xs.pop()`, can interleave with other threads, so combine steps with a mutex or pass values through channels:
+Only single operations are atomic. A sequence such as `counter[0] += 1` (a read then a write), or `if xs.length > 0 run xs.pop()`, can interleave with other threads, so combine steps with a mutex or pass values through channels:
 
 ```flywheel
 import thread

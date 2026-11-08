@@ -44,13 +44,13 @@ end
 
 Prefer declared error types to string names: a misspelled type in `catch` is a compile error, and the error can carry fields.
 
-### Named errors, `assert`, and `then`
+### Named errors and `assert`
 
 `throw "Name" with "message"` (also written `throw "Name" "message"`, with an optional comma) raises an error named by a string, without declaring a type. `catch "Name" e` catches errors by name: errors thrown with that name, builtin errors of that type, and instances of a class with that name. The binding is optional (`catch "Name"`). If the name is a builtin error type (`catch "ValueError" e`), the binding has that type; otherwise it is an `Error`. Every error binding has `.name` (its type name as written in source) and `.message`:
 
 ```flywheel
 function load(string key) returns string
-    if key == "" then
+    if key == "" do
         throw "EmptyKey" "the key is empty"
     end
     return key
@@ -60,7 +60,7 @@ try
     load("")
 catch "EmptyKey" e
     print e.name, e.message     # EmptyKey the key is empty
-then
+finally
     print "done"
 end
 ```
@@ -72,8 +72,6 @@ main.fw:8:1: warning: catch "EmptyKye" never matches: nothing in the program thr
 ```
 
 The check is skipped when the program throws a name computed at run time (`throw kind "message"`).
-
-`then` is another spelling of `finally`: the block runs on every exit from the `try`.
 
 `assert condition "message"` raises `AssertionError` with the message when the condition is false; the message may be left out (`assertion failed`) or separated by a comma, and `assert(condition, "message")` also works. The condition must be a `bool`.
 
@@ -95,16 +93,16 @@ Results are explicit tagged values, separate from the exception channel:
 
 ```flywheel
 function divide(int n, int d) returns Result<int, string>
-    if d == 0 then
+    if d == 0 do
         return Result.error("division by zero")
     end
     return Result.ok(n // d)
 end
 
 var result = divide(42, 2)
-if result.is_ok then
+if result.is_ok do
     print result.unwrap()
-else
+else do
     print result.error()
 end
 ```

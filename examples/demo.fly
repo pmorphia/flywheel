@@ -28,9 +28,9 @@ component UserCard = <div style={attr style}>
 </div>
 
 function load_user(string path) returns Person
-    if fs.exists(path) then
+    if fs.exists(path) do
         return Person.from_json(fs.read(path))
-    else
+    else do
         return Person("danny", 15)
     end
 end

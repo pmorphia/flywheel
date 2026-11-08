@@ -7,12 +7,12 @@ function count_primes(int low, int high) returns int
         bool prime = n > 1
         int d = 2
         while d * d <= n and prime do
-            if n % d == 0 then
+            if n % d == 0 do
                 prime = false
             end
             d += 1
         end
-        if prime then
+        if prime do
             found += 1
         end
     end

@@ -127,7 +127,7 @@ std::string format(const std::string &source) {
         // `if/while/for/when ... run call` and `else run call` hold their one call on the line
         // itself: no block, no `end`.
         bool runs = false;
-        if (isKeyword && line.back()->text != "do" && line.back()->text != "then")
+        if (isKeyword && line.back()->text != "do")
             for (size_t i = first + 1; i + 1 < line.size() && !runs; ++i)
                 runs = line[i]->kind == "id" && line[i]->text == "run" &&
                        line[i]->depth == line[first]->depth;
@@ -154,8 +154,7 @@ std::string format(const std::string &source) {
                    stack.back().kind == "match") {
             level = stack.size();
             stack.push_back({"case", line[first]->depth});
-        } else if (isKeyword && (keyword == "else" || keyword == "catch" || keyword == "finally" ||
-                                 (keyword == "then" && line.size() == first + 1)))
+        } else if (isKeyword && (keyword == "else" || keyword == "catch" || keyword == "finally"))
             level = stack.empty() ? 0 : stack.size() - 1;
         int base = closed >= 0 ? closed : stack.empty() ? 0 : stack.back().depth;
         // An opening delimiter carries the depth inside it; the line itself starts one level out.
@@ -188,7 +187,7 @@ std::string format(const std::string &source) {
         else if (keyword == "function" && first + 1 < line.size() && line[first + 1]->kind == "id" &&
                  (stack.empty() || stack.back().kind != "interface"))
             stack.push_back({"block", depth});
-        else if (keyword == "if" && line.back()->text == "then")
+        else if (keyword == "if" && line.back()->text == "do")
             stack.push_back({"block", depth});
         else if (keyword == "when" && line.size() > first + 1 && line.back()->text == "do")
             stack.push_back({"block", depth}); // `when condition do` ... `end`

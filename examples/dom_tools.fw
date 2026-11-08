@@ -6,7 +6,7 @@ var page = <main>
 </main>
 
 var title = page.get_by_id("main-title")
-if title != null then
+if title != null do
     title.text_content = "Hello & welcome!"
 end
 

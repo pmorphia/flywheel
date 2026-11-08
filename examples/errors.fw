@@ -1,14 +1,14 @@
 function divide(int value, int divisor) returns Result<int, string>
-    if divisor == 0 then
+    if divisor == 0 do
         return Result.error("division by zero")
     end
     return Result.ok(value // divisor)
 end
 
 var result = divide(42, 0)
-if result.is_ok then
+if result.is_ok do
     print result.unwrap()
-else
+else do
     print result.error()
 end
 

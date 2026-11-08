@@ -79,11 +79,11 @@ end
 
 function size(Shape shape) returns Size
     match shape
-        case Circle c if c.radius > 2.0 then
+        case Circle c if c.radius > 2.0 do
             return Size.Large
-        case Square s if s.side > 3.0 then
+        case Square s if s.side > 3.0 do
             return Size.Large
-        else
+        else do
             return Size.Small
     end
 end
@@ -114,13 +114,13 @@ end
 
 function describe(Token t) returns string
     match t
-        case Token.Number(n) if n < 0 then
+        case Token.Number(n) if n < 0 do
             return "negative {n}"
-        case Token.Number(n) then
+        case Token.Number(n) do
             return "number {n:,}"
-        case Token.Name(text) then
+        case Token.Name(text) do
             return "name " + text
-        case Token.Plus then
+        case Token.Plus do
             return "plus"
     end
 end
@@ -190,7 +190,7 @@ Values are reference counted with atomic counts and freed deterministically; a s
 
 ## Modules and errors
 
-Local `.fw` / `.fly` imports resolve first, then installed packages (`.flywheel-modules`, then the installation's `modules` directory), then library and native modules. Packages are installed by [Pulley](../pulley/README.md) (`pulley` / `ppm`) from Distrobase registries; the `flywheel` command has no package commands. Top-level declarations are public by default; `private` hides implementation names. Dependency initialization runs once, and import cycles and wildcard collisions are diagnosed. See [modules](docs/modules.md). Typed `try`/`catch`/`finally` (`then` is another spelling of `finally`), declared error types (`error HttpFailure(int status)`, `throw HttpFailure(503) with "down"`), errors named by strings (`throw "Name" with "message"`, `catch "Name" e`, with a warning when nothing throws the name), `assert condition "message"`, `Result<T,E>`, and typed library errors are described in [error handling](docs/errors.md). Imports also take strings, file paths, and URLs: `import "https://example.com/lib.fw"`.
+Local `.fw` / `.fly` imports resolve first, then installed packages (`.flywheel-modules`, then the installation's `modules` directory), then library and native modules. Packages are installed by [Pulley](../pulley/README.md) (`pulley` / `ppm`) from Distrobase registries; the `flywheel` command has no package commands. Top-level declarations are public by default; `private` hides implementation names. Dependency initialization runs once, and import cycles and wildcard collisions are diagnosed. See [modules](docs/modules.md). Typed `try`/`catch`/`finally`, declared error types (`error HttpFailure(int status)`, `throw HttpFailure(503) with "down"`), errors named by strings (`throw "Name" with "message"`, `catch "Name" e`, with a warning when nothing throws the name), `assert condition "message"`, `Result<T,E>`, and typed library errors are described in [error handling](docs/errors.md). Imports also take strings, file paths, and URLs: `import "https://example.com/lib.fw"`.
 
 ## Development and measurements
 

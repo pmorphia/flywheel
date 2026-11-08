@@ -15,7 +15,7 @@ end
 
 # An integer in the inclusive range [low, high].
 function integer(int low, int high) returns int
-    if low > high then
+    if low > high do
         throw ValueError("random.integer requires low <= high")
     end
     return math.random_int(low, high)
@@ -23,7 +23,7 @@ end
 
 # An integer in [0, n), for picking an index.
 function below(int n) returns int
-    if n <= 0 then
+    if n <= 0 do
         throw ValueError("random.below requires a positive bound")
     end
     return math.random_int(0, n - 1)
@@ -31,7 +31,7 @@ end
 
 # A double in [low, high).
 function uniform(double low, double high) returns double
-    if low > high then
+    if low > high do
         throw ValueError("random.uniform requires low <= high")
     end
     return low + (high - low) * math.random()
@@ -39,7 +39,7 @@ end
 
 # true with probability p (0 to 1).
 function chance(double p = 0.5) returns bool
-    if p < 0.0 or p > 1.0 then
+    if p < 0.0 or p > 1.0 do
         throw ValueError("random.chance requires a probability from 0 to 1")
     end
     return math.random() < p
@@ -47,7 +47,7 @@ end
 
 # A normally distributed double (Box-Muller).
 function normal(double mean = 0.0, double stddev = 1.0) returns double
-    if stddev < 0.0 then
+    if stddev < 0.0 do
         throw ValueError("random.normal requires stddev >= 0")
     end
     var u = 1.0 - math.random()
@@ -57,7 +57,7 @@ end
 
 # One item, uniformly.
 function choice<T>(T[] items) returns T
-    if items.length == 0 then
+    if items.length == 0 do
         throw IndexError("random.choice of an empty array")
     end
     return items[math.random_int(0, items.length - 1)]
@@ -65,25 +65,25 @@ end
 
 # One item, with probability proportional to its weight.
 function weighted<T>(T[] items, double[] weights) returns T
-    if items.length == 0 or items.length != weights.length then
+    if items.length == 0 or items.length != weights.length do
         throw ValueError("random.weighted needs one weight per item and at least one item")
     end
     var total = 0.0
     for w in weights do
-        if w < 0.0 or not math.is_finite(w) then
+        if w < 0.0 or not math.is_finite(w) do
             throw ValueError("random.weighted requires finite, non-negative weights")
         end
         total += w
     end
-    if total <= 0.0 then
+    if total <= 0.0 do
         throw ValueError("random.weighted requires a positive total weight")
     end
     var target = math.random() * total
     var last = 0
     for i, w in weights do
-        if w > 0.0 then
+        if w > 0.0 do
             last = i
-            if target < w then
+            if target < w do
                 return items[i]
             end
             target -= w
@@ -113,7 +113,7 @@ end
 
 # `count` items from distinct positions, in random order.
 function sample<T>(T[] items, int count) returns T[]
-    if count < 0 or count > items.length then
+    if count < 0 or count > items.length do
         throw ValueError("random.sample count must be from 0 to the array length")
     end
     var pool = items.copy()

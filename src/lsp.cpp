@@ -688,7 +688,7 @@ class Navigator {
             if (seen.insert(g.name).second)
                 out.push_back({g.name, g.kind});
         for (auto keyword : {"function", "class", "interface", "enum", "var", "const", "if",
-                             "then", "else", "end", "while", "for", "in", "do", "return",
+                             "else", "end", "while", "for", "in", "do", "return",
                              "match", "case", "try", "catch", "finally", "throw", "defer",
                              "import", "private", "readonly", "inst", "true", "false", "null",
                              "and", "or", "not", "print", "returns", "break", "continue",

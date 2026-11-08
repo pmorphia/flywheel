@@ -528,7 +528,7 @@ std::vector<Token> lex(const std::string &source) {
             size_t e = identifierEnd(source, p);
             auto s = source.substr(p, e - p);
             emit("id", s, e);
-            expected = s == "return" || s == "then" || s == "do" || s == "and" || s == "or" ||
+            expected = s == "return" || s == "do" || s == "and" || s == "or" ||
                        s == "not" || s == "in";
             continue;
         }
@@ -633,7 +633,7 @@ Token Parser::identifier() {
     auto t = take();
     static const std::set<std::string> reserved = {
         "import",  "as",      "var",  "const", "class",    "function", "component",
-        "returns", "return",  "if",   "then",  "else",     "while",    "do",
+        "returns", "return",  "if",   "else",     "while",    "do",
         "for",     "in",      "end",  "break", "continue", "try",      "catch",
         "finally", "throw",   "inst", "attr",  "true",     "false",    "null",
         "public",  "private", "void", "weak",  "and",      "or",       "not",
@@ -1069,7 +1069,7 @@ EP Parser::prefix() {
         e = node(t.kind, t.text, t.loc);
         // A quantity literal: a number with a unit right after it, 100m, 0.32km, 15time.s.
         static const std::set<std::string> keywords = {
-            "and", "or", "not", "in", "is", "as", "then", "do", "else", "end", "which", "with",
+            "and", "or", "not", "in", "is", "as", "do", "else", "end", "which", "with",
             "returns", "if", "for", "while", "true", "false", "null"};
         if (peek().kind == "id" && !peek().spaced && !keywords.count(peek().text)) {
             auto unit = take().text;
@@ -1141,7 +1141,7 @@ EP Parser::prefix() {
     } else if (t.kind == "id") {
         static const std::set<std::string> structural = {
             "function", "class", "component", "import",   "public", "private", "returns",
-            "return",   "if",    "then",      "else",     "while",  "do",      "for",
+            "return",   "if",    "else",     "while",  "do",      "for",
             "in",       "end",   "break",     "continue", "try",    "catch",   "finally",
             "throw",    "as",    "void",      "weak",     "and",    "or",      "enum",
             "interface", "extends", "implements", "match", "case",  "is", "which"};
@@ -1353,8 +1353,7 @@ std::vector<SP> Parser::block() {
     std::vector<SP> out;
     newlines();
     while (peek().kind != "eof" && peek().text != "end" && peek().text != "else" &&
-           peek().text != "catch" && peek().text != "finally" && peek().text != "case" &&
-           !(peek().text == "then" && peek().kind == "id")) {
+           peek().text != "catch" && peek().text != "finally" && peek().text != "case") {
         out.push_back(statement());
         for (auto &extra : pending)
             out.push_back(std::move(extra));
@@ -1393,7 +1392,7 @@ std::vector<SP> Parser::runBody() {
     if (peek().kind == "id") {
         static const std::set<std::string> keywords = {
             "import", "var",    "const",    "class",   "function", "component", "return",
-            "if",     "then",   "else",     "while",   "do",       "for",       "end",
+            "if",     "else",     "while",   "do",       "for",       "end",
             "break",  "continue", "try",    "catch",   "finally",  "throw",     "match",
             "case",   "defer",  "when",     "reactive", "computed", "assert",
             "enum",   "interface"};
@@ -1407,7 +1406,7 @@ std::vector<SP> Parser::runBody() {
     if (peek().kind == "op" && (peek().text == "=" || peek().text == "+=" || peek().text == "-=" ||
                                 peek().text == "*=" || peek().text == "/=" ||
                                 peek().text == "//=" || peek().text == "%="))
-        throw Error(peek().loc, usage + "; assignments need 'then' or 'do' ... 'end'");
+        throw Error(peek().loc, usage + "; assignments need 'do' ... 'end'");
     if (s->target->kind != "call")
         throw Error(loc, usage);
     std::vector<SP> body;
@@ -1416,7 +1415,7 @@ std::vector<SP> Parser::runBody() {
 }
 // After `if condition run call`, the chain continues with `else run call` or
 // `else if condition run call`, on the same line or the next. Any other `else` belongs to an
-// enclosing `if ... then`, so a run chain never takes a block `else` by accident.
+// enclosing `if ... do`, so a run chain never takes a block `else` by accident.
 void Parser::runElse(Stmt &s) {
     auto saved = pos;
     newlines();
@@ -1473,7 +1472,7 @@ SP Parser::statement() {
     if (peek().text == "assert" && peek().kind == "id") {
         // `assert condition "message"` (or `assert condition, "message"`) raises AssertionError
         // with the message when the condition is false. It becomes
-        // `if not (condition) then throw AssertionError(message) end`.
+        // `if not (condition) do throw AssertionError(message) end`.
         static const std::set<std::string> notKeyword = {"=",  "+=", "-=", "*=", "/=", "//=",
                                                          "%=", ".",  "[",  ")",  ","};
         if (!notKeyword.count(peek(1).text) || peek(1).kind != "op") {
@@ -1564,13 +1563,12 @@ SP Parser::statement() {
             finish();
             s->catches.push_back(block());
         }
-        // `then` is another spelling of `finally`.
-        if (accept("finally") || accept("then")) {
+        if (accept("finally")) {
             finish();
             s->finalizer = block();
         }
         if (s->catches.empty() && s->finalizer.empty())
-            throw Error(s->loc, "try requires catch, finally, or then");
+            throw Error(s->loc, "try requires catch or finally");
         expect("end");
         finish();
         return s;
@@ -1583,7 +1581,7 @@ SP Parser::statement() {
             runElse(*s);
             return s;
         }
-        expect("then");
+        expect("do");
         finish();
         s->body = block();
         if (accept("else")) {
@@ -1596,6 +1594,7 @@ SP Parser::statement() {
                 finish();
                 return s;
             }
+            expect("do");
             finish();
             s->other = block();
         }
@@ -1614,7 +1613,7 @@ SP Parser::statement() {
             try {
                 patternType = type();
                 binding = identifier().text;
-                if (peek().text != "then" && peek().text != "if")
+                if (peek().text != "do" && peek().text != "if")
                     throw Error(peek().loc, "pattern");
             } catch (const Error &) {
                 pos = saved;
@@ -1630,12 +1629,13 @@ SP Parser::statement() {
             s->catchNames.push_back(binding);
             s->patterns.push_back(std::move(values));
             s->guards.push_back(accept("if") ? expression() : nullptr);
-            expect("then");
+            expect("do");
             finish();
             s->catches.push_back(block());
         }
         if (accept("else")) {
             s->op = "else";
+            expect("do");
             finish();
             s->other = block();
         }

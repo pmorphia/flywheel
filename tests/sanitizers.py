@@ -102,7 +102,7 @@ with tempfile.TemporaryDirectory(prefix="fw-sanitizers-") as tmp:
 
     source = d / "http.fly"
     source.write_text(
-        'import web\nimport html.*\nint calls = 0\nfunction handler returns element\n    calls += 1\n    if calls > 1 then\n        throw RuntimeError("server finished")\n    end\n    return <p>{url}</p>\nend\nfunction start returns string\n    var route = "/owned"\n    return web.serve(route, handler, 0)\nend\nstring url = start()\nprint url\n',
+        'import web\nimport html.*\nint calls = 0\nfunction handler returns element\n    calls += 1\n    if calls > 1 do\n        throw RuntimeError("server finished")\n    end\n    return <p>{url}</p>\nend\nfunction start returns string\n    var route = "/owned"\n    return web.serve(route, handler, 0)\nend\nstring url = start()\nprint url\n',
         encoding="utf-8",
     )
     executable = compile_native(source)

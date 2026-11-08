@@ -11,7 +11,7 @@ var page = <main>
 </main>
 
 element? title = page.query("#main-title")
-if title != null then
+if title != null do
     title.text_content = "Hello & welcome!"
 end
 
@@ -33,7 +33,7 @@ import html
 var doc = html.parse("<ul><li>one<li class=x>two</ul><p>Fish &amp; chips")
 print html.query_all(doc, "li").length                 # 2
 var item = html.query(doc, "li.x")
-if item != null then
+if item != null do
     print item.text_content                            # two
 end
 print doc   # <ul><li>one</li><li class="x">two</li></ul><p>Fish &amp; chips</p>

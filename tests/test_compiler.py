@@ -27,9 +27,9 @@ print add(x, 4)""",
 while (x < 3) do
 x += 1
 end
-if x == 3 then
+if x == 3 do
 print "ok"
-else if x == 2 then
+else if x == 2 do
 print "wrong"
 end""",
         "ok\n",
@@ -96,10 +96,10 @@ print len(empty)""",
     "loop_scopes": (
         """var item = 99
 for item in [1, 2, 3, 4] do
-if item == 2 then
+if item == 2 do
 continue
 end
-if item == 4 then
+if item == 4 do
 break
 end
 print item
@@ -109,9 +109,9 @@ print item""",
     ),
     "recursion": (
         """function fib(int n) returns int
-if n < 2 then
+if n < 2 do
 return n
-else
+else do
 return fib(n - 1) + fib(n - 2)
 end
 end
@@ -342,7 +342,7 @@ POSITIVE.update(
             '<p title="&lt;&gt;&amp;&quot;&#39;">&lt;&gt;&amp;&quot;&#39; &amp; 😀</p>\n<span title="&quot;&amp;">&lt;safe&gt;</span>&lt;&gt;&amp;&quot;&#39;\n<p>&lt;b&gt;A &amp;amp; B&lt;/b&gt;</p>\n',
         ),
         "markup_comparison_boundary": (
-            "import html.*\nint a = 1\nint b = 2\nprint a<b\nprint a <b and b>a\nif a<b then\nprint <p>comparison</p>\nend\nprint <p>{a <b}</p>",
+            "import html.*\nint a = 1\nint b = 2\nprint a<b\nprint a <b and b>a\nif a<b do\nprint <p>comparison</p>\nend\nprint <p>{a <b}</p>",
             "true\ntrue\n<p>comparison</p>\n<p>true</p>\n",
         ),
         "markup_temporary_arc": (
@@ -404,7 +404,7 @@ POSITIVE.update(
             "inner\nbad\nouter\n",
         ),
         "finally_loop_exit": (
-            'int i=0\nwhile i<3 do\ntry\ni+=1\nif i==1 then\ncontinue\nend\nbreak\nfinally\nprint "cleanup {i}"\nend\nend',
+            'int i=0\nwhile i<3 do\ntry\ni+=1\nif i==1 do\ncontinue\nend\nbreak\nfinally\nprint "cleanup {i}"\nend\nend',
             "cleanup 1\ncleanup 2\n",
         ),
         "finally_override": (
@@ -416,7 +416,7 @@ POSITIVE.update(
             "true\n42\ntrue\nno\ncaught\n",
         ),
         "arc_scope_cleanup": (
-            'import testing\nint before = testing.live_objects()\nif true then\nvar words = ["a", "b"]\nend\nprint testing.live_objects() == before\ntry\nvar words = ["c"]\nthrow RuntimeError("bad")\ncatch RuntimeError error\nprint error\nend\nprint testing.live_objects() == before',
+            'import testing\nint before = testing.live_objects()\nif true do\nvar words = ["a", "b"]\nend\nprint testing.live_objects() == before\ntry\nvar words = ["c"]\nthrow RuntimeError("bad")\ncatch RuntimeError error\nprint error\nend\nprint testing.live_objects() == before',
             "true\nbad\ntrue\n",
         ),
         "error_numeric": (
@@ -932,7 +932,7 @@ function run() returns void
     print nums.any(function(int x) => x > 4)
     print nums.all(function(int x) => x > 4)
     nums.each(function(int x)
-        if x == 3 then
+        if x == 3 do
             print "three"
         end
     end)
@@ -1027,7 +1027,7 @@ function scenario() returns void
     weak<Button> self = button
     button.on_click = function()
         var target = self.get()
-        if target != null then
+        if target != null do
             print "clicked {target.label}"
         end
     end
@@ -1036,7 +1036,7 @@ function scenario() returns void
     print outer(1)
     var fail = function(int x) returns int
         try
-            if x > 1 then
+            if x > 1 do
                 throw RuntimeError("too big")
             end
             return x
@@ -1069,7 +1069,7 @@ function tree() returns void
     var child = Node("child", root)
     root.children.push(child)
     var parent = child.parent.get()
-    if parent != null then
+    if parent != null do
         print parent.name
     end
     print child.parent.alive()
@@ -1186,7 +1186,9 @@ NEGATIVE = {
     "null": ("string s = null", "cannot convert"),
     "wrong_type": ('int i = "text"', "cannot convert"),
     "undeclared": ("score = 5", "undeclared"),
-    "then": ("if true\nprint 1\nend", "expected 'then'"),
+    "if_do": ("if true\nprint 1\nend", "expected 'do'"),
+    "else_do": ("if true\nprint 1\nelse\nprint 2\nend", "expected 'do'"),
+    "case_do": ("match 1\ncase 1\nprint 1\nend", "expected 'do'"),
     "do": ("while true\nbreak\nend", "expected 'do'"),
     "nested_call": (
         "function add(int a, int b) returns int\nreturn a+b\nend\nprint add 2, 3",
@@ -1194,13 +1196,13 @@ NEGATIVE = {
     ),
     "for_binding": ("for (item in [1]) do\nend", "parentheses"),
     "fallthrough": (
-        "function f() returns int\nif true then\nreturn 1\nend\nend",
+        "function f() returns int\nif true do\nreturn 1\nend\nend",
         "return on all paths",
     ),
     "narrowing": ("int n = 100\ni8 x = n", "explicit checked cast"),
     "int_double": ("int n = 1\ndouble d = n", "explicit checked cast"),
     "const": ("const int n = 1\nn = 2", "const"),
-    "truthiness": ("if 1 then\nend", "bool"),
+    "truthiness": ("if 1 do\nend", "bool"),
     "break": ("break", "requires a loop"),
     "attr": ("print attr name", "component"),
     "attribute_type": ("import html.*\nvar t = <p style={true}>x</p>", "requires a string or number"),
@@ -1233,7 +1235,7 @@ NEGATIVE.update(
             'import html.*\ncomponent C = <p>{attr v}</p>\nvar a = <C v={1} />\nvar b = <C v="two" />',
             "inconsistent component",
         ),
-        "exceptions": ("try\nend", "try requires catch, finally, or then"),
+        "exceptions": ("try\nend", "try requires catch or finally"),
     }
 )
 TRAPS.update(
@@ -1418,7 +1420,7 @@ NEGATIVE.update(
         ),
         "lambda_default": ("var f = function(int x = 1) => x", "cannot have defaults"),
         "lambda_all_paths": (
-            "var f = function(int x)\nif x > 0 then\nreturn 1\nend\nend",
+            "var f = function(int x)\nif x > 0 do\nreturn 1\nend\nend",
             "must return on all paths",
         ),
         "weak_methods": (
@@ -1695,17 +1697,17 @@ print 1 <= r <= 6, math.random() < 1.0""",
 int? b = 5
 print a, b, a ?? 10, b ?? 10
 print a == null, b == 5, b != 5, a == b
-if b != null then
+if b != null do
     print b + 1
 end
-if a != null and a > 0 then
+if a != null and a > 0 do
     print "no"
-else
+else do
     print "a missing"
 end
 function first_even(int[] xs) returns int?
     for x in xs do
-        if x % 2 == 0 then
+        if x % 2 == 0 do
             return x
         end
     end
@@ -1713,7 +1715,7 @@ function first_even(int[] xs) returns int?
 end
 print first_even([1, 3, 4]), first_even([1])
 function describe(int? n) returns string
-    if n == null then
+    if n == null do
         return "nothing"
     end
     return "got " + string(n * 2)
@@ -1773,9 +1775,9 @@ end
 var c = Color.Green
 print c, c.value, c.name, Color.values(), Color.from_name("Blue"), Color.from_name("Pink")
 match c
-    case Color.Red then
+    case Color.Red do
         print "red"
-    case Green, Blue then
+    case Green, Blue do
         print "cool"
 end
 Shape[] shapes = [Circle(1.0), Square("sq", 2.0), Base()]
@@ -1786,18 +1788,18 @@ Base b = Circle(2.0)
 print b.area(), b is Circle, b is Square, (b as Circle).r
 Circle? none = b as Circle?
 print none != null
-if b is Circle then
+if b is Circle do
     print "radius", b.r
 end
 function describe(Shape shape) returns string
     match shape
-        case Circle k if k.r > 1.5 then
+        case Circle k if k.r > 1.5 do
             return "big circle"
-        case Circle k then
+        case Circle k do
             return "circle"
-        case Square sq then
+        case Square sq do
             return "square {sq.side}"
-        case Base then
+        case Base do
             return "base"
     end
 end
@@ -1807,21 +1809,21 @@ end
 print describe(b)
 for n in [0, 3, 7, 9] do
     match n
-        case 0 then
+        case 0 do
             print "zero"
-        case 1..5 then
+        case 1..5 do
             print "small"
-        case 6, 7 then
+        case 6, 7 do
             print "six or seven"
-        else
+        else do
             print "big"
     end
 end
 Result<int, string> res = Result.ok(3)
 match res
-    case ok v then
+    case ok v do
         print "ok", v
-    case error e then
+    case error e do
         print "error", e
 end
 map<Color, int> counts = {Color.Red: 1}
@@ -1829,9 +1831,9 @@ counts[Color.Blue] = 2
 print counts
 int? maybe = 4
 match maybe
-    case null then
+    case null do
         print "none"
-    case int v then
+    case int v do
         print "value", v
 end""",
             "Green 1 Green [Red, Green, Blue] Blue null\ncool\ncircle:3\nsquare sq:4\nbase:0\n12 true false 2\ntrue\nradius 2\ncircle\nsquare 2\nbase\nbig circle\nzero\nsmall\nsix or seven\nbig\nok 3\n{Red: 1, Blue: 2}\nvalue 4\n",
@@ -1850,7 +1852,7 @@ NEGATIVE.update(
             "overrides A.f with a different signature",
         ),
         "match_exhaustive": (
-            "enum E\n    X, Y\nend\nvar e = E.X\nmatch e\n    case E.X then\n        print 1\nend",
+            "enum E\n    X, Y\nend\nvar e = E.X\nmatch e\n    case E.X do\n        print 1\nend",
             "match is not exhaustive (missing Y)",
         ),
         "init_reads_inst": (
@@ -1858,7 +1860,7 @@ NEGATIVE.update(
             "init uses 'inst' before assigning required field 'x'",
         ),
         "init_early_return": (
-            "class A\n    int x\n    function init(bool b)\n        if b then\n            return\n        end\n        inst x = 1\n    end\nend",
+            "class A\n    int x\n    function init(bool b)\n        if b do\n            return\n        end\n        inst x = 1\n    end\nend",
             "init can return before assigning required field 'x'",
         ),
         "interface_construct": (
@@ -1881,7 +1883,7 @@ TRAPS.update(
         "nullable_cast": ("int? a = null\nprint int(a)", "cannot cast null"),
         "real_division_zero": ("double z = 0.0\nprint 1.0 // z", "division by zero"),
         "narrowed_global_changed": (
-            "class A\n    int x = 1\nend\nclass B extends A\n    int y = 2\nend\nA a = B()\nfunction reset() returns void\n    a = A()\nend\nif a is B then\n    reset()\n    print a.y\nend",
+            "class A\n    int x = 1\nend\nclass B extends A\n    int y = 2\nend\nA a = B()\nfunction reset() returns void\n    a = A()\nend\nif a is B do\n    reset()\n    print a.y\nend",
             "no longer B",
         ),
     }
@@ -1990,7 +1992,7 @@ class Stack<T>
         inst items.push(item)
     end
     function pop() returns T?
-        if inst items.length == 0 then
+        if inst items.length == 0 do
             return null
         end
         return inst items.pop()
@@ -2025,7 +2027,7 @@ print getter([9])""",
     }
 )
 
-POSITIVE.update({"sets_hashing_iterators": ('import testing\nvar base = testing.live_objects()\nclass Point\n    int x\n    int y\n    function equals(Point other) returns bool\n        return inst x == other.x and inst y == other.y\n    end\n    function hash() returns int\n        return inst x * 31 + inst y\n    end\nend\nclass Countdown\n    int n\n    function next() returns int?\n        if inst n == 0 then\n            return null\n        end\n        inst n -= 1\n        return inst n + 1\n    end\nend\nclass Range\n    int stop\n    function iterator() returns Countdown\n        return Countdown(inst stop)\n    end\nend\nfunction check() returns void\n    set<int> s = {3, 1, 3, 2}\n    print s, s.length, 2 in s, 5 in s\n    s.add(5)\n    print s.remove(1), s.remove(9), s\n    var words = set(["a", "b", "a"])\n    print words, words.contains("b")\n    set<string> empty = {}\n    print empty.length\n    var other = set([2, 9])\n    print s.union(other), s.intersection(other), s.difference(other), set([2]).is_subset(s)\n    for x in s do\n        print "item", x\n    end\n    print Point(1, 2) == Point(1, 2), Point(1, 2) != Point(2, 1)\n    map<Point, string> names = {Point(1, 2): "a"}\n    names[Point(1, 2)] = "b"\n    names[Point(3, 4)] = "c"\n    print names.length, names[Point(1, 2)], Point(3, 4) in names, Point(9, 9) in names\n    print names.remove(Point(3, 4)), names.length\n    set<Point> points = {Point(0, 0), Point(0, 0)}\n    print points.length\n    map<[int, string], int> pairs = {}\n    pairs[[1, "a"]] = 10\n    pairs[[1, "a"]] += 1\n    print pairs, [1, "a"] in pairs, [1, "b"] in pairs\n    set<[int, int]> grid = {[0, 0], [0, 1], [0, 0]}\n    print grid.length\n    for n in Countdown(3) do\n        print "count", n\n    end\n    for n in Range(2) do\n        print "range", n\n    end\n    map<string, int> ages = {"ann": 3, "bo": 4}\n    for name, age in ages do\n        print name, age\n    end\n    for i, w in ["x", "y"] do\n        print i, w\n    end\n    print ages.values()\nend\ncheck()\nprint testing.live_objects() == base\n', '{3, 1, 2} 3 true false\ntrue false {3, 2, 5}\n{"a", "b"} true\n0\n{3, 2, 5, 9} {2} {3, 5} true\nitem 3\nitem 2\nitem 5\ntrue true\n2 b true false\ntrue 1\n1\n{(1, "a"): 11} true false\n2\ncount 3\ncount 2\ncount 1\nrange 2\nrange 1\nann 3\nbo 4\n0 x\n1 y\n[3, 4]\ntrue\n')})
+POSITIVE.update({"sets_hashing_iterators": ('import testing\nvar base = testing.live_objects()\nclass Point\n    int x\n    int y\n    function equals(Point other) returns bool\n        return inst x == other.x and inst y == other.y\n    end\n    function hash() returns int\n        return inst x * 31 + inst y\n    end\nend\nclass Countdown\n    int n\n    function next() returns int?\n        if inst n == 0 do\n            return null\n        end\n        inst n -= 1\n        return inst n + 1\n    end\nend\nclass Range\n    int stop\n    function iterator() returns Countdown\n        return Countdown(inst stop)\n    end\nend\nfunction check() returns void\n    set<int> s = {3, 1, 3, 2}\n    print s, s.length, 2 in s, 5 in s\n    s.add(5)\n    print s.remove(1), s.remove(9), s\n    var words = set(["a", "b", "a"])\n    print words, words.contains("b")\n    set<string> empty = {}\n    print empty.length\n    var other = set([2, 9])\n    print s.union(other), s.intersection(other), s.difference(other), set([2]).is_subset(s)\n    for x in s do\n        print "item", x\n    end\n    print Point(1, 2) == Point(1, 2), Point(1, 2) != Point(2, 1)\n    map<Point, string> names = {Point(1, 2): "a"}\n    names[Point(1, 2)] = "b"\n    names[Point(3, 4)] = "c"\n    print names.length, names[Point(1, 2)], Point(3, 4) in names, Point(9, 9) in names\n    print names.remove(Point(3, 4)), names.length\n    set<Point> points = {Point(0, 0), Point(0, 0)}\n    print points.length\n    map<[int, string], int> pairs = {}\n    pairs[[1, "a"]] = 10\n    pairs[[1, "a"]] += 1\n    print pairs, [1, "a"] in pairs, [1, "b"] in pairs\n    set<[int, int]> grid = {[0, 0], [0, 1], [0, 0]}\n    print grid.length\n    for n in Countdown(3) do\n        print "count", n\n    end\n    for n in Range(2) do\n        print "range", n\n    end\n    map<string, int> ages = {"ann": 3, "bo": 4}\n    for name, age in ages do\n        print name, age\n    end\n    for i, w in ["x", "y"] do\n        print i, w\n    end\n    print ages.values()\nend\ncheck()\nprint testing.live_objects() == base\n', '{3, 1, 2} 3 true false\ntrue false {3, 2, 5}\n{"a", "b"} true\n0\n{3, 2, 5, 9} {2} {3, 5} true\nitem 3\nitem 2\nitem 5\ntrue true\n2 b true false\ntrue 1\n1\n{(1, "a"): 11} true false\n2\ncount 3\ncount 2\ncount 1\nrange 2\nrange 1\nann 3\nbo 4\n0 x\n1 y\n[3, 4]\ntrue\n')})
 NEGATIVE.update(
     {
         "map_key_without_hash": (
@@ -2081,7 +2083,7 @@ NEGATIVE.update(
     }
 )
 
-POSITIVE.update({"html_selectors_families_svg": ('import html.*\nimport svg.*\nelements widgets\n    my-card: title, size\n    my-spacer void: height\n    my-any: *\nend\nvar page = <div id="root">\n    <ul class="list">\n        <li class="item">one</li>\n        <li class="item special">two</li>\n        <li class="item">three</li>\n        <li class="item">four</li>\n    </ul>\n    <p>after</p>\n    <span>x</span>\n    <input type="number" min={0} max={10} step={0.5} disabled={false} />\n    <progress value={3} max={10}></progress>\n    <svg viewBox="0 0 10 10" width={10}><circle cx="5" cy="5" r={4} fill="red" /></svg>\n    <my-card title="Hi" size={3}>content</my-card>\n    <my-spacer height="4" />\n    <my-any whatever="ok" />\n    <button onclick="alert(1)">js</button>\n    <details open={true}><summary>s</summary></details>\n</div>\nprint page.query_all("li:first-child").map(function(element e) => e.text_content)\nprint page.query_all("li:last-child, li:nth-child(2)").map(function(element e) => e.text_content)\nprint page.query_all("li:nth-child(odd)").length, page.query_all("li:nth-child(2n+3)").length, page.query_all("li:nth-last-child(1)")[0].text_content\nprint page.query_all("li:not(.special)").length, page.query_all("ul + p").length, page.query_all("ul ~ span").length, page.query_all("li.special + li")[0].text_content\nprint page.query_all("p:empty").length, page.query_all("li:only-child").length, page.query_all("div > ul > li:first-of-type")[0].text_content\nvar two = page.query(".special")\nif two != null then\n    var parent = two.parent\n    if parent != null then\n        print parent.tag\n    end\n    var next = two.next_sibling\n    if next != null then\n        print next.text_content, two.previous_sibling != null\n    end\n    var root = two.closest("div")\n    if root != null then\n        print root.id\n    end\n    print two.closest("section") == null, two.matches("ul > .special"), two.matches("li + li")\nend\nprint page.query("svg")\nprint page.query("my-card")\nprint page.query("input")\n', '["one"]\n["two", "four"]\n2 1 four\n3 1 1 three\n0 0 one\nul\nthree true\nroot\ntrue true true\n<svg viewBox="0 0 10 10" width="10"><circle cx="5" cy="5" r="4" fill="red"></circle></svg>\n<my-card title="Hi" size="3">content</my-card>\n<input type="number" min="0" max="10" step="0.5">\n')})
+POSITIVE.update({"html_selectors_families_svg": ('import html.*\nimport svg.*\nelements widgets\n    my-card: title, size\n    my-spacer void: height\n    my-any: *\nend\nvar page = <div id="root">\n    <ul class="list">\n        <li class="item">one</li>\n        <li class="item special">two</li>\n        <li class="item">three</li>\n        <li class="item">four</li>\n    </ul>\n    <p>after</p>\n    <span>x</span>\n    <input type="number" min={0} max={10} step={0.5} disabled={false} />\n    <progress value={3} max={10}></progress>\n    <svg viewBox="0 0 10 10" width={10}><circle cx="5" cy="5" r={4} fill="red" /></svg>\n    <my-card title="Hi" size={3}>content</my-card>\n    <my-spacer height="4" />\n    <my-any whatever="ok" />\n    <button onclick="alert(1)">js</button>\n    <details open={true}><summary>s</summary></details>\n</div>\nprint page.query_all("li:first-child").map(function(element e) => e.text_content)\nprint page.query_all("li:last-child, li:nth-child(2)").map(function(element e) => e.text_content)\nprint page.query_all("li:nth-child(odd)").length, page.query_all("li:nth-child(2n+3)").length, page.query_all("li:nth-last-child(1)")[0].text_content\nprint page.query_all("li:not(.special)").length, page.query_all("ul + p").length, page.query_all("ul ~ span").length, page.query_all("li.special + li")[0].text_content\nprint page.query_all("p:empty").length, page.query_all("li:only-child").length, page.query_all("div > ul > li:first-of-type")[0].text_content\nvar two = page.query(".special")\nif two != null do\n    var parent = two.parent\n    if parent != null do\n        print parent.tag\n    end\n    var next = two.next_sibling\n    if next != null do\n        print next.text_content, two.previous_sibling != null\n    end\n    var root = two.closest("div")\n    if root != null do\n        print root.id\n    end\n    print two.closest("section") == null, two.matches("ul > .special"), two.matches("li + li")\nend\nprint page.query("svg")\nprint page.query("my-card")\nprint page.query("input")\n', '["one"]\n["two", "four"]\n2 1 four\n3 1 1 three\n0 0 one\nul\nthree true\nroot\ntrue true true\n<svg viewBox="0 0 10 10" width="10"><circle cx="5" cy="5" r="4" fill="red"></circle></svg>\n<my-card title="Hi" size="3">content</my-card>\n<input type="number" min="0" max="10" step="0.5">\n')})
 NEGATIVE.update(
     {
         "unused_component_tag": (
@@ -2110,7 +2112,7 @@ POSITIVE.update(
             'import html.*\nstring[] names = ["a", "<b>"]\nelement? none = null\nprint <ul>{names.map(function(string n) => <li>{n}</li>)}{none}</ul>\nprint <p>{[1, 2]}</p>',
             "<ul><li>a</li><li>&lt;b&gt;</li></ul>\n<p>12</p>\n",
         ),
-        "example_types": ('# Classes, interfaces, enums, generics, optional values, and pattern matching.\ninterface Shape\n    function area() returns double\n    function name() returns string\nend\n\nclass Circle implements Shape\n    double radius\n    function area() returns double\n        return 3.14159 * inst radius * inst radius\n    end\n    function name() returns string\n        return "circle"\n    end\nend\n\nclass Rectangle implements Shape\n    double width\n    double height\n    function area() returns double\n        return inst width * inst height\n    end\n    function name() returns string\n        return "rectangle"\n    end\nend\n\nclass Square extends Rectangle\n    function init(double side)\n        super.init(side, side)\n    end\n    function name() returns string\n        return "square"\n    end\nend\n\nenum Verdict\n    Small, Medium, Large\nend\n\nfunction judge(Shape shape) returns Verdict\n    match shape\n        case Square s if s.width > 3.0 then\n            return Verdict.Large\n        case Circle c if c.radius < 1.0 then\n            return Verdict.Small\n        else\n            return Verdict.Medium\n    end\nend\n\nclass Stack<T>\n    T[] items\n    function init()\n        inst items = []\n    end\n    function push(T item)\n        inst items.push(item)\n    end\n    function pop() returns T?\n        if inst items.length == 0 then\n            return null\n        end\n        return inst items.pop()\n    end\nend\n\nShape[] shapes = [Circle(0.5), Rectangle(2.0, 3.0), Square(4.0)]\nfor shape in shapes do\n    print shape.name(), shape.area(), judge(shape)\nend\n\nStack<string> names = Stack()\nnames.push("first")\nnames.push("second")\nvar top = names.pop()\nprint top ?? "empty", names.pop() ?? "empty", names.pop() ?? "empty"\n', "circle 0.7853975 Small\nrectangle 6 Medium\nsquare 16 Large\nsecond first empty\n"),
+        "example_types": ('# Classes, interfaces, enums, generics, optional values, and pattern matching.\ninterface Shape\n    function area() returns double\n    function name() returns string\nend\n\nclass Circle implements Shape\n    double radius\n    function area() returns double\n        return 3.14159 * inst radius * inst radius\n    end\n    function name() returns string\n        return "circle"\n    end\nend\n\nclass Rectangle implements Shape\n    double width\n    double height\n    function area() returns double\n        return inst width * inst height\n    end\n    function name() returns string\n        return "rectangle"\n    end\nend\n\nclass Square extends Rectangle\n    function init(double side)\n        super.init(side, side)\n    end\n    function name() returns string\n        return "square"\n    end\nend\n\nenum Verdict\n    Small, Medium, Large\nend\n\nfunction judge(Shape shape) returns Verdict\n    match shape\n        case Square s if s.width > 3.0 do\n            return Verdict.Large\n        case Circle c if c.radius < 1.0 do\n            return Verdict.Small\n        else do\n            return Verdict.Medium\n    end\nend\n\nclass Stack<T>\n    T[] items\n    function init()\n        inst items = []\n    end\n    function push(T item)\n        inst items.push(item)\n    end\n    function pop() returns T?\n        if inst items.length == 0 do\n            return null\n        end\n        return inst items.pop()\n    end\nend\n\nShape[] shapes = [Circle(0.5), Rectangle(2.0, 3.0), Square(4.0)]\nfor shape in shapes do\n    print shape.name(), shape.area(), judge(shape)\nend\n\nStack<string> names = Stack()\nnames.push("first")\nnames.push("second")\nvar top = names.pop()\nprint top ?? "empty", names.pop() ?? "empty", names.pop() ?? "empty"\n', "circle 0.7853975 Small\nrectangle 6 Medium\nsquare 16 Large\nsecond first empty\n"),
     }
 )
 
@@ -2126,7 +2128,7 @@ POSITIVE.update(
         "threads_shared_collections": (
             "import thread\nint[] xs = []\nmap<int, int> m = {}\nthread.task<void>[] ws = []\n"
             "for t in 0..<4 do\n    ws.push(thread.spawn(function()\n        for k in 0..<20000 do\n"
-            "            xs.push(k)\n            m[k % 100] = k\n            if k % 2 == 0 then\n"
+            "            xs.push(k)\n            m[k % 100] = k\n            if k % 2 == 0 do\n"
             "                xs.pop()\n            end\n        end\n    end))\nend\n"
             "for w in ws do\n    w.join()\nend\nprint xs.length, m.length\n",
             "40000 100\n",
@@ -2198,16 +2200,16 @@ POSITIVE.update(
         ),
         "data_enums_and_destructuring": (
             "enum Shape\n    Circle(double radius)\n    Rect(double w, double h)\n    Empty\nend\n"
-            "function area(Shape s) returns double\n    match s\n        case Shape.Circle(r) then\n"
-            "            return 3.0 * r * r\n        case Shape.Rect(w, h) if w == h then\n"
-            "            return w * w\n        case Shape.Rect(w, h) then\n            return w * h\n"
-            "        case Shape.Empty then\n            return 0.0\n    end\nend\n"
+            "function area(Shape s) returns double\n    match s\n        case Shape.Circle(r) do\n"
+            "            return 3.0 * r * r\n        case Shape.Rect(w, h) if w == h do\n"
+            "            return w * w\n        case Shape.Rect(w, h) do\n            return w * h\n"
+            "        case Shape.Empty do\n            return 0.0\n    end\nend\n"
             "Shape[] shapes = [Shape.Circle(1.0), Shape.Rect(2.0, 3.0), Shape.Rect(2.0, 2.0), Shape.Empty]\n"
             "for s in shapes do\n    print s, area(s)\nend\n"
             "print Shape.Circle(1.0) == Shape.Circle(1.0), Shape.Circle(1.0) != Shape.Circle(2.0), Shape.Empty == Shape.Empty\n"
-            "match [Shape.Rect(1.0, 2.0), Shape.Empty]\n    case [Shape.Rect(w, _), Shape.Empty] then\n"
-            "        print \"nested\", w\n    else\n        print \"no\"\nend\n"
-            "int[] xs = [1, 2]\nmatch xs\n    case [x, y] then\n        print x + y\n    else\n        print 0\nend\n"
+            "match [Shape.Rect(1.0, 2.0), Shape.Empty]\n    case [Shape.Rect(w, _), Shape.Empty] do\n"
+            "        print \"nested\", w\n    else do\n        print \"no\"\nend\n"
+            "int[] xs = [1, 2]\nmatch xs\n    case [x, y] do\n        print x + y\n    else do\n        print 0\nend\n"
             "var (name, count) = [\"a\", 3]\nvar [p, _, q] = [1, 2, 3]\nprint name, count, p, q\n"
             "try\n    var [m, k] = [1, 2, 3]\ncatch ValueError e\n    print e.message\nend\n",
             "Shape.Circle(radius=1) 3\nShape.Rect(w=2, h=3) 6\nShape.Rect(w=2, h=2) 4\nShape.Empty 0\n"
@@ -2219,7 +2221,7 @@ POSITIVE.update(
             "    function operator -() returns Vec\n        return Vec(-inst x, -inst y)\n    end\n"
             "    function operator ==(Vec o) returns bool\n        return inst x == o.x and inst y == o.y\n    end\n"
             "    function operator <(Vec o) returns bool\n        return inst x < o.x\n    end\n"
-            "    function operator [](int i) returns int\n        if i == 0 then\n            return inst x\n        end\n"
+            "    function operator [](int i) returns int\n        if i == 0 do\n            return inst x\n        end\n"
             "        return inst y\n    end\n    function to_string returns string\n        return \"<{inst x},{inst y}>\"\n    end\n"
             "    function peek returns int\n        return inst secret\n    end\nend\n"
             "var a = Vec(1, 2)\nvar b = a + Vec(3, 4)\nprint b, -a, a == Vec(1, 2), a != b, a < b, a >= b, b[1], a.peek()\n"
@@ -2235,7 +2237,7 @@ POSITIVE.update(
             "    function label returns string\n        return inst name\n    end\nend\n"
             "function shout<T implements Named>(T item) returns string\n    return item.label().upper()\nend\n"
             "function biggest<T is comparable>(T[] items) returns T\n    var best = items[0]\n    for x in items do\n"
-            "        if x > best then\n            best = x\n        end\n    end\n    return best\nend\n"
+            "        if x > best do\n            best = x\n        end\n    end\n    return best\nend\n"
             "class Box<T>\n    T value\n    function map<U>(function(T) returns U f) returns Box<U>\n"
             "        return Box<U>(f(inst value))\n    end\nend\n"
             "print shout(Dog(\"rex\")), biggest([3, 9, 2]), biggest([\"b\", \"c\", \"a\"])\n"
@@ -2342,7 +2344,7 @@ NEGATIVE.update(
         ),
         "data_enum_exhaustive": (
             "enum S\n    A(int x)\n    B\nend\nfunction f(S s) returns int\n    match s\n"
-            "        case S.A(x) then\n            return x\n    end\nend\nprint f(S.B)",
+            "        case S.A(x) do\n            return x\n    end\nend\nprint f(S.B)",
             "match is not exhaustive (missing S.B)",
         ),
         "data_enum_base": ("enum S\n    A(int x)\nend\nvar s = S()", "enum S is constructed through a member"),
@@ -2367,7 +2369,7 @@ MODULE_CASES.extend(
             "data_enum_across_modules",
             {
                 "main.fw": "import shapes\nvar s = shapes.Shape.Circle(2.0)\nmatch s\n"
-                "    case shapes.Shape.Circle(r) then\n        print r\n    else\n        print 0\nend\n"
+                "    case shapes.Shape.Circle(r) do\n        print r\n    else do\n        print 0\nend\n"
                 "print shapes.Shape.Square(1.0) == shapes.Shape.Square(1.0)",
                 "shapes.fw": "enum Shape\n    Circle(double r)\n    Square(double side)\nend",
             },
@@ -2381,7 +2383,7 @@ MODULE_CASES.extend(
 POSITIVE.update(
     {
         "beta8_errors": (
-            'try\n    throw "MyError" "custom failure"\ncatch "MyError" e\n    print "caught", e.name, e.message\nthen\n    print "then ran"\nend\n'
+            'try\n    throw "MyError" "custom failure"\ncatch "MyError" e\n    print "caught", e.name, e.message\nfinally\n    print "then ran"\nend\n'
             'try\n    throw "ValueError" "bad"\ncatch ValueError v\n    print v.name, v.message\nend\n'
             'try\n    throw "Other", "x"\ncatch "MyError" e\n    print "wrong"\ncatch e\n    print "any", e.name\nend\n'
             'try\n    assert 1 > 2 "math is broken"\ncatch AssertionError a\n    print a.message\nend\n'
@@ -2440,7 +2442,7 @@ POSITIVE.update(
             """error BadInput
 error HttpFailure(int status)
 function check(int x) returns int
-    if x < 0 then
+    if x < 0 do
         throw BadInput with "x must not be negative, got {x}"
     end
     return x
@@ -2501,7 +2503,7 @@ flip()
 print enabled
 var check = function() returns bool => disabled
 print check()
-if disabled then
+if disabled do
     print "off"
 end""",
             "true false\nfalse true\nfalse true\nfalse\ntrue\noff\n",
@@ -2714,12 +2716,12 @@ else if x > 2 run greet("medium")
 else run greet("small")
 if x == 3 run print "three" else run print "other", x
 if x == 4 run print "four"
-if true then
+if true do
     if x == 1 run print "one"
-else
+else do
     print "wrong else"
 end
-if false then
+if false do
     print "no"
 else run print "else run"
 for i in [1, 2] run print i
@@ -3289,13 +3291,13 @@ print web.route("POST", "/echo", echo, 0, "::1")
         messy = self.root / "messy.fw"
         messy.write_text(
             "class P\n  int x = 0\n      function get() returns int\nreturn inst x\n end\nend\n"
-            "function main\nvar xs = [1,\n2]\nif true then\nprint xs\n  else\nprint 0\nend\n"
+            "function main\nvar xs = [1,\n2]\nif true do\nprint xs\n  else do\nprint 0\nend\n"
             "xs.each(function(int x)\nprint x\n    end)\nvar s = \"a  \n   b\"\nend   \n",
             encoding="utf-8",
         )
         expected = (
             "class P\n    int x = 0\n    function get() returns int\n        return inst x\n    end\nend\n"
-            "function main\n    var xs = [1,\n        2]\n    if true then\n        print xs\n    else\n        print 0\n    end\n"
+            "function main\n    var xs = [1,\n        2]\n    if true do\n        print xs\n    else do\n        print 0\n    end\n"
             "    xs.each(function(int x)\n        print x\n    end)\n    var s = \"a  \n   b\"\nend\n"
         )
         self.assertEqual(self.command("format", "--check", messy).returncode, 1)
@@ -3305,14 +3307,14 @@ print web.route("POST", "/echo", echo, 0, "::1")
         self.assertEqual(self.command("f", "--check", messy).returncode, 0)
         # `run` bodies open no block; an `if ... run` chain continues with `else ... run`.
         messy.write_text(
-            "if true then\nif a run f()\n# note\nelse if b run g()\nelse run h()\n"
+            "if true do\nif a run f()\n# note\nelse if b run g()\nelse run h()\n"
             "for i in xs run f(i)\nwhile c run g()\nwhen d run h()\nf()\nend\n",
             encoding="utf-8",
         )
         self.assertEqual(self.command("fmt", messy).returncode, 0)
         self.assertEqual(
             messy.read_text(encoding="utf-8"),
-            "if true then\n    if a run f()\n    # note\n    else if b run g()\n    else run h()\n"
+            "if true do\n    if a run f()\n    # note\n    else if b run g()\n    else run h()\n"
             "    for i in xs run f(i)\n    while c run g()\n    when d run h()\n    f()\nend\n",
         )
         # A line opening with a delimiter is not a continuation line.
@@ -3519,7 +3521,7 @@ function home returns element
 end
 function user(web.request req) returns web.response
     var id = req.params["id"]
-    if id in users then
+    if id in users do
         return web.html(<p>User {{users[id]}}</p>)
     end
     return web.text("no user " + id, 404)
@@ -3693,7 +3695,7 @@ print web.static("/assets", "public", {port})
         suite = self.root / "fixtures"
         suite.mkdir()
         (suite / "shapes.fw").write_text(
-            "function area(int w, int h) returns int\n    if w < 0 then\n"
+            "function area(int w, int h) returns int\n    if w < 0 do\n"
             "        throw ValueError(\"negative\")\n    end\n    return w * h\nend\n",
             encoding="utf-8",
         )
@@ -3939,7 +3941,7 @@ print web.static("/assets", "public", {port})
         self.assertIn("has no exported name 'skipped'", run("check", self.source).stderr)
 
     def test_top_level_return(self):
-        source = 'print "start"\nint code = 3\ntry\n    for i in [1, 2] do\n        if i == 2 then\n            return code + i\n        end\n    end\nfinally\n    print "finally"\nend\nprint "unreachable"\n'
+        source = 'print "start"\nint code = 3\ntry\n    for i in [1, 2] do\n        if i == 2 do\n            return code + i\n        end\n    end\nfinally\n    print "finally"\nend\nprint "unreachable"\n'
         self.source.write_text(source, encoding="utf-8")
         result = self.command("run", self.source)
         self.assertEqual((result.returncode, result.stdout), (5, "start\nfinally\n"), result.stderr)
@@ -3966,9 +3968,9 @@ print web.static("/assets", "public", {port})
         self.source.write_text(markup, encoding="utf-8")
         self.assertEqual(self.command("check", self.source).returncode, 0)
         # desktop and serve may still exit early with a status instead of showing a page.
-        self.source.write_text('import html.*\nif true then\n    return 4\nend\nreturn <p>x</p>\n', encoding="utf-8")
+        self.source.write_text('import html.*\nif true do\n    return 4\nend\nreturn <p>x</p>\n', encoding="utf-8")
         self.assertEqual(self.command("desktop", self.source).returncode, 4)
-        self.source.write_text('import html.*\nif false then\n    return <p>x</p>\nend\n', encoding="utf-8")
+        self.source.write_text('import html.*\nif false do\n    return <p>x</p>\nend\n', encoding="utf-8")
         result = self.command("serve", self.source)
         self.assertEqual(result.returncode, 1)
         self.assertIn("ended without returning an element or fragment", result.stderr)

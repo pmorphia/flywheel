@@ -10,26 +10,26 @@ end
 
 function evaluate(Expr e) returns double
     match e
-        case Expr.Number(v) then
+        case Expr.Number(v) do
             return v
-        case Expr.Add(a, b) then
+        case Expr.Add(a, b) do
             return evaluate(a) + evaluate(b)
-        case Expr.Multiply(a, b) then
+        case Expr.Multiply(a, b) do
             return evaluate(a) * evaluate(b)
-        case Expr.Negate(inner) then
+        case Expr.Negate(inner) do
             return -evaluate(inner)
     end
 end
 
 function show(Expr e) returns string
     match e
-        case Expr.Number(v) then
+        case Expr.Number(v) do
             return "{v:g}"
-        case Expr.Add(a, b) then
+        case Expr.Add(a, b) do
             return "(" + show(a) + " + " + show(b) + ")"
-        case Expr.Multiply(a, b) then
+        case Expr.Multiply(a, b) do
             return show(a) + " * " + show(b)
-        case Expr.Negate(inner) then
+        case Expr.Negate(inner) do
             return "-" + show(inner)
     end
 end
@@ -60,10 +60,10 @@ function bounds(double[] values) returns [double, double]
     var low = values[0]
     var high = values[0]
     for v in values do
-        if v < low then
+        if v < low do
             low = v
         end
-        if v > high then
+        if v > high do
             high = v
         end
     end

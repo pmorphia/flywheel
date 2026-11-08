@@ -207,7 +207,7 @@ import web
 map<string, string> users = {"1": "Ann"}
 function user(web.request req) returns web.response
     var id = req.params["id"]
-    if id in users then
+    if id in users do
         return web.html(<p>User {users[id]}</p>)
     end
     return web.text("no user " + id, 404)
@@ -240,7 +240,7 @@ Each returns a `web.response` with `status`, `body`, and `headers` (lower-cased 
 import web
 import json
 var r = web.get("https://api.example.com/items", {"Authorization": "Bearer token"})
-if r.status == 200 then
+if r.status == 200 do
     print json.parse(r.body)
 end
 var created = web.post("https://api.example.com/items", json.parse("{{\"name\": \"x\"}}"))
