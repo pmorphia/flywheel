@@ -2733,8 +2733,27 @@ when score > 2 run print "score", score
 score = 1
 score = 5
 if true run run()
+var n = 0
+function tick() returns void
+    n += 1
+    print "tick", n
+end
+class Box
+    function open() returns void
+        print "open"
+    end
+end
+var box = Box()
+while n < 2 run tick
+if n == 2 run box.open
+else run tick
+if false run tick
+else if true run greet "bare"
+for i in [1] run tick
+if true run run
 """,
-            "hello medium\nthree\nelse run\n1\n2\na 1\n8\n7\nscore 5\nran\n",
+            "hello medium\nthree\nelse run\n1\n2\na 1\n8\n7\nscore 5\nran\ntick 1\ntick 2\nopen\n"
+            "hello bare\ntick 3\nran\n",
         ),
     }
 )
@@ -2743,7 +2762,8 @@ NEGATIVE.update(
         "run_assignment": ("var x = 0\nif true run x = 1\n", "'run' expects a function call"),
         "run_keyword": ("function f() returns int\n    if true run return 1\n    return 0\nend\n",
                         "'run' expects a function call, such as 'run greet()', not 'return'"),
-        "run_not_call": ("var x = 0\nwhile x < 1 run x\n", "'run' expects a function call"),
+        "run_not_call": ("var x = 0\nwhile x < 1 run 5\n", "'run' expects a function call"),
+        "run_not_callable": ("var x = 0\nwhile x < 1 run x\n", "not callable"),
         "run_empty": ("for i in [1] run\n", "'run' expects a function call"),
         "run_then_end": ("if true run print 1\nend\n", "unexpected keyword 'end'"),
         "throw_with_no_message_field": (

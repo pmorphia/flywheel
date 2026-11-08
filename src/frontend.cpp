@@ -1407,7 +1407,9 @@ std::vector<SP> Parser::runBody() {
                                 peek().text == "*=" || peek().text == "/=" ||
                                 peek().text == "//=" || peek().text == "%="))
         throw Error(peek().loc, usage + "; assignments need 'do' ... 'end'");
-    if (s->target->kind != "call")
+    // A bare name or member calls it with no arguments, as a statement does: `run main_loop`.
+    auto &kind = s->target->kind;
+    if (kind != "call" && !((kind == "name" || kind == "member") && !s->target->grouped))
         throw Error(loc, usage);
     std::vector<SP> body;
     body.push_back(std::move(s));

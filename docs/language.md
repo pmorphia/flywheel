@@ -135,7 +135,7 @@ The block is the enclosing `if`, loop, `try`, or function body, so a `defer` ins
 
 Arrays infer a homogeneous common type, or use the declared element type. Empty arrays require context. Heterogeneous literals infer tuples, with compile-time integer indices. Maps use `{key: value}` literals and sets `{a, b}`; `{}` is an empty map or set, depending on the expected type. See [collections](collections.md). Arrays use shared mutable identity and checked indices; `s[a..b]` and `s[a..<b]` slice strings and sequences.
 
-`if`, `else`, `while`, `for`, and `when` also take a one-call body after `run` (a soft keyword, still usable as a name) in place of `do` ... `end`. The body is a single function call, with no `end`; keyword statements, declarations, and assignments need the block form:
+`if`, `else`, `while`, `for`, and `when` also take a one-call body after `run` (a soft keyword, still usable as a name) in place of `do` ... `end`. The body is a single function call, with no `end`. Its parentheses are optional, as in any call statement: `run main_loop` calls `main_loop()`, `run game.tick` calls `game.tick()`, and `run greet "Ann"` calls `greet("Ann")`. Keyword statements, declarations, and assignments need the block form:
 
 ```flywheel
 if x > 5 run greet("big")
@@ -143,6 +143,7 @@ else if x > 2 run greet("medium")
 else run greet("small")
 for item in items run print item
 while queue.length > 0 run handle(queue.pop())
+while running run main_loop
 when score > 10 run celebrate()
 ```
 
