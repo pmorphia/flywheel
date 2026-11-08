@@ -46,12 +46,12 @@ Prefer declared error types to string names: a misspelled type in `catch` is a c
 
 ### Named errors and `assert`
 
-`throw "Name" with "message"` (also written `throw "Name" "message"`, with an optional comma) raises an error named by a string, without declaring a type. `catch "Name" e` catches errors by name: errors thrown with that name, builtin errors of that type, and instances of a class with that name. The binding is optional (`catch "Name"`). If the name is a builtin error type (`catch "ValueError" e`), the binding has that type; otherwise it is an `Error`. Every error binding has `.name` (its type name as written in source) and `.message`:
+`throw "Name" with "message"` raises an error named by a string, without declaring a type. `catch "Name" e` catches errors by name: errors thrown with that name, builtin errors of that type, and instances of a class with that name. The binding is optional (`catch "Name"`). If the name is a builtin error type (`catch "ValueError" e`), the binding has that type; otherwise it is an `Error`. Every error binding has `.name` (its type name as written in source) and `.message`:
 
 ```flywheel
 function load(string key) returns string
     if key == "" do
-        throw "EmptyKey" "the key is empty"
+        throw "EmptyKey" with "the key is empty"
     end
     return key
 end
@@ -71,7 +71,7 @@ Names are matched exactly (case-sensitive). When nothing in the program throws a
 main.fw:8:1: warning: catch "EmptyKye" never matches: nothing in the program throws "EmptyKye" or has a class of that name; did you mean "EmptyKey"?
 ```
 
-The check is skipped when the program throws a name computed at run time (`throw kind "message"`).
+The check is skipped when the program throws a name computed at run time (`throw kind with "message"`).
 
 `assert condition "message"` raises `AssertionError` with the message when the condition is false; the message may be left out (`assertion failed`) or separated by a comma, and `assert(condition, "message")` also works. The condition must be a `bool`.
 

@@ -2383,9 +2383,9 @@ MODULE_CASES.extend(
 POSITIVE.update(
     {
         "beta8_errors": (
-            'try\n    throw "MyError" "custom failure"\ncatch "MyError" e\n    print "caught", e.name, e.message\nfinally\n    print "then ran"\nend\n'
-            'try\n    throw "ValueError" "bad"\ncatch ValueError v\n    print v.name, v.message\nend\n'
-            'try\n    throw "Other", "x"\ncatch "MyError" e\n    print "wrong"\ncatch e\n    print "any", e.name\nend\n'
+            'try\n    throw "MyError" with "custom failure"\ncatch "MyError" e\n    print "caught", e.name, e.message\nfinally\n    print "then ran"\nend\n'
+            'try\n    throw "ValueError" with "bad"\ncatch ValueError v\n    print v.name, v.message\nend\n'
+            'try\n    throw "Other" with "x"\ncatch "MyError" e\n    print "wrong"\ncatch e\n    print "any", e.name\nend\n'
             'try\n    assert 1 > 2 "math is broken"\ncatch AssertionError a\n    print a.message\nend\n'
             'try\n    assert(false, "paren form")\ncatch "AssertionError" a\n    print a.message\nend\n'
             'try\n    assert false\ncatch e\n    print e.message\nend\n'
@@ -2416,7 +2416,9 @@ NEGATIVE.update(
     {
         "json_literal_invalid": ("var x = <json>{\"a\": }</json>\n", "invalid JSON in <json> literal"),
         "json_literal_unterminated": ("var x = <json>{}\n", "unterminated <json> literal"),
-        "throw_named_types": ('throw "A" 3\n', "throw with a name expects two strings"),
+        "throw_named_types": ('throw "A" with 3\n', "throw ... with expects an error type or a string name"),
+        "throw_named_needs_with": ('throw "A" "message"\n', "expected 'with' before the message"),
+        "throw_named_comma": ('throw "A", "message"\n', "expected 'with' before the message"),
         "import_path_alias": ('import "lib/1x.fw"\n', "add `as name`"),
         "import_native_missing": ("import c nothing_here\n", "C source for 'nothing_here' not found"),
     }
@@ -3074,7 +3076,7 @@ class CompilerTests(unittest.TestCase):
 
     def test_catch_name_warnings(self):
         self.source.write_text(
-            'error BadInput\ntry\n    throw "EmptyKey" "x"\ncatch "EmptyKye" e\n    print 1\n'
+            'error BadInput\ntry\n    throw "EmptyKey" with "x"\ncatch "EmptyKye" e\n    print 1\n'
             'catch "badinput" e\n    print 2\ncatch "EmptyKey" e\n    print 3\ncatch "ValueError" e\n'
             "    print 4\nend\n",
             encoding="utf-8",
@@ -3088,7 +3090,7 @@ class CompilerTests(unittest.TestCase):
         self.assertEqual(result.stderr.count("warning:"), 2)
         # A name computed at run time could be anything, so there is nothing to warn about.
         self.source.write_text(
-            'var n = "A"\ntry\n    throw n "x"\ncatch "B" e\n    print 1\ncatch e\n    print 2\nend\n',
+            'var n = "A"\ntry\n    throw n with "x"\ncatch "B" e\n    print 1\ncatch e\n    print 2\nend\n',
             encoding="utf-8",
         )
         result = self.command("run", self.source)
@@ -3884,7 +3886,7 @@ print web.static("/assets", "public", {port})
         result = self.command("debug", "calc.fw", "--", "4", "5")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertRegex(result.stderr, r'^\[debug\] returned map<string,int> \{"sum":9,"count":2\} in [0-9.]+ (us|ms|s)\n$')
-        result = self.command("debug", "-s", 'throw "Oops" "bad"')
+        result = self.command("debug", "-s", 'throw "Oops" with "bad"')
         self.assertEqual(result.returncode, 1)
         self.assertIn("Oops: bad", result.stderr)
         self.assertIn("[debug] no return value, exit status 1 in", result.stderr)

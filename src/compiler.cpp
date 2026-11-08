@@ -529,7 +529,7 @@ class Compiler {
                   (number.t.real() ? "1.5" : "5") + q->ns->units[0]);
         error("cannot use " + op + " on " + both);
     }
-    // Error names thrown by `throw "Name" ...` anywhere in the program, for `catch "Name"`
+    // Error names thrown by `throw "Name" with ...` anywhere in the program, for `catch "Name"`
     // warnings. A name computed at run time makes every catch by name plausible.
     std::set<std::string> thrownNames;
     bool dynamicErrorNames = false;
@@ -4874,12 +4874,11 @@ void Compiler::statement(Stmt &s) {
         thrown = value(construct);
     }
     if (s.kind == "throw" && s.target && !thrown) {
-        // throw "Name" "message", throw "Name" with "message"
+        // throw "Name" with "message"
         auto name = value(*s.expr), message = value(*s.target);
         if (name.t.name != "string" || message.t.name != "string")
-            error(s.op == "with" ? "throw ... with expects an error type or a string name, then a "
-                                   "string message: throw BadInput with \"message\""
-                                 : "throw with a name expects two strings: throw \"Name\" \"message\"");
+            error("throw ... with expects an error type or a string name, then a string message: "
+                  "throw BadInput with \"message\"");
         auto payload = objectCall("fw_error_named", {frame, name.v, message.v});
         call("fw_throw", b.getVoidTy(), {b.CreateGlobalString("Error"), payload});
         auto target = errorHandler();

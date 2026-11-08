@@ -145,7 +145,7 @@ flywheel export totals.fw totals.json 2026 november
 ```text
 $ flywheel debug totals.fw -- 2026
 [debug] returned map<string,int> {"days":30,"total":412} in 1.84 ms
-$ flywheel debug -s 'throw "Oops" "bad"'
+$ flywheel debug -s 'throw "Oops" with "bad"'
 Flywheel runtime error: Oops: bad
 [debug] no return value, exit status 1 in 1.62 ms
 ```

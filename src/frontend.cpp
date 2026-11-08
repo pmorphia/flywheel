@@ -1454,8 +1454,7 @@ SP Parser::statement() {
     s->loc = peek().loc;
     if (accept("throw")) {
         // `throw value`, `throw Type with "message"` (a class or error type, constructed with
-        // the message), or `throw "Name" with "message"` (also `throw "Name" "message"`): an
-        // error named by a string.
+        // the message), or `throw "Name" with "message"`: an error named by a string.
         s->kind = "throw";
         s->expr = expression();
         if (peek().text == "with" && peek().kind == "id") {
@@ -1464,10 +1463,8 @@ SP Parser::statement() {
             if (peek().kind == "nl" || peek().kind == "eof")
                 throw Error(peek().loc, "'with' expects a message, such as throw BadInput with \"the input is bad\"");
             s->target = expression();
-        } else if (peek().kind != "nl" && peek().kind != "eof") {
-            accept(",");
-            s->target = expression();
-        }
+        } else if (peek().kind != "nl" && peek().kind != "eof")
+            throw Error(peek().loc, "expected 'with' before the message, such as throw \"Name\" with \"message\"");
         finish();
         return s;
     }
@@ -1536,7 +1533,7 @@ SP Parser::statement() {
             std::string t, name;
             if (peek().kind == "string") {
                 // catch "Name" [binding]: matches errors by type name, including errors thrown
-                // with `throw "Name" "message"`. The type is kept quoted for the compiler.
+                // with `throw "Name" with "message"`. The type is kept quoted for the compiler.
                 auto quoted = take();
                 if (quoted.text.empty() || quoted.text.find_first_of("{}\\\"") != std::string::npos)
                     throw Error(quoted.loc, "catch expects a plain error name such as \"ValueError\"");
