@@ -666,6 +666,8 @@ int main(int argc, char **argv) {
         "           format source files\n"
         "       flywheel doc module.fw [-o output.html]\n"
         "           generate HTML documentation\n"
+        "       flywheel update [curl arguments]\n"
+        "           reinstall from flywheel.polymorphia.dev\n"
         "       flywheel repl | lsp | selftest | --version\n"
         "\n"
         "SOURCE is a .fw/.fly path or a URL (https, http, ftp, ftps, sftp, ssh, scp, file).\n"
@@ -699,6 +701,18 @@ int main(int argc, char **argv) {
     }
     if (command == "lsp")
         return fw::languageServer();
+    if (command == "update") {
+        // curl -fsSL https://flywheel.polymorphia.dev/install.sh [arguments] | bash
+        auto shell = llvm::sys::findProgramByName("sh");
+        if (!shell) {
+            std::cerr << "flywheel: update needs sh, curl, and bash\n";
+            return 1;
+        }
+        std::vector<std::string> args = {
+            "-c", "curl -fsSL https://flywheel.polymorphia.dev/install.sh \"$@\" | bash", "sh"};
+        args.insert(args.end(), argv + 2, argv + argc);
+        return execute(*shell, args);
+    }
     if (command == "new" || command == "get" || command == "add" || command == "install") {
         std::cerr << "flywheel: packages are managed by Pulley: use `pulley " << command
                   << "` (or `ppm " << command << "`)\n";
