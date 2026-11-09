@@ -1436,6 +1436,16 @@ NEGATIVE.update(
 
 MODULE_CASES = [
     (
+        "module_override_reads_global",
+        {
+            "main.fw": "import sub.*\nimport base.*\nBase b = Sub()\nb.hook()\nb.hook()",
+            "base.fw": "class Base\n    function hook()\n        print 0\n    end\nend",
+            "state.fw": "class Holder\n    int n = 0\nend\nvar holder = Holder()\nfunction bump()\n    holder.n += 1\n    print holder.n\nend",
+            "sub.fw": "import state.*\nimport base.*\nclass Sub extends Base\n    function hook()\n        bump()\n    end\nend",
+        },
+        "1\n2\n",
+    ),
+    (
         "module_lambdas",
         {
             "main.fw": "import tools\nprint tools.scaled([1, 2, 3])\nvar f = tools.adder(5)\nprint f(1)",
@@ -1841,6 +1851,22 @@ end""",
     }
 )
 
+POSITIVE.update(
+    {
+        # Overriding methods with inferred return types are inferred after the top-level body,
+        # so their bodies (and functions they call) can read module globals.
+        "override_reads_global": (
+            "int[] counter = [0]\nfunction bump()\n    counter[0] += 1\n    print counter[0]\nend\n"
+            "class Base\n    function hook()\n        print \"base\"\n    end\nend\n"
+            "class Sub extends Base\n    function hook()\n        bump()\n    end\nend\n"
+            "interface Shape\n    function area() returns int\nend\n"
+            "class Sq implements Shape\n    function area()\n        return counter[0] * 10\n    end\nend\n"
+            "Base b = Sub()\nb.hook()\nb.hook()\nShape s = Sq()\nprint s.area()\nBase().hook()\n",
+            "1\n2\n20\nbase\n",
+        ),
+    }
+)
+
 NEGATIVE.update(
     {
         "missing_interface_method": (
@@ -1850,6 +1876,18 @@ NEGATIVE.update(
         "override_signature": (
             'class A\n    function f() returns int\n        return 1\n    end\nend\nclass B extends A\n    function f() returns string\n        return "x"\n    end\nend',
             "overrides A.f with a different signature",
+        ),
+        "override_inferred_signature": (
+            'class A\n    function f()\n        return 1\n    end\nend\nclass B extends A\n    function f()\n        return "x"\n    end\nend\nprint 1',
+            "overrides A.f with a different signature",
+        ),
+        "override_inferred_signature_dispatch": (
+            'class A\n    function f()\n        return 1\n    end\nend\nclass B extends A\n    function f()\n        return "x"\n    end\nend\nA a = B()\nprint a.f()',
+            "overrides A.f with a different signature",
+        ),
+        "interface_inferred_signature_dispatch": (
+            'interface S\n    function f() returns int\nend\nclass A implements S\n    function f()\n        return "x"\n    end\nend\nS s = A()\nprint s.f()',
+            "A.f does not match the signature of S.f",
         ),
         "match_exhaustive": (
             "enum E\n    X, Y\nend\nvar e = E.X\nmatch e\n    case E.X do\n        print 1\nend",

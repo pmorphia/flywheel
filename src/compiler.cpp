@@ -2506,6 +2506,16 @@ end
     Val callMethod(Val receiver, const std::string &staticType, const std::string &method, Expr &e,
                    bool direct);
     void validateClasses();
+    // Signature comparisons that need an inferred return type. They run after the top-level
+    // body, since inferring compiles the method body and that can read module globals, which
+    // exist only once their declarations have been compiled.
+    struct SignatureCheck {
+        std::string a, b, message;
+        Location loc;
+    };
+    std::vector<SignatureCheck> deferredSignatureChecks;
+    // Runs the deferred checks, or only those involving a method in `only`.
+    void checkDeferredSignatures(const std::set<std::string> *only = nullptr);
     void checkInit(Class &c, Function &init);
     void match(Stmt &s);
     bool destructuring(Expr &p);
@@ -2797,6 +2807,7 @@ end
         validateClasses();
         cells = cellNames(p.body);
         block(p.body, false);
+        checkDeferredSignatures();
         if ((pageEntry == "desktop" || pageEntry == "serve") && !pageReturned)
             throw Error({1, 1, module.getModuleIdentifier()},
                         "flywheel " + pageEntry +
@@ -7394,6 +7405,13 @@ Val Compiler::callMethod(Val receiver, const std::string &staticType, const std:
             else
                 found->second.push_back(c);
         }
+    if (impls.size() > 1 && !deferredSignatureChecks.empty()) {
+        // Every implementation must return the dispatched type before their results merge.
+        std::set<std::string> involved{key};
+        for (auto &impl : impls)
+            involved.insert(impl.first);
+        checkDeferredSignatures(&involved);
+    }
     auto invokeImpl = [&](const std::string &impl) -> llvm::Value * {
         auto &target = signature(impl);
         auto result = b.CreateCall(target.function, actual);
@@ -7445,11 +7463,37 @@ Val Compiler::callMethod(Val receiver, const std::string &staticType, const std:
         objectCall("fw_adopt", {frame, result});
     return {result, sig.result};
 }
+void Compiler::checkDeferredSignatures(const std::set<std::string> *only) {
+    // Take the checks out first: inferring a signature can compile calls that come back here.
+    std::vector<SignatureCheck> checks, kept;
+    for (auto &check : deferredSignatureChecks)
+        (!only || only->count(check.a) || only->count(check.b) ? checks : kept)
+            .push_back(std::move(check));
+    deferredSignatureChecks = std::move(kept);
+    auto saved = location;
+    for (auto &check : checks) {
+        location = check.loc;
+        auto &x = signature(check.a);
+        auto &y = signature(check.b);
+        bool same = x.result == y.result && x.ast->params.size() == y.ast->params.size();
+        for (size_t i = 0; same && i < x.ast->params.size(); ++i)
+            same = type(x.ast->params[i].type) == type(y.ast->params[i].type);
+        if (!same)
+            error(check.message);
+    }
+    location = saved;
+}
 // Checks overrides and interface conformance, and definite initialization in init methods.
 void Compiler::validateClasses() {
-    auto same = [&](const std::string &a, const std::string &b) {
-        auto &x = signature(a);
-        auto &y = signature(b);
+    // Compares two methods' signatures, or defers the comparison (returning true) when either
+    // return type still has to be inferred; see deferredSignatureChecks.
+    auto same = [&](const std::string &a, const std::string &b, const std::string &message) {
+        auto &x = functions.at(a);
+        auto &y = functions.at(b);
+        if (x.result.name == "$infer" || y.result.name == "$infer") {
+            deferredSignatureChecks.push_back({a, b, message, location});
+            return true;
+        }
         if (x.result != y.result || x.ast->params.size() != y.ast->params.size())
             return false;
         for (size_t i = 0; i < x.ast->params.size(); ++i)
@@ -7465,9 +7509,12 @@ void Compiler::validateClasses() {
                 continue;
             auto inherited = resolveMethod(c->base, m.name);
             location = m.loc;
-            if (!inherited.empty() && !same(name + "." + m.name, inherited))
-                error("method '" + m.name + "' overrides " + displayName(inherited) +
-                      " with a different signature");
+            if (inherited.empty())
+                continue;
+            auto message = "method '" + m.name + "' overrides " + displayName(inherited) +
+                           " with a different signature";
+            if (!same(name + "." + m.name, inherited, message))
+                error(message);
         }
         if (c->isInterface)
             continue;
@@ -7477,12 +7524,13 @@ void Compiler::validateClasses() {
             for (auto &m : i->methods) {
                 auto impl = resolveMethod(name, m.name);
                 location = c->loc;
-                if (impl.empty() || signature(impl).ast->abstract)
+                if (impl.empty() || functions.at(impl).ast->abstract)
                     error("class " + displayName(name) + " must implement " +
                           displayName(other) + "." + m.name);
-                if (!same(impl, other + "." + m.name))
-                    error(displayName(impl) + " does not match the signature of " +
-                          displayName(other) + "." + m.name);
+                auto message = displayName(impl) + " does not match the signature of " +
+                               displayName(other) + "." + m.name;
+                if (!same(impl, other + "." + m.name, message))
+                    error(message);
             }
         }
         if (functions.count(name + ".init"))
