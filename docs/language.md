@@ -6,6 +6,7 @@ This document records implemented provisional choices and current restrictions. 
 
 | Level | Operators | Associativity |
 |---|---|---|
+| 0 | `x if c else y` | right; only the chosen branch is evaluated |
 | 1 | `or` | left, short circuit |
 | 2 | `and` | left, short circuit |
 | unary | `not` | takes comparison/equality expression, binds above `and` |
@@ -18,6 +19,8 @@ This document records implemented provisional choices and current restrictions. 
 | 9 | `as` | postfix checked cast |
 | unary | `+ -` | right |
 | postfix | calls, indexing, member access | left |
+
+`x if condition else y` is the conditional expression: `print "big" if n > 3 else "small"`. The condition must be `bool`. Its type is the expected type, or else the branches' common type: the wider of two numeric types, a shared base class, or a nullable type when one branch is `null` (`name if found else null` is `string?`). The `else` is required. Inside a `case` pattern, `if` starts the guard, so a conditional there needs parentheses.
 
 Comparisons chain: `a < b <= c` means `a < b and b <= c`, evaluating `b` once and stopping at the first false comparison. Equality operators chain among themselves (`a == b == c`); mixing levels does not chain, so `a == b < c` is `a == (b < c)`. Assignment is a statement. No implicit truthiness is allowed. Arithmetic evaluation is left to right.
 
@@ -41,7 +44,7 @@ var other = first \
 
 Semicolons separate statements at the top grouping level. UTF-8 source is validated and strings are UTF-8. Identifiers may contain non-ASCII letters; see [characters and strings](types.md#characters-and-strings). String `length` and `len` count characters (Unicode scalar values), not bytes. `'x'` is a `char` literal; `{name}` inside a string interpolates, but a `{` followed by whitespace is a literal brace, as is a `}` with whitespace on either side, so `"{ name }"` is the text `{ name }` and CSS or JavaScript such as `"p { color: {c}; }"` reads naturally (the `{c}` still interpolates). The same rule applies to markup text. Write `{{` / `}}` for a literal brace with no space beside it, as in compact JSON.
 
-A number directly followed by an identifier, with no space between them, is a quantity literal: `100m`, `15time.s` (see [units](units.md)). An exponent needs digits (`1e5`, `2E-3`), so `5eV` is a quantity. `when`, `reactive`, `computed` ([reactive variables](reactive.md)), `run` (after a condition or `else`, [one-call bodies](#collections-and-control-flow)), `error` (at the top level, [error types](errors.md#declaring-error-types)), `with` (after `throw`), and `unitns`, `unit`, `unitconv` (at the top level) are soft keywords. They keep their meaning only in those positions and remain usable as names elsewhere.
+A number directly followed by an identifier, with no space between them, is a quantity literal: `100m`, `15time.s` (see [units](units.md)). An exponent needs digits (`1e5`, `2E-3`), so `5eV` is a quantity. `public`, `private`, `protected`, `static`, `readonly`, `constructor`, and `destructor` (in declarations, see [classes](types.md#classes-and-constructors)), `spawn` (before a call, see [concurrency](concurrency.md#spawn)), `when`, `reactive`, `computed` ([reactive variables](reactive.md)), `run` (after a condition or `else`, [one-call bodies](#collections-and-control-flow)), `error` (at the top level, [error types](errors.md#declaring-error-types)), `with` (after `throw`), and `unitns`, `unit`, `unitconv` (at the top level) are soft keywords. They keep their meaning only in those positions and remain usable as names elsewhere.
 
 ## Calls and construction
 
@@ -49,20 +52,20 @@ A number directly followed by an identifier, with no space between them, is a qu
 
 A bare class name is a class reference; a call constructs. Both `var window = desktop.window "my-window"` and `var window = desktop.window("my-window")` create a window, `desktop.window()` creates one with defaults, and `var Window = desktop.window` stores the class itself, which can later be called (`Window()`, `Window "title"`). This applies equally to user classes and through module aliases. See [classes and constructors](types.md#classes-and-constructors).
 
-Generated class constructors follow field order, accept defaults, and require all missing non-default fields. Classes can define `init` instead. Defaults resolve against module scope. Explicit return types support recursion; recursive inferred returns require an annotation. Non-void functions require returns on all paths; infinite-loop return analysis is conservative.
+Generated class constructors follow field order, accept defaults, and require all missing non-default fields. Classes can declare a `constructor` instead. Defaults resolve against module scope. Explicit return types support recursion; recursive inferred returns require an annotation. Non-void functions require returns on all paths; infinite-loop return analysis is conservative.
 
 ## Functions, lambdas, and methods
 
 Function types are written `function(int, string) returns bool`; `function() returns void` takes nothing. They work for parameters, returns, fields, locals, and collection elements. A suffix after a function type belongs to its return type, so `function() returns int[]` returns an array; parentheses group a function type to apply the suffix to the function itself: `(function(int) returns int)[]` is an array of functions (also written `array<function(int) returns int>`), and `(function() returns int)?` is a nullable function. A named top-level function converts to a matching function type; mismatched signatures are diagnosed. Lambdas have an expression form, `function(int x) => x * 2` (result type inferred), and a block form ending in `end`, optionally with `returns T`. Lambda parameters must be typed and cannot have defaults; block bodies with a non-void result must return on all paths.
 
-Methods are first-class: `obj.method` (and `inst method` inside a class) is a closure bound to that receiver, with the method's function type, and dispatches like a call. Class references convert to constructor functions.
+Methods are first-class: `obj.method` (and `this.method` inside a class) is a closure bound to that receiver, with the method's function type, and dispatches like a call. Class references convert to constructor functions.
 
 ```flywheel
 class Counter
     int value = 0
     function add(int n) returns int
-        inst value += n
-        return inst value
+        this.value += n
+        return this.value
     end
 end
 var counter = Counter()
@@ -85,6 +88,35 @@ end
 Variables that are captured but never assigned are copied into the closure, which is cheaper. Each `for` iteration has a fresh binding, so closures created in a loop see their own iteration's value. Captured references share identity. Closures are called like functions, `f(x)` or `f.call(x)`, including field closures such as `button.on_click()`. Arrays provide `map`, `filter`, `reduce(initial, f)`, `any`, `all`, `each`, and `sort(less)`.
 
 Zero-argument function and method declarations may omit `()`: `function main returns void`, `function answer returns int`, or `function inferred` followed by its body. Non-empty parameter lists still require parentheses and typed parameters.
+
+## Decorators
+
+A decorator is written before `function` or `class` on the same line. A function decorator replaces the function with the decorator's result: `memoize function fib(int n) returns int` declares `fib` as the value of `memoize(fib)`. Several decorators apply nearest first, so `logged memoize function f` is `logged(memoize(f))`, and a decorator may be any expression, including a call that returns one (`retry(3) function fetch(string url) returns string`).
+
+```flywheel
+function twice(function(int) returns int f) returns function(int) returns int
+    return function(int x) => f(f(x))
+end
+twice function inc(int x) returns int
+    return x + 1
+end
+print inc(5)   # 7
+```
+
+The decorated name is a constant initialized where the declaration stands, so it is used after its declaration, like a variable; calls inside the function body (recursion) go through the decorated value. Generic functions and methods cannot be decorated.
+
+A class decorator is called with the [class reference](types.md#classes-and-constructors) where the class is declared, for registration and similar effects; its result is discarded and the name keeps naming the class:
+
+```flywheel
+string[] plugins = []
+function register(function() returns Plugin make)
+    plugins.push(make().name)
+end
+register class Plugin
+    string name = "default"
+end
+print plugins   # ["default"]
+```
 
 ## Format specs
 

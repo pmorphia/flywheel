@@ -56,7 +56,9 @@ Strings are immutable UTF-8; lengths and indices count characters. Negative slic
 
 ## math
 
-Constants `PI`, `TAU`, `E`, `INF`, `NAN`. Functions taking and returning `double`: `sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2(y, x)`, `hypot(x, y)`, `exp`, `log(x)`, `log(x, base)`, `log10`, `log2`, `pow(a, b)`, `floor`, `ceil`, `round` (half away from zero), `trunc`. `is_nan(x)` and `is_finite(x)` return bool.
+Constants `PI`, `TAU`, `E`, `INF`, `NAN`. Functions taking and returning `double`: `sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2(y, x)`, `hypot(x, y)`, `exp`, `log(x)`, `log(x, base)`, `log10`, `log2`, `pow(a, b)`, `cbrt`, `floor`, `ceil`, `round` (half away from zero), `trunc`. `is_nan(x)` and `is_finite(x)` return bool.
+
+Integer helpers return `int`: `gcd(a, b)` (non-negative; `gcd(0, 0)` is 0), `lcm(a, b)` (non-negative; 0 when either is 0), and `factorial(n)` (`ValueError` for a negative `n`, `NumericError` above 20!, which overflows). `sign(x)` is -1, 0, or 1 in the argument's type (NaN stays NaN).
 
 `abs(x)`, `min(a, b, ...)`, `max(a, b, ...)`, and `clamp(x, low, high)` keep the type of their numeric arguments (`math.abs(-5)` is an `int`; `abs` of the minimum integer raises `NumericError`). `random()` returns a double in [0, 1), `random_int(low, high)` an inclusive integer, and `seed(n)` makes the sequence repeatable. The generator is per thread.
 

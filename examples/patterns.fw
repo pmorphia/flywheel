@@ -40,19 +40,19 @@ class Vec2
     readonly double y
 
     function operator +(Vec2 other) returns Vec2
-        return Vec2(inst x + other.x, inst y + other.y)
+        return Vec2(this.x + other.x, this.y + other.y)
     end
 
     function operator *(double k) returns Vec2
-        return Vec2(inst x * k, inst y * k)
+        return Vec2(this.x * k, this.y * k)
     end
 
     function operator ==(Vec2 other) returns bool
-        return inst x == other.x and inst y == other.y
+        return this.x == other.x and this.y == other.y
     end
 
     function to_string returns string
-        return "({inst x:.1f}, {inst y:.1f})"
+        return "({this.x:.1f}, {this.y:.1f})"
     end
 end
 

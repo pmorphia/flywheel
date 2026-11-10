@@ -1160,7 +1160,8 @@ end
             "fw_error_value",   "fw_error_take",    "fw_error_restore", "fw_web_shutdown",
             "fw_class_id",      "fw_enum_register", "fw_register_class", "fw_set_args",
             "fw_gc_collect",    "fw_gc_pending",    "fw_error_matches_name", "fw_foreign_cstr",
-            "fw_quantity_register"};
+            "fw_quantity_register", "fw_register_destructor", "fw_thread_wait_all",
+            "fw_thread_detach"};
         if (!safe.count(name))
             checkError();
         return resultValue;
@@ -1721,11 +1722,42 @@ end
             error("type '" + t.name + "' has no field '" + name + "'");
         for (size_t i = 0; i < c->second->fields.size(); ++i)
             if (c->second->fields[i].name == name) {
-                if (c->second->fields[i].isPrivate)
-                    checkAccess(fieldOwners.at(t.name + "." + name), "field", name);
+                auto &f = c->second->fields[i];
+                if (f.isPrivate || f.isProtected)
+                    checkAccess(fieldOwners.at(t.name + "." + name), "field", name,
+                                f.isProtected);
                 return {c->second, i};
             }
         error("unknown field '" + name + "' on " + t.name);
+    }
+    // The slot of a field in instances of class `cls`.
+    size_t fieldSlot(const std::string &cls, const std::string &name) {
+        auto &c = *classes.at(cls);
+        for (size_t i = 0; i < c.fields.size(); ++i)
+            if (c.fields[i].name == name)
+                return i;
+        error("unknown field '" + name + "' on " + displayName(cls));
+    }
+    // The slot of field `name` in `obj`, which is `index` in its static class. With multiple
+    // inheritance a subclass can place an inherited field elsewhere (after the fields of an
+    // earlier base); the slot is then chosen by the runtime class.
+    bool multipleInheritance = false;
+    llvm::Value *fieldIndex(Val obj, const std::string &name, size_t index) {
+        if (!multipleInheritance)
+            return i64(static_cast<int64_t>(index));
+        auto cls = nonNull(obj.t).name;
+        std::vector<std::pair<std::string, size_t>> moved;
+        for (auto &k : concreteClasses(cls))
+            if (auto slot = fieldSlot(k, name); slot != index)
+                moved.push_back({k, slot});
+        if (moved.empty())
+            return i64(static_cast<int64_t>(index));
+        auto id = call("fw_class_id", b.getPtrTy(), {obj.v});
+        llvm::Value *slot = i64(static_cast<int64_t>(index));
+        for (auto &[k, i] : moved)
+            slot = b.CreateSelect(b.CreateICmpEQ(id, classId(k)), i64(static_cast<int64_t>(i)),
+                                  slot);
+        return slot;
     }
     Val get(Val obj, llvm::Value *index, Ty t) {
         if (t.object())
@@ -1776,7 +1808,7 @@ end
     Val receiver() {
         auto v = lookup("$inst");
         if (!v)
-            error("'inst' is valid only in an instance method");
+            error("'this' is valid only in an instance method");
         return load(*v);
     }
     Val binary(const std::string &op, Val a, Val c) {
@@ -2347,6 +2379,7 @@ end
             protectedValues.pop_back();
         if (usesWeb() || pageEntry == "serve")
             call("fw_web_shutdown", b.getVoidTy(), {});
+        call("fw_thread_wait_all", b.getVoidTy(), {}); // statement-level spawns finish first
         call("fw_drop", b.getVoidTy(), {frame});
         call("fw_gc_collect", b.getInt64Ty(), {});
         b.CreateRet(status);
@@ -2463,12 +2496,34 @@ end
     }
     Val lambda(Expr &e, Ty expected);
     Val coalesce(Expr &e, Ty expected);
+    Val ternary(Expr &e, Ty expected);
+    // Private and protected static members (Class$member) follow the class's access rules.
+    void checkStatic(const std::string &name) {
+        auto it = p.statics.find(name);
+        if (it == p.statics.end() || it->second.second.empty() || lookupLocal(name))
+            return;
+        auto member = name.substr(name.rfind('$') + 1);
+        checkAccess(it->second.first, "static member", member, it->second.second == "protected");
+    }
+    bool lookupLocal(const std::string &) { return false; }
+    Val spawnTask(Expr &e);
     Val typeTest(Expr &e);
     // Private members are visible only inside methods (and lambdas in methods) of their class.
+    // Private members are visible in their own class; protected ones also in subclasses.
+    // Static methods see the members of their class.
+    std::string staticOwner;
     void checkAccess(const std::string &declaring, const std::string &kind,
-                     const std::string &name) {
-        if (owner != declaring)
-            error(kind + " '" + name + "' is private to class " + displayName(declaring));
+                     const std::string &name, bool isProtected = false) {
+        auto context = owner.empty() ? staticOwner : owner;
+        if (context == declaring)
+            return;
+        if (isProtected) {
+            if (!context.empty() && classes.count(context) && derives(context, declaring))
+                return;
+            error(kind + " '" + name + "' is protected: visible only in " +
+                  displayName(declaring) + " and its subclasses");
+        }
+        error(kind + " '" + name + "' is private to class " + displayName(declaring));
     }
     bool hasField(const std::string &className, const std::string &name) {
         auto c = classes.find(className);
@@ -2556,7 +2611,7 @@ end
         if (functions.count(key))
             error("duplicate function '" + displayName(key) + "'");
         if (f.name == "init" && !f.owner.empty() && !f.result.empty() && f.result != "void")
-            error("init cannot return a value");
+            error("constructors cannot return a value");
         if (!f.typeParams.empty() && !f.owner.empty()) {
             // Generic methods are instantiated per call like generic functions.
             methodTemplates[key] = &f;
@@ -2662,31 +2717,48 @@ end
             error("inheritance cycle through '" + displayName(c.name) + "'");
         state = 1;
         std::set<std::string> names;
-        for (auto &f : c.fields) {
+        for (auto &f : c.fields)
             if (!names.insert(f.name).second)
                 error("duplicate field '" + f.name + "'");
-            if (f.isPrivate || f.readonly)
-                fieldOwners[c.name + "." + f.name] = c.name;
-        }
-        if (!c.base.empty()) {
-            c.base = type(c.base).name;
-            auto base = classes.find(c.base);
-            if (base == classes.end() || base->second->isInterface)
-                error("'" + displayName(c.base) + "' is not a class; use implements for interfaces");
-            finishClass(*base->second);
+        for (auto &f : c.fields)
+            fieldOwners[c.name + "." + f.name] = c.name;
+        if (c.bases.size() > 1)
+            multipleInheritance = true;
+        if (!c.bases.empty()) {
+            // Base fields come first, in base order; a field inherited along two paths (a
+            // shared ancestor) appears once. Two different fields of one name conflict.
             std::vector<Param> fields;
-            for (auto &f : base->second->fields) {
-                if (names.count(f.name))
-                    error("field '" + f.name + "' is already declared by base class '" +
-                          displayName(c.base) + "'");
-                fields.push_back({f.name, f.type, f.value ? clone(*f.value) : nullptr, f.loc,
-                                  f.isPrivate, f.readonly});
-                if (f.isPrivate || f.readonly)
-                    fieldOwners[c.name + "." + f.name] = fieldOwners.at(c.base + "." + f.name);
+            std::set<std::string> seen;
+            for (auto &baseName : c.bases) {
+                baseName = type(baseName).name;
+                auto base = classes.find(baseName);
+                if (base == classes.end() || base->second->isInterface)
+                    error("'" + displayName(baseName) +
+                          "' is not a class; use implements for interfaces");
+                if (std::count(c.bases.begin(), c.bases.end(), baseName) > 1)
+                    error("duplicate base class '" + displayName(baseName) + "'");
+                finishClass(*base->second);
+                for (auto &f : base->second->fields) {
+                    auto declaring = fieldOwners.at(baseName + "." + f.name);
+                    if (names.count(f.name))
+                        error("field '" + f.name + "' is already declared by base class '" +
+                              displayName(baseName) + "'");
+                    if (seen.count(f.name)) {
+                        if (fieldOwners.at(c.name + "." + f.name) != declaring)
+                            error("base classes of " + displayName(c.name) +
+                                  " both declare a field '" + f.name + "'");
+                        continue;
+                    }
+                    seen.insert(f.name);
+                    fields.push_back({f.name, f.type, f.value ? clone(*f.value) : nullptr, f.loc,
+                                      f.isPrivate, f.readonly, f.isProtected});
+                    fieldOwners[c.name + "." + f.name] = declaring;
+                }
             }
             for (auto &f : c.fields)
                 fields.push_back(std::move(f));
             c.fields = std::move(fields);
+            mro(c.name); // reports inconsistent orders
         }
         for (auto &i : c.interfaces) {
             i = type(i).name;
@@ -2705,8 +2777,9 @@ end
         if (it == classes.end())
             return false;
         auto &c = *it->second;
-        if (!c.base.empty() && derives(c.base, to))
-            return true;
+        for (auto &base : c.bases)
+            if (derives(base, to))
+                return true;
         for (auto &i : c.interfaces)
             if (derives(i, to))
                 return true;
@@ -2727,13 +2800,72 @@ end
             return "";
         if (functions.count(name + "." + method))
             return name + "." + method;
-        auto &c = *it->second;
-        if (!c.base.empty())
-            if (auto found = resolveMethod(c.base, method); !found.empty())
-                return found;
-        for (auto &i : c.interfaces)
-            if (auto found = resolveMethod(i, method); !found.empty())
-                return found;
+        // Along the linearization: the class, then its bases (C3, as in Python), so with
+        // `class C extends A, B` a method of A wins over one of B. Interfaces come last.
+        for (auto &cls : mro(name))
+            if (cls != name && functions.count(cls + "." + method))
+                return cls + "." + method;
+        for (auto &cls : mro(name)) {
+            auto &c = *classes.at(cls);
+            for (auto &i : c.interfaces)
+                if (auto found = resolveMethod(i, method); !found.empty())
+                    return found;
+        }
+        return "";
+    }
+    // The C3 linearization of a class: itself, then its bases so that every class precedes
+    // its own bases and base order is kept.
+    std::map<std::string, std::vector<std::string>> linearizations;
+    const std::vector<std::string> &mro(const std::string &name) {
+        if (auto found = linearizations.find(name); found != linearizations.end())
+            return found->second;
+        std::vector<std::string> out{name};
+        auto it = classes.find(name);
+        if (it != classes.end() && !it->second->bases.empty()) {
+            std::vector<std::vector<std::string>> sequences;
+            for (auto &base : it->second->bases)
+                if (classes.count(base))
+                    sequences.push_back(mro(base));
+            sequences.push_back(it->second->bases);
+            while (true) {
+                bool empty = true;
+                for (auto &seq : sequences)
+                    empty = empty && seq.empty();
+                if (empty)
+                    break;
+                std::string next;
+                for (auto &seq : sequences) {
+                    if (seq.empty())
+                        continue;
+                    bool inTail = false;
+                    for (auto &other : sequences)
+                        if (std::find(other.begin() + (other.empty() ? 0 : 1), other.end(),
+                                      seq[0]) != other.end())
+                            inTail = true;
+                    if (!inTail) {
+                        next = seq[0];
+                        break;
+                    }
+                }
+                if (next.empty())
+                    error("class " + displayName(name) +
+                          " has an inconsistent base class order (no linearization)");
+                out.push_back(next);
+                for (auto &seq : sequences)
+                    if (!seq.empty() && seq[0] == next)
+                        seq.erase(seq.begin());
+            }
+        }
+        return linearizations[name] = out;
+    }
+    // The base class after `from` in the linearization of `cls` that implements `method`.
+    std::string nextMethod(const std::string &cls, const std::string &from,
+                           const std::string &method) {
+        auto &order = mro(cls);
+        auto at = std::find(order.begin(), order.end(), from);
+        for (auto i = at == order.end() ? order.begin() : at + 1; i != order.end(); ++i)
+            if (functions.count(*i + "." + method))
+                return *i;
         return "";
     }
     // One canonical name string per class doubles as its runtime class identity.
@@ -2784,6 +2916,17 @@ end
              {b.CreateSExt(current->getArg(0), b.getInt64Ty()), current->getArg(1)});
         for (auto &name : builtinClassNames)
             call("fw_register_class", b.getVoidTy(), {b.CreateGlobalString(name), classId(name)});
+        // Destructors run when an instance is freed: its class's first, then its bases' along
+        // the linearization.
+        for (auto &[name, c] : classes) {
+            if (c->isInterface || !c->typeParams.empty())
+                continue;
+            for (auto &cls : mro(name))
+                if (functions.count(cls + ".$destroy"))
+                    call("fw_register_destructor", b.getVoidTy(),
+                         {classId(name), functions.at(cls + ".$destroy").function,
+                          b.CreateGlobalString(displayName(name))});
+        }
         for (auto &ns : p.unitNamespaces) {
             std::string units;
             for (auto &u : ns.units)
@@ -2823,6 +2966,7 @@ end
                 call("fw_web_wait", b.getVoidTy(), {});
                 call("fw_web_shutdown", b.getVoidTy(), {});
             }
+            call("fw_thread_wait_all", b.getVoidTy(), {}); // statement-level spawns finish first
             call("fw_drop", b.getVoidTy(), {frame});
             // Globals are released with the frame; collect any cycles they kept alive.
             call("fw_gc_collect", b.getInt64Ty(), {});
@@ -3013,6 +3157,8 @@ Val Compiler::explicitCast(Val source, Ty target) {
 Val Compiler::value(Expr &e, Ty expected) {
     location = e.loc;
     debugLocation();
+    if (e.kind == "name")
+        checkStatic(e.text);
     if (e.kind == "name" || e.kind == "member") {
         auto name = callable(e);
         if (e.kind == "name")
@@ -3140,7 +3286,7 @@ Val Compiler::value(Expr &e, Ty expected) {
         if (!hasField(obj.t.name, e.text) && !resolveMethod(obj.t.name, e.text).empty())
             return boundMethod(obj, e.text);
         auto [c, i] = field(obj.t, e.text);
-        return get(obj, i64(i), type(c->fields[i].type));
+        return get(obj, fieldIndex(obj, e.text, i), type(c->fields[i].type));
     }
     if (e.kind == "member" && e.args[0]->kind == "name" && enums.count(e.args[0]->text) &&
         !lookup(e.args[0]->text)) {
@@ -3153,9 +3299,25 @@ Val Compiler::value(Expr &e, Ty expected) {
     if (e.kind == "is" || e.kind == "as")
         return typeTest(e);
     if (e.kind == "super")
-        error("'super' must be followed by a method call, such as super.init(...)");
+        error("'super' must be followed by a member, such as super.constructor(...) or "
+              "super.speak()");
+    if (e.kind == "this")
+        return receiver();
+    if (e.kind == "member" && e.args[0]->kind == "super") {
+        // super.field is the receiver's field; super.method needs a call.
+        auto self = receiver();
+        if (!hasField(owner, e.text))
+            error("super." + e.text + " must be called, such as super." + e.text + "()");
+        auto [c, i] = field(self.t, e.text);
+        return get(self, fieldIndex(self, e.text, i), type(c->fields[i].type));
+    }
+    if (e.kind == "ternary")
+        return ternary(e, expected);
+    if (e.kind == "spawn")
+        return spawnTask(e);
     if (e.kind == "member") {
         auto obj = unwrap(value(*e.args[0]));
+        location = e.loc; // diagnostics point at the member, not the receiver's defaults
         if (obj.t.enumeration()) {
             if (e.text == "value")
                 return {obj.v, Ty{"i64"}};
@@ -3204,7 +3366,7 @@ Val Compiler::value(Expr &e, Ty expected) {
             !resolveMethod(obj.t.name, e.text).empty())
             return boundMethod(obj, e.text);
         auto [c, i] = field(obj.t, e.text);
-        return get(obj, i64(i), type(c->fields[i].type));
+        return get(obj, fieldIndex(obj, e.text, i), type(c->fields[i].type));
     }
     if (e.kind == "index") {
         auto obj = value(*e.args[0]);
@@ -3966,6 +4128,8 @@ Val Compiler::expectError(Expr &e) {
 }
 Val Compiler::invoke(Expr &e, Ty expected) {
     auto &callee = *e.args[0];
+    if (callee.kind == "name")
+        checkStatic(callee.text);
     std::vector<Expr *> rest;
     for (size_t i = 1; i < e.args.size(); ++i)
         rest.push_back(e.args[i].get());
@@ -3974,35 +4138,61 @@ Val Compiler::invoke(Expr &e, Ty expected) {
     if (callee.kind == "inst" && !owner.empty())
         if (auto result = genericMethodCall(receiver(), callee.text, e, expected))
             return *result;
-    if (callee.kind == "member" && callee.args[0]->kind == "super") {
+    // super.method(...) calls the next implementation along the linearization;
+    // super.Base.method(...) names the base class; super.constructor(...) (init) runs the first
+    // base's constructor, and super.Base.constructor(...) a chosen one.
+    bool superCall = callee.kind == "member" && callee.args[0]->kind == "super";
+    bool chosenBase = callee.kind == "member" && callee.args[0]->kind == "member" &&
+                      callee.args[0]->args[0]->kind == "super" && !owner.empty() &&
+                      classes.count(owner) && !hasField(owner, callee.args[0]->text);
+    if (superCall || chosenBase) {
         if (owner.empty())
             error("'super' is valid only in a method");
         auto &c = *classes.at(owner);
-        if (c.base.empty())
+        if (c.bases.empty())
             error("'super' requires a base class; " + displayName(owner) + " has none");
-        auto self = receiver();
-        if (callee.text == "init" && resolveMethod(c.base, "init").empty()) {
-            // The base class's generated constructor: assign its fields positionally.
-            auto &base = *classes.at(c.base);
-            if (e.args.size() - 1 > base.fields.size())
-                error("too many arguments to super.init for " + displayName(c.base));
-            for (size_t i = 0; i < base.fields.size(); ++i) {
-                auto &f = base.fields[i];
-                Ty t = type(f.type);
-                Val v;
-                if (i + 1 < e.args.size())
-                    v = value(*e.args[i + 1], t);
-                else if (f.value)
-                    v = defaultValue(*f.value, t);
-                else
-                    error("missing super.init argument for field '" + f.name + "'");
-                set(self, i64(static_cast<int64_t>(i)), convert(v, t));
-            }
-            return {};
+        std::string target;
+        if (chosenBase) {
+            auto named = type(callee.args[0]->text).name;
+            auto &order = mro(owner);
+            if (named == owner || std::find(order.begin(), order.end(), named) == order.end())
+                error("'" + displayName(callee.args[0]->text) + "' is not a base class of " +
+                      displayName(owner));
+            target = named;
         }
-        if (resolveMethod(c.base, callee.text).empty())
-            error("base class " + displayName(c.base) + " has no method '" + callee.text + "'");
-        return callMethod({self.v, Ty{c.base}}, c.base, callee.text, e, true);
+        auto self = receiver();
+        if (callee.text == "init") {
+            if (target.empty())
+                target = c.bases[0];
+            if (resolveMethod(target, "init").empty()) {
+                // The base class's generated constructor: assign its fields positionally.
+                auto &base = *classes.at(target);
+                if (e.args.size() - 1 > base.fields.size())
+                    error("too many arguments to super.constructor for " + displayName(target));
+                for (size_t i = 0; i < base.fields.size(); ++i) {
+                    auto &f = base.fields[i];
+                    Ty t = type(f.type);
+                    Val v;
+                    if (i + 1 < e.args.size())
+                        v = value(*e.args[i + 1], t);
+                    else if (f.value)
+                        v = defaultValue(*f.value, t);
+                    else
+                        error("missing super.constructor argument for field '" + f.name + "'");
+                    set(self, i64(static_cast<int64_t>(fieldSlot(owner, f.name))), convert(v, t));
+                }
+                return {};
+            }
+            return callMethod({self.v, Ty{target}}, target, "init", e, true);
+        }
+        if (target.empty()) {
+            target = nextMethod(owner, owner, callee.text);
+            if (target.empty())
+                error("no base class of " + displayName(owner) + " has a method '" +
+                      callee.text + "'");
+        } else if (resolveMethod(target, callee.text).empty())
+            error("base class " + displayName(target) + " has no method '" + callee.text + "'");
+        return callMethod({self.v, Ty{target}}, target, callee.text, e, true);
     }
     if (callee.kind == "member" && callee.args[0]->kind == "name" &&
         enums.count(callee.args[0]->text) && !lookup(callee.args[0]->text)) {
@@ -4870,7 +5060,7 @@ void Compiler::statement(Stmt &s) {
                 if (message.t.name != "string")
                     error("throw ... with expects a string message, got " +
                           displayName(message.t.name));
-                set(x, i64(i), message);
+                set(x, fieldIndex(x, "message", i), message);
             }
             thrown = x;
         }
@@ -5058,6 +5248,7 @@ void Compiler::statement(Stmt &s) {
         llvm::Value *index = nullptr;
         Ty target;
         if (s.target->kind == "name") {
+            checkStatic(s.target->text);
             variable = lookup(s.target->text);
             if (!variable)
                 error("assignment to undeclared identifier '" + s.target->text +
@@ -5085,9 +5276,9 @@ void Compiler::statement(Stmt &s) {
                     (method != "init" ||
                      owner != fieldOwners.at(object.t.name + "." + s.target->text)))
                     error("field '" + s.target->text + "' is readonly; it can be set only in " +
-                          "the constructor or init of " +
+                          "the constructor of " +
                           displayName(fieldOwners.at(object.t.name + "." + s.target->text)));
-                index = i64(i);
+                index = fieldIndex(object, s.target->text, i);
                 target = type(c->fields[i].type);
             }
         } else if (s.target->kind == "index") {
@@ -5153,6 +5344,12 @@ void Compiler::statement(Stmt &s) {
             }
         } else
             set(object, index, rhs);
+        return;
+    }
+    if (s.kind == "expr" && s.target->kind == "spawn") {
+        // Nobody joins a statement-level spawn: the runtime joins it when the program ends.
+        auto task = value(*s.target);
+        call("fw_thread_detach", b.getVoidTy(), {task.v});
         return;
     }
     if (s.kind == "expr") {
@@ -5414,7 +5611,9 @@ void Compiler::buildFunction(Signature &sig, bool inference) {
         error("recursive functions require an explicit 'returns T'");
     sig.building = true;
     auto saved = saveFunction();
+    auto savedStatic = staticOwner;
     owner = sig.ast->owner;
+    staticOwner = sig.ast->staticOf;
     method = sig.ast->name;
     top = false;
     infer = inference;
@@ -5471,6 +5670,7 @@ void Compiler::buildFunction(Signature &sig, bool inference) {
             "fly." + (owner.empty() ? "" : owner + ".") + sig.ast->name, module);
     } else
         sig.done = true;
+    staticOwner = savedStatic;
     restoreFunction(saved);
     sig.building = false;
 }
@@ -6732,7 +6932,7 @@ std::optional<Val> Compiler::mathCall(const std::string &name, std::vector<Val> 
     };
     static const std::map<std::string, int> unary = {
         {"floor", 0}, {"ceil", 1}, {"round", 2},  {"trunc", 3},  {"log10", 5}, {"log2", 6},
-        {"exp", 7},   {"tan", 8},  {"asin", 9},   {"acos", 10},  {"atan", 11}};
+        {"exp", 7},   {"tan", 8},  {"asin", 9},   {"acos", 10},  {"atan", 11}, {"cbrt", 13}};
     if (auto it = unary.find(method); it != unary.end()) {
         count(1);
         return Val{call("fw_math_unary", b.getDoubleTy(), {real(0), i64(it->second)}),
@@ -6746,6 +6946,45 @@ std::optional<Val> Compiler::mathCall(const std::string &name, std::vector<Val> 
             return Val{natural, Ty{"double"}};
         auto base = call("fw_math_unary", b.getDoubleTy(), {real(1), i64(4)});
         return Val{b.CreateFDiv(natural, base), Ty{"double"}};
+    }
+    if (method == "gcd" || method == "lcm") {
+        // integers: the greatest common divisor (non-negative) and least common multiple
+        count(2);
+        for (auto &a : args)
+            if (!a.t.integer())
+                error(name + " requires integer arguments");
+        return Val{call(method == "gcd" ? "fw_math_gcd" : "fw_math_lcm", b.getInt64Ty(),
+                        {convert(args[0], Ty{"i64"}, true).v, convert(args[1], Ty{"i64"}, true).v}),
+                   Ty{"i64"}};
+    }
+    if (method == "factorial") {
+        count(1);
+        if (!args[0].t.integer())
+            error("math.factorial requires an integer");
+        return Val{call("fw_math_factorial", b.getInt64Ty(), {convert(args[0], Ty{"i64"}, true).v}),
+                   Ty{"i64"}};
+    }
+    if (method == "sign") {
+        // -1, 0, or 1 in the argument's type (NaN for NaN)
+        count(1);
+        auto x = args[0];
+        if (!x.t.numeric())
+            error("math.sign requires a number");
+        if (x.t.real()) {
+            auto d = real(0);
+            auto zero = llvm::ConstantFP::get(b.getDoubleTy(), 0.0);
+            auto r = b.CreateSelect(b.CreateFCmpOGT(d, zero), llvm::ConstantFP::get(b.getDoubleTy(), 1.0),
+                                    b.CreateSelect(b.CreateFCmpOLT(d, zero),
+                                                   llvm::ConstantFP::get(b.getDoubleTy(), -1.0), d));
+            return Val{b.CreateFPCast(r, ll(x.t)), x.t};
+        }
+        auto zero = llvm::ConstantInt::get(ll(x.t), 0);
+        auto one = llvm::ConstantInt::get(ll(x.t), 1);
+        auto positive = x.t.unsigned_() ? b.CreateICmpUGT(x.v, zero) : b.CreateICmpSGT(x.v, zero);
+        llvm::Value *r = b.CreateSelect(positive, one, zero);
+        if (!x.t.unsigned_())
+            r = b.CreateSelect(b.CreateICmpSLT(x.v, zero), llvm::ConstantInt::getSigned(ll(x.t), -1), r);
+        return Val{r, x.t};
     }
     if (method == "atan2" || method == "hypot") {
         count(2);
@@ -6824,6 +7063,96 @@ std::optional<Val> Compiler::mathCall(const std::string &name, std::vector<Val> 
     return std::nullopt;
 }
 // a ?? b: a's payload when a is not null, otherwise b (evaluated only then).
+// `x if condition else y`: evaluates one branch. The result has the expected type, else the
+// common type of the branches (a numeric widening, a shared base class, or nullable when one
+// branch is null).
+Val Compiler::ternary(Expr &e, Ty expected) {
+    auto condition = value(*e.args[0], Ty{"bool"});
+    if (condition.t.name != "bool")
+        error("the condition of 'x if condition else y' must be bool, not " +
+              displayName(condition.t.name));
+    auto yes = llvm::BasicBlock::Create(ctx, "ternary.then", current);
+    auto no = llvm::BasicBlock::Create(ctx, "ternary.else", current);
+    auto merge = llvm::BasicBlock::Create(ctx, "ternary.end", current);
+    b.CreateCondBr(condition.v, yes, no);
+    bool given = expected.name != "void" && !expected.name.empty();
+    b.SetInsertPoint(yes);
+    std::vector<std::string> proven;
+    nonNullNames(*e.args[0], true, proven);
+    std::vector<std::pair<std::string, std::string>> instances;
+    instanceNames(*e.args[0], true, instances);
+    scopes.emplace_back();
+    narrow(proven);
+    narrowTypes(instances);
+    Val a;
+    try {
+        a = value(*e.args[1], expected);
+    } catch (...) {
+        scopes.pop_back();
+        throw;
+    }
+    scopes.pop_back();
+    auto yesEnd = b.GetInsertBlock();
+    b.SetInsertPoint(no);
+    auto c = value(*e.args[2], given ? expected : a.t.name == "null" ? Ty{} : a.t);
+    Ty result = expected;
+    if (!given) {
+        auto nullable = [&](Ty t) { return t.nullable() ? t : Ty{t.name + "?"}; };
+        if (a.t.classReference() || c.t.classReference())
+            error("'x if condition else y' needs instances, not class references; call the "
+                  "class to construct one");
+        if (a.t == c.t)
+            result = a.t;
+        else if (a.t.name == "null")
+            result = nullable(c.t);
+        else if (c.t.name == "null")
+            result = nullable(a.t);
+        else if (widening(a.t, c.t))
+            result = c.t;
+        else if (widening(c.t, a.t))
+            result = a.t;
+        else if (classes.count(nonNull(a.t).name) && classes.count(nonNull(c.t).name) &&
+                 derives(nonNull(c.t).name, nonNull(a.t).name))
+            result = a.t.nullable() || c.t.nullable() ? nullable(nonNull(a.t)) : a.t;
+        else if (classes.count(nonNull(a.t).name) && classes.count(nonNull(c.t).name) &&
+                 derives(nonNull(a.t).name, nonNull(c.t).name))
+            result = a.t.nullable() || c.t.nullable() ? nullable(nonNull(c.t)) : c.t;
+        else if (a.t.nullable() && nonNull(a.t) == c.t)
+            result = a.t;
+        else if (c.t.nullable() && nonNull(c.t) == a.t)
+            result = c.t;
+        else
+            error("the branches of 'x if condition else y' have different types, " +
+                  displayName(a.t.name) + " and " + displayName(c.t.name));
+    }
+    if (result.name == "void" || result.name == "null")
+        error("'x if condition else y' needs a value of a concrete type");
+    c = convert(c, result);
+    auto noEnd = b.GetInsertBlock();
+    b.CreateBr(merge);
+    b.SetInsertPoint(yesEnd);
+    a = convert(a, result);
+    yesEnd = b.GetInsertBlock();
+    b.CreateBr(merge);
+    b.SetInsertPoint(merge);
+    auto phi = b.CreatePHI(ll(result), 2);
+    phi->addIncoming(a.v, yesEnd);
+    phi->addIncoming(c.v, noEnd);
+    return {phi, result};
+}
+// `spawn call`: thread.spawn of a function running the call.
+Val Compiler::spawnTask(Expr &e) {
+    Expr lambda;
+    lambda.kind = "lambda";
+    lambda.loc = e.loc;
+    lambda.lambda = e.lambda;
+    auto task = asFunction(value(lambda));
+    if (!task.t.function() || task.t.parts().size() != 1)
+        error("spawn expects a call");
+    auto result = task.t.parts()[0];
+    return {objectCall("fw_thread_spawn", {frame, task.v, taskRunner(task.t)}),
+            Ty{"thread.task<" + result.name + ">"}};
+}
 Val Compiler::coalesce(Expr &e, Ty expected) {
     auto a = value(*e.args[0], expected.name == "void" ? expected : Ty{expected.name + "?"});
     if (a.t.name == "null")
@@ -7037,8 +7366,9 @@ std::string Compiler::methodTemplate(const std::string &name, const std::string 
         return "";
     if (methodTemplates.count(name + "." + method))
         return name + "." + method;
-    if (!it->second->base.empty())
-        return methodTemplate(it->second->base, method);
+    for (auto &base : it->second->bases)
+        if (auto found = methodTemplate(base, method); !found.empty())
+            return found;
     return "";
 }
 // A call of a generic method, `obj.convert<int>(x)` or with type arguments inferred from the
@@ -7144,7 +7474,8 @@ std::string Compiler::instantiateClass(const std::string &base, const std::vecto
     auto &c = instances.back();
     c.name = key;
     c.typeParams.clear();
-    c.base = substituteType(c.base, bindings);
+    for (auto &base : c.bases)
+        base = substituteType(base, bindings);
     for (auto &i : c.interfaces)
         i = substituteType(i, bindings);
     for (auto &f : c.fields) {
@@ -7310,8 +7641,9 @@ Val Compiler::constructorValue(const std::string &className, Ty to) {
 Val Compiler::boundMethod(Val receiver, const std::string &method) {
     auto key = resolveMethod(receiver.t.name, method);
     auto &sig = signature(key);
-    if (sig.ast->isPrivate)
-        checkAccess(key.substr(0, key.size() - method.size() - 1), "method", method);
+    if (sig.ast->isPrivate || sig.ast->isProtected)
+        checkAccess(key.substr(0, key.size() - method.size() - 1), "method", method,
+                    sig.ast->isProtected);
     std::string t = "function<" + sig.result.name;
     for (auto &param : sig.ast->params)
         t += "," + type(param.type).name;
@@ -7374,8 +7706,9 @@ Val Compiler::callMethod(Val receiver, const std::string &staticType, const std:
     if (key.empty())
         error("type " + displayName(staticType) + " has no method '" + method + "'");
     auto &sig = signature(key);
-    if (sig.ast->isPrivate)
-        checkAccess(key.substr(0, key.size() - method.size() - 1), "method", method);
+    if (sig.ast->isPrivate || sig.ast->isProtected)
+        checkAccess(key.substr(0, key.size() - method.size() - 1), "method", method,
+                    sig.ast->isProtected);
     size_t supplied = e.args.size() - 1;
     if (supplied > sig.ast->params.size())
         error("too many arguments to " + displayName(key));
@@ -7505,16 +7838,18 @@ void Compiler::validateClasses() {
     for (auto &[name, c] : all) {
         location = c->loc;
         for (auto &m : c->methods) {
-            if (m.name == "init" || c->base.empty())
+            if (m.name == "init" || m.name == "$destroy")
                 continue;
-            auto inherited = resolveMethod(c->base, m.name);
-            location = m.loc;
-            if (inherited.empty())
-                continue;
-            auto message = "method '" + m.name + "' overrides " + displayName(inherited) +
-                           " with a different signature";
-            if (!same(name + "." + m.name, inherited, message))
-                error(message);
+            for (auto &base : c->bases) {
+                auto inherited = resolveMethod(base, m.name);
+                location = m.loc;
+                if (inherited.empty())
+                    continue;
+                auto message = "method '" + m.name + "' overrides " + displayName(inherited) +
+                               " with a different signature";
+                if (!same(name + "." + m.name, inherited, message))
+                    error(message);
+            }
         }
         if (c->isInterface)
             continue;
@@ -7535,17 +7870,18 @@ void Compiler::validateClasses() {
         }
         if (functions.count(name + ".init"))
             checkInit(*c, *functions.at(name + ".init").ast);
-        else if (!c->base.empty() && !resolveMethod(c->base, "init").empty()) {
-            auto &base = *classes.at(c->base);
-            for (size_t i = base.fields.size(); i < c->fields.size(); ++i)
-                if (!c->fields[i].value)
-                    error("class " + displayName(name) + " adds required field '" +
-                          c->fields[i].name + "', so it must define init");
+        else if (auto inherited = resolveMethod(name, "init"); !inherited.empty()) {
+            // An inherited constructor sets only its own class's fields.
+            auto provider = inherited.substr(0, inherited.size() - 5);
+            for (auto &f : c->fields)
+                if (!f.value && !hasField(provider, f.name))
+                    error("class " + displayName(name) + " adds required field '" + f.name +
+                          "', so it must define a constructor");
         }
     }
 }
 // Required fields (no default) must be assigned by top-level statements of init, or by a
-// top-level super.init(...), before init reads `inst` or can return.
+// top-level super.constructor(...), before the constructor reads `this` or can return.
 void Compiler::checkInit(Class &c, Function &init) {
     location = init.loc;
     std::vector<std::string> required;
@@ -7554,7 +7890,7 @@ void Compiler::checkInit(Class &c, Function &init) {
             required.push_back(f.name);
     std::set<std::string> assigned;
     std::function<bool(Expr &)> usesInst = [&](Expr &e) {
-        if (e.kind == "inst" || e.kind == "super")
+        if (e.kind == "inst" || e.kind == "super" || e.kind == "this")
             return true;
         for (auto &a : e.args)
             if (a && usesInst(*a))
@@ -7593,31 +7929,39 @@ void Compiler::checkInit(Class &c, Function &init) {
             break;
         if (st->kind == "assign" && st->op == "=" && st->target->kind == "inst") {
             if (usesInst(*st->expr))
-                error("init reads 'inst' before assigning required field '" + pending + "'");
+                error("the constructor reads 'this' before assigning required field '" + pending +
+                      "'");
             assigned.insert(st->target->text);
             continue;
         }
         auto superInit = [&](Expr &target) {
             Expr *callee = target.kind == "call" ? target.args[0].get() : &target;
             return callee->kind == "member" && callee->text == "init" &&
-                   callee->args[0]->kind == "super";
+                   (callee->args[0]->kind == "super" ||
+                    (callee->args[0]->kind == "member" &&
+                     callee->args[0]->args[0]->kind == "super"));
         };
         if (st->kind == "expr" && superInit(*st->target)) {
             for (size_t i = 1; i < st->target->args.size(); ++i)
                 if (usesInst(*st->target->args[i]))
-                    error("super.init arguments cannot read 'inst'");
-            for (auto &f : classes.at(c.base)->fields)
+                    error("super.constructor arguments cannot read 'this'");
+            Expr *callee = st->target->kind == "call" ? st->target->args[0].get() : st->target.get();
+            auto base = callee->args[0]->kind == "super" ? c.bases.at(0)
+                                                          : type(callee->args[0]->text).name;
+            if (!classes.count(base))
+                error("'" + displayName(base) + "' is not a base class of " + displayName(c.name));
+            for (auto &f : classes.at(base)->fields)
                 assigned.insert(f.name);
             continue;
         }
         if (scan(*st, false))
-            error("init uses 'inst' before assigning required field '" + pending + "'");
+            error("the constructor uses 'this' before assigning required field '" + pending + "'");
         if (scan(*st, true))
-            error("init can return before assigning required field '" + pending + "'");
+            error("the constructor can return before assigning required field '" + pending + "'");
     }
     location = init.loc;
     if (auto pending = missing(); !pending.empty())
-        error("init must assign required field '" + pending + "'");
+        error("the constructor must assign required field '" + pending + "'");
 }
 // for x in object: object.iterator() (or the object itself) provides next() returning T?;
 // the loop ends when next() returns null.

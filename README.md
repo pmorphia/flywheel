@@ -27,6 +27,7 @@ SQLite 3.54.1 and Mbed TLS 4.1.1 (HTTPS) are compiled into the runtime, so progr
 
 ```sh
 build/flywheel run examples/hello.fly
+build/flywheel examples/hello.fly            # the same: `flywheel SOURCE [arguments]` runs it (also `fw SOURCE`)
 build/flywheel run app.fw -- arguments for the program
 build/flywheel build examples/core.fly -O3 -o core
 build/flywheel check examples/demo.fly --emit-ir demo.ll
@@ -59,17 +60,17 @@ end
 class Circle implements Shape
     double radius
     function area() returns double
-        return 3.14159 * inst radius * inst radius
+        return 3.14159 * this.radius * this.radius
     end
 end
 
 class Square implements Shape
     double side
-    function init(double side)
-        inst side = side
+    constructor(double side)
+        this.side = side
     end
     function area() returns double
-        return inst side * inst side
+        return this.side * this.side
     end
 end
 
@@ -103,7 +104,7 @@ print Box("generic").value
 print <ul>{shapes.map(function(Shape s) => <li>{s.area()}</li>)}</ul>
 ```
 
-The language has classes with custom `init`, `private` and `readonly` members, and operator methods; single inheritance, interfaces, enums (including enums with data), exhaustive `match` with destructuring, monomorphized generics with constraints and generic methods, nullable values (including `int?`) with `??` and null-check narrowing, `char`, closures that share captured variables, first-class methods and constructors, sets and custom map keys, frozen collections, `defer`, format specs in interpolation, and an iterator protocol. See [language decisions](docs/language.md), [types](docs/types.md), and [collections](docs/collections.md).
+The language has classes with `constructor` and `destructor`, `public`/`private`/`protected`, `static` and `readonly` members, and operator methods; multiple inheritance (C3 method order, `super.method` and `super.Base.method`), interfaces, function and class decorators, the conditional expression `x if c else y`, `spawn` for threads, enums (including enums with data), exhaustive `match` with destructuring, monomorphized generics with constraints and generic methods, nullable values (including `int?`) with `??` and null-check narrowing, `char`, closures that share captured variables, first-class methods and constructors, sets and custom map keys, frozen collections, `defer`, format specs in interpolation, and an iterator protocol. See [language decisions](docs/language.md), [types](docs/types.md), and [collections](docs/collections.md).
 
 ```flywheel
 enum Token

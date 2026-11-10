@@ -88,6 +88,8 @@ class Loader {
     std::map<std::string, std::string> packages; // package name -> directory
     std::map<std::string, std::string> downloads; // URL -> contents, fetched once per load
     std::set<std::string> variants; // qualified Enum.Member classes of enums with data
+    std::set<std::string> statics;  // qualified Class$member names of static members
+    std::set<std::string> classNames; // qualified names of every class
     const std::map<std::string, std::string> *overlay = nullptr;
     std::map<std::string, std::unique_ptr<Unit>> units;
     std::vector<std::string> stack;
@@ -255,6 +257,18 @@ class Loader {
         }
         for (auto &a : e.args)
             expression(u, *a, locals);
+        // super.Base.member names a base class.
+        if (e.kind == "member" && e.args[0]->kind == "super" && u.names.count(e.text) &&
+            classNames.count(u.names.at(e.text)))
+            e.text = u.names.at(e.text);
+        // Class.member of a static member names its hidden global or function, Class$member.
+        if (e.kind == "member" && e.args[0]->kind == "name" &&
+            statics.count(e.args[0]->text + "$" + e.text)) {
+            e.text = e.args[0]->text + "$" + e.text;
+            e.kind = "name";
+            e.args.clear();
+            return;
+        }
         // Enum.Member of an enum with data names the variant class.
         if (e.kind == "member" && e.args[0]->kind == "name" &&
             variants.count(e.args[0]->text + "." + e.text)) {
@@ -370,6 +384,8 @@ class Loader {
             f.name = u.own.at(f.name);
         else
             f.owner = u.own.at(f.owner);
+        if (!f.staticOf.empty())
+            f.staticOf = u.own.at(f.staticOf);
     }
     // A native C, C++, Rust, or Zig source: its functions become a module of foreign functions.
     Unit &loadForeign(const std::string &language, const std::string &file, Location loc) {
@@ -611,6 +627,10 @@ class Loader {
             if (!c.variantOf.empty())
                 variants.insert(u.prefix + c.name);
         }
+        for (auto &[hidden, info] : u.program.statics)
+            statics.insert(u.prefix + hidden);
+        for (auto &c : u.program.classes)
+            classNames.insert(u.prefix + c.name);
         for (auto &en : u.program.enums)
             add(en.name, en.loc);
         for (auto &[name, e] : u.program.components)
@@ -798,8 +818,8 @@ class Loader {
         }
         for (auto &c : u.program.classes) {
             c.loc.file = u.path;
-            if (!c.base.empty())
-                c.base = type(u, c.base, c.loc);
+            for (auto &base : c.bases)
+                base = type(u, base, c.loc);
             for (auto &[name, bound] : c.typeBounds)
                 bound = type(u, bound, c.loc);
             for (auto &v : c.variants)
@@ -825,6 +845,8 @@ class Loader {
         statements(u, u.program.body, {}, true);
         for (auto &f : u.program.functions)
             merged.functions.push_back(std::move(f));
+        for (auto &[hidden, info] : u.program.statics)
+            merged.statics[u.own.at(hidden)] = {u.own.at(info.first), info.second};
         for (auto &c : u.program.classes)
             merged.classes.push_back(std::move(c));
         for (auto &en : u.program.enums)

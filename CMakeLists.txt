@@ -87,4 +87,18 @@ else()
   message(STATUS "Python 3 not found; ctest will not register the integration suite")
 endif()
 install(TARGETS flywheel flywheel_runtime RUNTIME DESTINATION bin ARCHIVE DESTINATION lib)
+# fw is a short alias: a symlink, or on Windows a hard link (a copy where links are unavailable).
+if(WIN32)
+  install(CODE [[
+    set(bin "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin")
+    file(REMOVE "${bin}/fw.exe")
+    file(CREATE_LINK "${bin}/flywheel.exe" "${bin}/fw.exe" COPY_ON_ERROR)
+  ]])
+else()
+  install(CODE [[
+    set(bin "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin")
+    file(REMOVE "${bin}/fw")
+    file(CREATE_LINK flywheel "${bin}/fw" SYMBOLIC)
+  ]])
+endif()
 include(cmake/Desktop.cmake)

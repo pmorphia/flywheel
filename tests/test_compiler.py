@@ -12,6 +12,153 @@ from pathlib import Path
 COMPILER = str(Path(sys.argv.pop(1)).resolve()) if len(sys.argv) > 1 else "flywheel"
 
 POSITIVE = {
+    "math_integers": (
+        """import math
+print math.cbrt(27.0), math.gcd(12, -18), math.lcm(4, -6), math.lcm(0, 3), math.factorial(5)
+print math.sign(-3), math.sign(2.5), math.sign(0)""",
+        "3 6 12 0 120\n-1 1 0\n",
+    ),
+    "multiple_inheritance": (
+        """class Named
+    string name
+    function describe() returns string
+        return "named " + this.name
+    end
+end
+class Aged
+    int age = 0
+    function describe() returns string
+        return "aged {this.age}"
+    end
+    function birthday()
+        this.age += 1
+    end
+end
+class Person extends Named, Aged
+    constructor(string name, int age)
+        super.Named.constructor(name)
+        this.age = age
+    end
+    function describe() returns string
+        return super.describe() + " / " + super.Aged.describe()
+    end
+end
+function show(Aged a) returns string
+    return "{a.age}"
+end
+var p = Person("Ann", 30)
+p.birthday()
+print p.describe(), show(p), p is Named, p is Aged""",
+        "named Ann / aged 31 31 true true\n",
+    ),
+    "diamond_mro": (
+        """class Base
+    int id = 7
+    function who() returns string
+        return "base"
+    end
+end
+class Left extends Base
+    function who() returns string
+        return "left>" + super.who()
+    end
+end
+class Right extends Base
+    function who() returns string
+        return "right"
+    end
+end
+class Both extends Left, Right
+end
+print Both().who(), Both().id""",
+        "left>base 7\n",
+    ),
+    "statics_and_access": (
+        """class Counter
+    static int made = 0
+    private int secret = 5
+    protected int level = 1
+    constructor
+        Counter.made += 1
+    end
+    static function create() returns Counter
+        var c = Counter()
+        c.secret += 1
+        return c
+    end
+    function peek() returns int
+        return this.secret
+    end
+end
+class Sub extends Counter
+    function bump() returns int
+        this.level += 1
+        return this.level
+    end
+end
+var c = Counter.create()
+print c.peek(), Sub().bump(), Counter.made""",
+        "6 2 2\n",
+    ),
+    "destructors": (
+        """class Base
+    destructor
+        print "base gone"
+    end
+end
+class Res extends Base
+    string name
+    destructor
+        print "closing {this.name}"
+    end
+end
+function use()
+    var r = Res("a")
+    print "using {r.name}"
+end
+use()
+var keep = Res("b")
+print "end"
+""",
+        "using a\nclosing a\nbase gone\nend\nclosing b\nbase gone\n",
+    ),
+    "ternary": (
+        """int n = 4
+print "big" if n > 3 else "small"
+string? s = null
+var t = s if s != null else "none"
+print t, (1 if n % 2 == 0 else 2) * 10, "a" if n > 9 else "b" if n > 2 else "c"
+""",
+        "big\nnone 10 b\n",
+    ),
+    "decorators": (
+        """function twice(function(int) returns int f) returns function(int) returns int
+    return function(int x) => f(f(x))
+end
+string[] names = []
+function register(function() returns Plugin make)
+    names.push(make().name)
+end
+twice function inc(int x) returns int
+    return x + 1
+end
+register class Plugin
+    string name = "p"
+end
+print inc(5), names""",
+        '7 ["p"]\n',
+    ),
+    "spawn": (
+        """function work(int k) returns int
+    return k * 2
+end
+var t = spawn work(21)
+var u = spawn function() returns string
+    return "block"
+end
+print t.join(), u.join()""",
+        "42 block\n",
+    ),
     "hello": ('print "Hello, world!"', "Hello, world!\n"),
     "arithmetic": ("int a = 3\nvar b = 4\nprint a + b", "7\n"),
     "calls": (
@@ -39,10 +186,10 @@ end""",
 string name
 int age = 0
 function birthday() returns void
-inst age += 1
+this.age += 1
 end
 function greet() returns string
-return "Hi {inst name}!"
+return "Hi {this.name}!"
 end
 end
 var p = Person "danny", 15
@@ -540,7 +687,7 @@ POSITIVE.update(
             "42\n",
         ),
         "zero_parameter_methods": (
-            "class Counter\nint count=0\nfunction increment returns void\ninst count+=1\nend\nfunction value\nreturn inst count\nend\nend\nvar counter=Counter()\ncounter.increment\nprint counter.value()",
+            "class Counter\nint count=0\nfunction increment returns void\nthis.count+=1\nend\nfunction value\nreturn this.count\nend\nend\nvar counter=Counter()\ncounter.increment\nprint counter.value()",
             "1\n",
         ),
     }
@@ -886,7 +1033,7 @@ var base=testing.live_objects()
 class Counter
     int value=0
     function increment returns void
-        inst value+=1
+        this.value+=1
     end
 end
 function hello returns void
@@ -971,7 +1118,7 @@ print next()""",
     int age
     bool admin = false
     function shout() returns string
-        return inst name.upper()
+        return this.name.upper()
     end
 end
 
@@ -1011,7 +1158,7 @@ class Button
     string label
     function() returns void on_click = function() => print("default")
     function greeter() returns function(string) returns string
-        return function(string who) returns string => "{inst label} greets {who}"
+        return function(string who) returns string => "{this.label} greets {who}"
     end
 end
 function outer(int a) returns int
@@ -1173,6 +1320,23 @@ INPUT_CASES = {
 }
 
 NEGATIVE = {
+    "private_field": ("class A\n    private int x = 1\nend\nprint A().x", "private to class A"),
+    "protected_field": (
+        "class A\n    protected int x = 1\nend\nprint A().x",
+        "protected: visible only in A and its subclasses",
+    ),
+    "inst_removed": ("class A\n    int x = 1\n    function f() returns int\n        return inst x\n    end\nend", "'inst' was removed: write this.x"),
+    "init_removed": ("class A\n    function init()\n    end\nend", "constructors are declared with constructor"),
+    "private_static": ("class A\n    private static int n = 1\nend\nprint A.n", "static member 'n' is private"),
+    "ternary_else": ("print 1 if true", "needs 'else'"),
+    "field_conflict": (
+        "class A\n    int x = 1\nend\nclass B\n    int x = 2\nend\nclass C extends A, B\nend",
+        "both declare a field 'x'",
+    ),
+    "inconsistent_mro": (
+        "class A\nend\nclass B extends A\nend\nclass C extends A, B\nend\nprint C()",
+        "inconsistent base class order",
+    ),
     "markup_argument_mismatch": ("import html.*\nprint <p>bad</div>", "mismatched"),
     "markup_argument_unknown": ("print <h1>bad</h1>", "unknown tag"),
     "unknown_tag": ("var t = <p>test</p>", "unknown tag"),
@@ -1214,8 +1378,8 @@ NEGATIVE = {
     "unicode": ('print "\\u{D800}"', "Unicode"),
     "unsupported_module": ("import gizmo", "not found or not implemented"),
     "init_unassigned": (
-        "class C\nint x\nfunction init()\nend\nend",
-        "init must assign required field 'x'",
+        "class C\nint x\nconstructor()\nend\nend",
+        "the constructor must assign required field 'x'",
     ),
 }
 TRAPS = {
@@ -1760,17 +1924,17 @@ class Base implements Shape
         return 0.0
     end
     function label() returns string
-        return "{inst tag}:{inst area()}"
+        return "{this.tag}:{this.area()}"
     end
 end
 class Circle extends Base
     double r
-    function init(double r)
-        inst r = r
-        inst tag = "circle"
+    constructor(double r)
+        this.r = r
+        this.tag = "circle"
     end
     function area() returns double
-        return 3.0 * inst r * inst r
+        return 3.0 * this.r * this.r
     end
 end
 class Square extends Base
@@ -1779,7 +1943,7 @@ class Square extends Base
         return "square " + super.label()
     end
     function area() returns double
-        return inst side * inst side
+        return this.side * this.side
     end
 end
 var c = Color.Green
@@ -1894,12 +2058,12 @@ NEGATIVE.update(
             "match is not exhaustive (missing Y)",
         ),
         "init_reads_inst": (
-            "class A\n    int x\n    function init()\n        print inst x\n        inst x = 1\n    end\nend",
-            "init uses 'inst' before assigning required field 'x'",
+            "class A\n    int x\n    constructor()\n        print this.x\n        this.x = 1\n    end\nend",
+            "the constructor uses 'this' before assigning required field 'x'",
         ),
         "init_early_return": (
-            "class A\n    int x\n    function init(bool b)\n        if b do\n            return\n        end\n        inst x = 1\n    end\nend",
-            "init can return before assigning required field 'x'",
+            "class A\n    int x\n    constructor(bool b)\n        if b do\n            return\n        end\n        this.x = 1\n    end\nend",
+            "the constructor can return before assigning required field 'x'",
         ),
         "interface_construct": (
             "interface S\n    function f() returns int\nend\nvar s = S()",
@@ -1935,11 +2099,11 @@ POSITIVE.update(
 class Counter
     int value = 0
     function add(int n) returns int
-        inst value += n
-        return inst value
+        this.value += n
+        return this.value
     end
     function adder() returns function(int) returns int
-        return inst add
+        return this.add
     end
 end
 class Person
@@ -2008,7 +2172,7 @@ print testing.live_objects() == base""",
             """class Box<T>
     T value
     function get() returns T
-        return inst value
+        return this.value
     end
     function with(T other) returns Box<T>
         return Box<T>(other)
@@ -2018,22 +2182,22 @@ class Pair<A, B>
     A first
     B second
     function swap() returns Pair<B, A>
-        return Pair(inst second, inst first)
+        return Pair(this.second, this.first)
     end
 end
 class Stack<T>
     T[] items
-    function init()
-        inst items = []
+    constructor()
+        this.items = []
     end
     function push(T item)
-        inst items.push(item)
+        this.items.push(item)
     end
     function pop() returns T?
-        if inst items.length == 0 do
+        if this.items.length == 0 do
             return null
         end
-        return inst items.pop()
+        return this.items.pop()
     end
 end
 function first<T>(T[] items) returns T
@@ -2065,7 +2229,7 @@ print getter([9])""",
     }
 )
 
-POSITIVE.update({"sets_hashing_iterators": ('import testing\nvar base = testing.live_objects()\nclass Point\n    int x\n    int y\n    function equals(Point other) returns bool\n        return inst x == other.x and inst y == other.y\n    end\n    function hash() returns int\n        return inst x * 31 + inst y\n    end\nend\nclass Countdown\n    int n\n    function next() returns int?\n        if inst n == 0 do\n            return null\n        end\n        inst n -= 1\n        return inst n + 1\n    end\nend\nclass Range\n    int stop\n    function iterator() returns Countdown\n        return Countdown(inst stop)\n    end\nend\nfunction check() returns void\n    set<int> s = {3, 1, 3, 2}\n    print s, s.length, 2 in s, 5 in s\n    s.add(5)\n    print s.remove(1), s.remove(9), s\n    var words = set(["a", "b", "a"])\n    print words, words.contains("b")\n    set<string> empty = {}\n    print empty.length\n    var other = set([2, 9])\n    print s.union(other), s.intersection(other), s.difference(other), set([2]).is_subset(s)\n    for x in s do\n        print "item", x\n    end\n    print Point(1, 2) == Point(1, 2), Point(1, 2) != Point(2, 1)\n    map<Point, string> names = {Point(1, 2): "a"}\n    names[Point(1, 2)] = "b"\n    names[Point(3, 4)] = "c"\n    print names.length, names[Point(1, 2)], Point(3, 4) in names, Point(9, 9) in names\n    print names.remove(Point(3, 4)), names.length\n    set<Point> points = {Point(0, 0), Point(0, 0)}\n    print points.length\n    map<[int, string], int> pairs = {}\n    pairs[[1, "a"]] = 10\n    pairs[[1, "a"]] += 1\n    print pairs, [1, "a"] in pairs, [1, "b"] in pairs\n    set<[int, int]> grid = {[0, 0], [0, 1], [0, 0]}\n    print grid.length\n    for n in Countdown(3) do\n        print "count", n\n    end\n    for n in Range(2) do\n        print "range", n\n    end\n    map<string, int> ages = {"ann": 3, "bo": 4}\n    for name, age in ages do\n        print name, age\n    end\n    for i, w in ["x", "y"] do\n        print i, w\n    end\n    print ages.values()\nend\ncheck()\nprint testing.live_objects() == base\n', '{3, 1, 2} 3 true false\ntrue false {3, 2, 5}\n{"a", "b"} true\n0\n{3, 2, 5, 9} {2} {3, 5} true\nitem 3\nitem 2\nitem 5\ntrue true\n2 b true false\ntrue 1\n1\n{(1, "a"): 11} true false\n2\ncount 3\ncount 2\ncount 1\nrange 2\nrange 1\nann 3\nbo 4\n0 x\n1 y\n[3, 4]\ntrue\n')})
+POSITIVE.update({"sets_hashing_iterators": ('import testing\nvar base = testing.live_objects()\nclass Point\n    int x\n    int y\n    function equals(Point other) returns bool\n        return this.x == other.x and this.y == other.y\n    end\n    function hash() returns int\n        return this.x * 31 + this.y\n    end\nend\nclass Countdown\n    int n\n    function next() returns int?\n        if this.n == 0 do\n            return null\n        end\n        this.n -= 1\n        return this.n + 1\n    end\nend\nclass Range\n    int stop\n    function iterator() returns Countdown\n        return Countdown(this.stop)\n    end\nend\nfunction check() returns void\n    set<int> s = {3, 1, 3, 2}\n    print s, s.length, 2 in s, 5 in s\n    s.add(5)\n    print s.remove(1), s.remove(9), s\n    var words = set(["a", "b", "a"])\n    print words, words.contains("b")\n    set<string> empty = {}\n    print empty.length\n    var other = set([2, 9])\n    print s.union(other), s.intersection(other), s.difference(other), set([2]).is_subset(s)\n    for x in s do\n        print "item", x\n    end\n    print Point(1, 2) == Point(1, 2), Point(1, 2) != Point(2, 1)\n    map<Point, string> names = {Point(1, 2): "a"}\n    names[Point(1, 2)] = "b"\n    names[Point(3, 4)] = "c"\n    print names.length, names[Point(1, 2)], Point(3, 4) in names, Point(9, 9) in names\n    print names.remove(Point(3, 4)), names.length\n    set<Point> points = {Point(0, 0), Point(0, 0)}\n    print points.length\n    map<[int, string], int> pairs = {}\n    pairs[[1, "a"]] = 10\n    pairs[[1, "a"]] += 1\n    print pairs, [1, "a"] in pairs, [1, "b"] in pairs\n    set<[int, int]> grid = {[0, 0], [0, 1], [0, 0]}\n    print grid.length\n    for n in Countdown(3) do\n        print "count", n\n    end\n    for n in Range(2) do\n        print "range", n\n    end\n    map<string, int> ages = {"ann": 3, "bo": 4}\n    for name, age in ages do\n        print name, age\n    end\n    for i, w in ["x", "y"] do\n        print i, w\n    end\n    print ages.values()\nend\ncheck()\nprint testing.live_objects() == base\n', '{3, 1, 2} 3 true false\ntrue false {3, 2, 5}\n{"a", "b"} true\n0\n{3, 2, 5, 9} {2} {3, 5} true\nitem 3\nitem 2\nitem 5\ntrue true\n2 b true false\ntrue 1\n1\n{(1, "a"): 11} true false\n2\ncount 3\ncount 2\ncount 1\nrange 2\nrange 1\nann 3\nbo 4\n0 x\n1 y\n[3, 4]\ntrue\n')})
 NEGATIVE.update(
     {
         "map_key_without_hash": (
@@ -2150,7 +2314,7 @@ POSITIVE.update(
             'import html.*\nstring[] names = ["a", "<b>"]\nelement? none = null\nprint <ul>{names.map(function(string n) => <li>{n}</li>)}{none}</ul>\nprint <p>{[1, 2]}</p>',
             "<ul><li>a</li><li>&lt;b&gt;</li></ul>\n<p>12</p>\n",
         ),
-        "example_types": ('# Classes, interfaces, enums, generics, optional values, and pattern matching.\ninterface Shape\n    function area() returns double\n    function name() returns string\nend\n\nclass Circle implements Shape\n    double radius\n    function area() returns double\n        return 3.14159 * inst radius * inst radius\n    end\n    function name() returns string\n        return "circle"\n    end\nend\n\nclass Rectangle implements Shape\n    double width\n    double height\n    function area() returns double\n        return inst width * inst height\n    end\n    function name() returns string\n        return "rectangle"\n    end\nend\n\nclass Square extends Rectangle\n    function init(double side)\n        super.init(side, side)\n    end\n    function name() returns string\n        return "square"\n    end\nend\n\nenum Verdict\n    Small, Medium, Large\nend\n\nfunction judge(Shape shape) returns Verdict\n    match shape\n        case Square s if s.width > 3.0 do\n            return Verdict.Large\n        case Circle c if c.radius < 1.0 do\n            return Verdict.Small\n        else do\n            return Verdict.Medium\n    end\nend\n\nclass Stack<T>\n    T[] items\n    function init()\n        inst items = []\n    end\n    function push(T item)\n        inst items.push(item)\n    end\n    function pop() returns T?\n        if inst items.length == 0 do\n            return null\n        end\n        return inst items.pop()\n    end\nend\n\nShape[] shapes = [Circle(0.5), Rectangle(2.0, 3.0), Square(4.0)]\nfor shape in shapes do\n    print shape.name(), shape.area(), judge(shape)\nend\n\nStack<string> names = Stack()\nnames.push("first")\nnames.push("second")\nvar top = names.pop()\nprint top ?? "empty", names.pop() ?? "empty", names.pop() ?? "empty"\n', "circle 0.7853975 Small\nrectangle 6 Medium\nsquare 16 Large\nsecond first empty\n"),
+        "example_types": ('# Classes, interfaces, enums, generics, optional values, and pattern matching.\ninterface Shape\n    function area() returns double\n    function name() returns string\nend\n\nclass Circle implements Shape\n    double radius\n    function area() returns double\n        return 3.14159 * this.radius * this.radius\n    end\n    function name() returns string\n        return "circle"\n    end\nend\n\nclass Rectangle implements Shape\n    double width\n    double height\n    function area() returns double\n        return this.width * this.height\n    end\n    function name() returns string\n        return "rectangle"\n    end\nend\n\nclass Square extends Rectangle\n    constructor(double side)\n        super.constructor(side, side)\n    end\n    function name() returns string\n        return "square"\n    end\nend\n\nenum Verdict\n    Small, Medium, Large\nend\n\nfunction judge(Shape shape) returns Verdict\n    match shape\n        case Square s if s.width > 3.0 do\n            return Verdict.Large\n        case Circle c if c.radius < 1.0 do\n            return Verdict.Small\n        else do\n            return Verdict.Medium\n    end\nend\n\nclass Stack<T>\n    T[] items\n    constructor()\n        this.items = []\n    end\n    function push(T item)\n        this.items.push(item)\n    end\n    function pop() returns T?\n        if this.items.length == 0 do\n            return null\n        end\n        return this.items.pop()\n    end\nend\n\nShape[] shapes = [Circle(0.5), Rectangle(2.0, 3.0), Square(4.0)]\nfor shape in shapes do\n    print shape.name(), shape.area(), judge(shape)\nend\n\nStack<string> names = Stack()\nnames.push("first")\nnames.push("second")\nvar top = names.pop()\nprint top ?? "empty", names.pop() ?? "empty", names.pop() ?? "empty"\n', "circle 0.7853975 Small\nrectangle 6 Medium\nsquare 16 Large\nsecond first empty\n"),
     }
 )
 
@@ -2255,13 +2419,13 @@ POSITIVE.update(
         ),
         "operators_visibility_defer": (
             "class Vec\n    readonly int x\n    readonly int y\n    private int secret = 7\n"
-            "    function operator +(Vec o) returns Vec\n        return Vec(inst x + o.x, inst y + o.y)\n    end\n"
-            "    function operator -() returns Vec\n        return Vec(-inst x, -inst y)\n    end\n"
-            "    function operator ==(Vec o) returns bool\n        return inst x == o.x and inst y == o.y\n    end\n"
-            "    function operator <(Vec o) returns bool\n        return inst x < o.x\n    end\n"
-            "    function operator [](int i) returns int\n        if i == 0 do\n            return inst x\n        end\n"
-            "        return inst y\n    end\n    function to_string returns string\n        return \"<{inst x},{inst y}>\"\n    end\n"
-            "    function peek returns int\n        return inst secret\n    end\nend\n"
+            "    function operator +(Vec o) returns Vec\n        return Vec(this.x + o.x, this.y + o.y)\n    end\n"
+            "    function operator -() returns Vec\n        return Vec(-this.x, -this.y)\n    end\n"
+            "    function operator ==(Vec o) returns bool\n        return this.x == o.x and this.y == o.y\n    end\n"
+            "    function operator <(Vec o) returns bool\n        return this.x < o.x\n    end\n"
+            "    function operator [](int i) returns int\n        if i == 0 do\n            return this.x\n        end\n"
+            "        return this.y\n    end\n    function to_string returns string\n        return \"<{this.x},{this.y}>\"\n    end\n"
+            "    function peek returns int\n        return this.secret\n    end\nend\n"
             "var a = Vec(1, 2)\nvar b = a + Vec(3, 4)\nprint b, -a, a == Vec(1, 2), a != b, a < b, a >= b, b[1], a.peek()\n"
             "function work returns int\n    defer print \"first in, last out\"\n    defer\n        print \"second\"\n    end\n"
             "    print \"body\"\n    return 1\nend\nprint work()\n"
@@ -2272,12 +2436,12 @@ POSITIVE.update(
         ),
         "generic_constraints_and_methods": (
             "interface Named\n    function label returns string\nend\nclass Dog implements Named\n    string name\n"
-            "    function label returns string\n        return inst name\n    end\nend\n"
+            "    function label returns string\n        return this.name\n    end\nend\n"
             "function shout<T implements Named>(T item) returns string\n    return item.label().upper()\nend\n"
             "function biggest<T is comparable>(T[] items) returns T\n    var best = items[0]\n    for x in items do\n"
             "        if x > best do\n            best = x\n        end\n    end\n    return best\nend\n"
             "class Box<T>\n    T value\n    function map<U>(function(T) returns U f) returns Box<U>\n"
-            "        return Box<U>(f(inst value))\n    end\nend\n"
+            "        return Box<U>(f(this.value))\n    end\nend\n"
             "print shout(Dog(\"rex\")), biggest([3, 9, 2]), biggest([\"b\", \"c\", \"a\"])\n"
             "print Box(4).map(function(int x) => \"n{x}\").value\n",
             "REX 9 c\nn4\n",
@@ -3109,7 +3273,7 @@ class CompilerTests(unittest.TestCase):
         )
         result = self.command("check", self.source)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("unexpected keyword 'function'", result.stderr)
+        self.assertIn("unknown or unimplemented callable 'ii'", result.stderr)
         self.assertNotIn("nested calls", result.stderr)
 
     def test_catch_name_warnings(self):
@@ -3350,13 +3514,13 @@ print web.route("POST", "/echo", echo, 0, "::1")
 
         messy = self.root / "messy.fw"
         messy.write_text(
-            "class P\n  int x = 0\n      function get() returns int\nreturn inst x\n end\nend\n"
+            "class P\n  int x = 0\n      function get() returns int\nreturn this.x\n end\nend\n"
             "function main\nvar xs = [1,\n2]\nif true do\nprint xs\n  else do\nprint 0\nend\n"
             "xs.each(function(int x)\nprint x\n    end)\nvar s = \"a  \n   b\"\nend   \n",
             encoding="utf-8",
         )
         expected = (
-            "class P\n    int x = 0\n    function get() returns int\n        return inst x\n    end\nend\n"
+            "class P\n    int x = 0\n    function get() returns int\n        return this.x\n    end\nend\n"
             "function main\n    var xs = [1,\n        2]\n    if true do\n        print xs\n    else do\n        print 0\n    end\n"
             "    xs.each(function(int x)\n        print x\n    end)\n    var s = \"a  \n   b\"\nend\n"
         )
@@ -3851,7 +4015,7 @@ print web.static("/assets", "public", {port})
     def test_language_server_navigation(self):
         (self.root / "geo.fw").write_text(
             "# Area of a rectangle.\nfunction area(int w, int h) returns int\n    return w * h\nend\n"
-            "class Point\n    int x\n    function norm returns int\n        return inst x * inst x\n    end\nend\n",
+            "class Point\n    int x\n    function norm returns int\n        return this.x * this.x\n    end\nend\n",
             encoding="utf-8",
         )
         main = self.root / "main.fw"

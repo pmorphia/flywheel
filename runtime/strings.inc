@@ -644,9 +644,51 @@ double fw_math_unary(double x, int64_t operation) {
         return std::acos(x);
     case 11:
         return std::atan(x);
+    case 13:
+        return std::cbrt(x);
     default:
         return std::fabs(x);
     }
+}
+int64_t fw_math_gcd(int64_t a, int64_t b) {
+    return nativeBoundary([&]() -> int64_t {
+        uint64_t x = a < 0 ? 0 - static_cast<uint64_t>(a) : static_cast<uint64_t>(a);
+        uint64_t y = b < 0 ? 0 - static_cast<uint64_t>(b) : static_cast<uint64_t>(b);
+        while (y) {
+            auto t = x % y;
+            x = y;
+            y = t;
+        }
+        if (x > static_cast<uint64_t>(INT64_MAX))
+            fail("integer overflow in math.gcd", "NumericError");
+        return static_cast<int64_t>(x);
+    });
+}
+int64_t fw_math_lcm(int64_t a, int64_t b) {
+    return nativeBoundary([&]() -> int64_t {
+        if (a == 0 || b == 0)
+            return 0;
+        auto g = static_cast<uint64_t>(fw_math_gcd(a, b));
+        auto magnitude = [](int64_t v) {
+            return v < 0 ? 0 - static_cast<uint64_t>(v) : static_cast<uint64_t>(v);
+        };
+        uint64_t x = magnitude(a) / g, y = magnitude(b);
+        if (x > static_cast<uint64_t>(INT64_MAX) / y)
+            fail("integer overflow in math.lcm", "NumericError");
+        return static_cast<int64_t>(x * y);
+    });
+}
+int64_t fw_math_factorial(int64_t n) {
+    return nativeBoundary([&]() -> int64_t {
+        if (n < 0)
+            fail("math.factorial requires a non-negative integer", "ValueError");
+        if (n > 20)
+            fail("integer overflow in math.factorial", "NumericError");
+        int64_t r = 1;
+        for (int64_t i = 2; i <= n; ++i)
+            r *= i;
+        return r;
+    });
 }
 double fw_math_binary(double a, double b, int64_t operation) {
     return operation == 0 ? std::atan2(a, b) : std::hypot(a, b);

@@ -52,6 +52,24 @@ producer.join()
 
 A task that is never joined is joined when its last reference is released. A task's error stays with the task until `join` re-raises it. Values sent through a channel are shared references, not copies.
 
+## spawn
+
+`spawn` (a soft keyword) runs a call on a new thread and gives its `thread.task`, without `import thread`:
+
+```flywheel
+function work(int n) returns int
+    return n * 2
+end
+var task = spawn work(21)       # the call, arguments included, runs on the new thread
+spawn print "in the background"
+var other = spawn function() returns string
+    return "block"
+end
+print task.join(), other.join()  # 42 block
+```
+
+`spawn f(x)` is `thread.spawn(function() => f(x))`. A bare name or member is a call with no arguments (`spawn main_loop`, `spawn server.run`), parentheses are optional as in statements, and `spawn function() ... end` runs a block. Flywheel Lite and flywheel.js have no threads: there `spawn` runs the call at once, and `join()` returns its result or rethrows its error.
+
 ## Shared state
 
 While spawned threads run, each operation on an array, map, set, class instance, global, or captured variable is atomic: `xs.push(x)` from several threads keeps every value, `xs.pop()` never returns the same item twice, and a value read into a variable or passed to a function stays alive even if another thread replaces it. Formatting, `json.encode`, casts, and copies read a snapshot of each collection. When no other thread is running these locks are skipped.

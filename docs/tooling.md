@@ -4,6 +4,8 @@
 
 Each `flywheel` command has a short alias: `r` (run), `b` (build), `c` (check), `d` (desktop), `s` (serve), `e` (export), `db` (debug), `t` (test), `f` or `fmt` (format), and `u` (update). `doc`, `repl`, `lsp`, and `selftest` have none. `help`, `h`, `-h`, and `--help` print the usage; `version`, `v`, and `--version` print the version.
 
+A source file in place of a command runs it, as `run` does: `flywheel app.fw a b` (or `fw app.fw a b`, the short name installed beside `flywheel`) is `flywheel run app.fw -- a b`, so every argument after the file goes to the program. `flywheel -s CODE` is `flywheel run -s CODE`. Flywheel Lite (`flywheel-lite`, `fwl`) and `flywheel-js` accept the same form.
+
 ## Testing
 
 `flywheel test [files or directories] [-O0..3]` discovers test files named `test_*.fw` or `*_test.fw` (or `.fly`), recursively under the given directories (default: the current directory, skipping `build` and hidden directories). In each file, every top-level function whose name starts with `test_` and that takes no arguments is a test. Each test runs in turn; a failure or error is reported and the remaining tests still run.
@@ -227,7 +229,7 @@ and then library and native modules. In a modules directory, a package is a dire
 - hover: the declaration's source line and its documentation comment;
 - go to definition and find references for locals, parameters, functions, classes, fields, methods, enum members, and names in imported local modules, packages, and library modules (including names inside string interpolations);
 - rename across open documents and the declaring file;
-- completion of names in scope, keywords, module members after `module.`, and class members after `inst`;
+- completion of names in scope, keywords, module members after `module.`, and class members after `this.`;
 - document symbols (the outline); and
 - whole-document formatting with the formatter above.
 

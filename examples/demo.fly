@@ -9,11 +9,11 @@ class Person
     int age = 0
 
     function greet() returns string
-        return "Hello, {inst name}! You're {inst age} years old."
+        return "Hello, {this.name}! You're {this.age} years old."
     end
 
     function birthday() returns void
-        inst age += 1
+        this.age += 1
     end
 end
 

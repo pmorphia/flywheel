@@ -541,7 +541,7 @@ class Navigator {
         auto name = t->text;
         auto scope = scopeAt(*f, line);
         bool afterDot = i >= 1 && f->tokens[i - 1].text == "." && f->tokens[i - 1].loc.line == t->loc.line;
-        if (i >= 1 && f->tokens[i - 1].text == "inst" && scope && !scope->owner.empty())
+        if (i >= 2 && afterDot && f->tokens[i - 2].text == "this" && scope && !scope->owner.empty())
             return member(*f, scope->owner, name);
         if (afterDot && i >= 2) {
             auto &receiver = f->tokens[i - 2];
@@ -643,6 +643,14 @@ class Navigator {
             while (start > 0 && (std::isalnum(static_cast<unsigned char>(before[start - 1])) || before[start - 1] == '_'))
                 --start;
             auto receiver = before.substr(start, before.size() - 1 - start);
+            if (receiver == "this") {
+                // `this.`: the members of the enclosing class
+                if (auto scope = scopeAt(*f, line); scope && !scope->owner.empty()) {
+                    for (auto &m : f->members[scope->owner])
+                        out.push_back({m.name, m.kind});
+                    return out;
+                }
+            }
             if (f->imports.count(receiver)) {
                 auto module = f->imports.at(receiver);
                 if (auto other = index(modulePath(*f, module))) {
@@ -673,12 +681,6 @@ class Navigator {
             return out;
         }
         auto scope = scopeAt(*f, line);
-        if (trimmed(before).size() >= 4 && before.substr(before.find_last_not_of(" ") - 3, 4) == "inst" &&
-            scope && !scope->owner.empty()) {
-            for (auto &m : f->members[scope->owner])
-                out.push_back({m.name, m.kind});
-            return out;
-        }
         std::set<std::string> seen;
         if (scope)
             for (auto &l : scope->locals)
@@ -690,7 +692,9 @@ class Navigator {
         for (auto keyword : {"function", "class", "interface", "enum", "var", "const", "if",
                              "else", "end", "while", "for", "in", "do", "return",
                              "match", "case", "try", "catch", "finally", "throw", "defer",
-                             "import", "private", "readonly", "inst", "true", "false", "null",
+                             "import", "public", "private", "protected", "static", "readonly",
+                             "constructor", "destructor", "this", "super", "spawn", "true",
+                             "false", "null",
                              "and", "or", "not", "print", "returns", "break", "continue",
                              "assert", "which", "when", "run", "reactive", "computed", "with",
                              "error", "unitns", "unit", "unitconv"})

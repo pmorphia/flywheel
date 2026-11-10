@@ -17,48 +17,48 @@ class BigInt
     private readonly int[] limbs
 
     function operator +(BigInt other) returns BigInt
-        if inst sign == 0 do
+        if this.sign == 0 do
             return other
         end
         if other.sign == 0 do
-            return BigInt(inst sign, inst limbs)
+            return BigInt(this.sign, this.limbs)
         end
-        if inst sign == other.sign do
-            return make(inst sign, add_limbs(inst limbs, other.limbs))
+        if this.sign == other.sign do
+            return make(this.sign, add_limbs(this.limbs, other.limbs))
         end
-        var c = compare_limbs(inst limbs, other.limbs)
+        var c = compare_limbs(this.limbs, other.limbs)
         if c == 0 do
             return zero()
         end
         if c > 0 do
-            return make(inst sign, subtract_limbs(inst limbs, other.limbs))
+            return make(this.sign, subtract_limbs(this.limbs, other.limbs))
         end
-        return make(other.sign, subtract_limbs(other.limbs, inst limbs))
+        return make(other.sign, subtract_limbs(other.limbs, this.limbs))
     end
 
     function operator -() returns BigInt
-        return BigInt(-inst sign, inst limbs)
+        return BigInt(-this.sign, this.limbs)
     end
 
     function operator -(BigInt other) returns BigInt
-        return BigInt(inst sign, inst limbs) + (-other)
+        return BigInt(this.sign, this.limbs) + (-other)
     end
 
     function operator *(BigInt other) returns BigInt
-        if inst sign == 0 or other.sign == 0 do
+        if this.sign == 0 or other.sign == 0 do
             return zero()
         end
-        return make(inst sign * other.sign, multiply_limbs(inst limbs, other.limbs))
+        return make(this.sign * other.sign, multiply_limbs(this.limbs, other.limbs))
     end
 
     # Division truncates toward zero, like `//` on int.
     function operator //(BigInt other) returns BigInt
-        return inst divmod(other)[0]
+        return this.divmod(other)[0]
     end
 
     # The remainder has the sign of the dividend, like `%` on int.
     function operator %(BigInt other) returns BigInt
-        return inst divmod(other)[1]
+        return this.divmod(other)[1]
     end
 
     # Quotient and remainder; raises NumericError for division by zero.
@@ -66,51 +66,51 @@ class BigInt
         if other.sign == 0 do
             throw NumericError("division by zero")
         end
-        var (q, r) = divide_limbs(inst limbs, other.limbs)
-        return [make(inst sign * other.sign, q), make(inst sign, r)]
+        var (q, r) = divide_limbs(this.limbs, other.limbs)
+        return [make(this.sign * other.sign, q), make(this.sign, r)]
     end
 
     function compare(BigInt other) returns int
-        if inst sign != other.sign do
-            if inst sign < other.sign do
+        if this.sign != other.sign do
+            if this.sign < other.sign do
                 return -1
             end
             return 1
         end
-        return compare_limbs(inst limbs, other.limbs) * inst sign
+        return compare_limbs(this.limbs, other.limbs) * this.sign
     end
 
     function operator ==(BigInt other) returns bool
-        return inst compare(other) == 0
+        return this.compare(other) == 0
     end
 
     function operator <(BigInt other) returns bool
-        return inst compare(other) < 0
+        return this.compare(other) < 0
     end
 
     function equals(BigInt other) returns bool
-        return inst compare(other) == 0
+        return this.compare(other) == 0
     end
 
     function hash returns int
-        int h = inst sign + 1
-        for limb in inst limbs do
+        int h = this.sign + 1
+        for limb in this.limbs do
             h = (h * 31 + limb) % 1000000007
         end
         return h
     end
 
     function abs returns BigInt
-        return BigInt(inst sign * inst sign, inst limbs)
+        return BigInt(this.sign * this.sign, this.limbs)
     end
 
     # -1, 0, or 1.
     function signum returns int
-        return inst sign
+        return this.sign
     end
 
     function is_zero returns bool
-        return inst sign == 0
+        return this.sign == 0
     end
 
     # This value raised to a non-negative int power.
@@ -119,7 +119,7 @@ class BigInt
             throw ValueError("BigInt.pow needs a non-negative exponent")
         end
         var result = of(1)
-        var square = BigInt(inst sign, inst limbs)
+        var square = BigInt(this.sign, this.limbs)
         var e = exponent
         while e > 0 do
             if e % 2 == 1 do
@@ -135,40 +135,40 @@ class BigInt
 
     # The value as an int; raises NumericError when it does not fit in 64 bits.
     function to_int returns int
-        if inst compare(parse("9223372036854775807")) > 0 or inst compare(parse("-9223372036854775808")) < 0 do
-            throw NumericError("BigInt " + inst to_string() + " does not fit in int")
+        if this.compare(parse("9223372036854775807")) > 0 or this.compare(parse("-9223372036854775808")) < 0 do
+            throw NumericError("BigInt " + this.to_string() + " does not fit in int")
         end
-        if inst sign < 0 and inst compare(parse("-9223372036854775808")) == 0 do
+        if this.sign < 0 and this.compare(parse("-9223372036854775808")) == 0 do
             return -9223372036854775807 - 1
         end
         int value = 0
-        int i = inst limbs.length - 1
+        int i = this.limbs.length - 1
         while i >= 0 do
-            value = value * BASE + inst limbs[i]
+            value = value * BASE + this.limbs[i]
             i -= 1
         end
-        return value * inst sign
+        return value * this.sign
     end
 
     # Decimal digits, with a leading '-' for negative values.
     function to_string returns string
-        if inst sign == 0 do
+        if this.sign == 0 do
             return "0"
         end
-        var out = string(inst limbs[inst limbs.length - 1])
-        int i = inst limbs.length - 2
+        var out = string(this.limbs[this.limbs.length - 1])
+        int i = this.limbs.length - 2
         while i >= 0 do
-            out += string(inst limbs[i]).pad_start(9, "0")
+            out += string(this.limbs[i]).pad_start(9, "0")
             i -= 1
         end
-        if inst sign < 0 do
+        if this.sign < 0 do
             return "-" + out
         end
         return out
     end
 
     function digits returns int[]
-        return inst limbs.copy()
+        return this.limbs.copy()
     end
 end
 

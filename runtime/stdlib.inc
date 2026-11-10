@@ -780,6 +780,10 @@ void setTimeout(Socket socket, double seconds) {
 } // namespace
 
 extern "C" {
+void fw_register_destructor(const void *id, void (*destroy)(Object *), const char *name) {
+    destructors()[id].push_back({destroy, name});
+    anyDestructors = true;
+}
 void fw_register_class(const char *name, const void *id) {
     std::lock_guard<std::mutex> lock(classRegistryMutex);
     classRegistry[name] = id;

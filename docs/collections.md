@@ -85,10 +85,10 @@ class Point
     int x
     int y
     function hash() returns int
-        return inst x * 31 + inst y
+        return this.x * 31 + this.y
     end
     function equals(Point other) returns bool
-        return inst x == other.x and inst y == other.y
+        return this.x == other.x and this.y == other.y
     end
 end
 map<Point, string> labels = {Point(1, 2): "a"}
@@ -123,11 +123,11 @@ A class becomes iterable by providing `next() returns T?`, or `iterator()` retur
 class Countdown
     int n
     function next() returns int?
-        if inst n == 0 do
+        if this.n == 0 do
             return null
         end
-        inst n -= 1
-        return inst n + 1
+        this.n -= 1
+        return this.n + 1
     end
 end
 for n in Countdown(3) do

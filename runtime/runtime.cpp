@@ -140,6 +140,7 @@ struct Object {
     std::shared_ptr<WeakCell> weakCell, link;
     void *code = nullptr; // Closure entry point; captured values live in slots.
     const void *classId = nullptr; // Instance class identity (compiler-generated name string)
+    bool finalized = false;        // its destructors have run
     Object *parentElement = nullptr; // latest parent of a markup node (not owning)
     // Cycle collector state: membership in the possible-roots list and trial-deletion marks.
     std::atomic<bool> buffered{false};
@@ -459,9 +460,24 @@ DesktopState::~DesktopState() {
     for (auto &[closure, arity] : handlers)
         release(closure);
 }
+// Destructors by class identity, most derived first; registered before the program runs.
+using Destructor = void (*)(Object *);
+std::unordered_map<const void *, std::vector<std::pair<Destructor, const char *>>> &destructors() {
+    static auto *table =
+        new std::unordered_map<const void *, std::vector<std::pair<Destructor, const char *>>>;
+    return *table;
+}
+bool anyDestructors = false;
+void runDestructors(Object *p); // after PendingError
 void release(Object *p) {
     if (!p)
         return;
+    if (anyDestructors && p->kind == Object::Instance && !p->finalized &&
+        p->refs.load(std::memory_order_acquire) == 1 && destructors().count(p->classId)) {
+        // The last reference: run the destructors while the instance is still whole. One that
+        // stores `this` somewhere keeps it alive; it is then freed later without them.
+        runDestructors(p);
+    }
     if (mayFormCycles(p->kind) && !p->buffered.load(std::memory_order_relaxed) &&
         p->refs.load(std::memory_order_relaxed) > 1) {
         // `buffered` changes only under the candidate lock (or with no other threads), so
@@ -511,6 +527,28 @@ struct PendingError {
     }
 };
 thread_local PendingError pendingError;
+std::string thrownText(Object *value, bool *hasMessage); // below
+void runDestructors(Object *p) {
+    p->finalized = true;
+    auto savedType = std::move(pendingError.type);
+    auto savedValue = pendingError.value;
+    pendingError.value = nullptr;
+    pendingError.type.clear();
+    errorPending = false;
+    for (auto &[destroy, name] : destructors().at(p->classId)) {
+        destroy(p);
+        if (pendingError.value) {
+            bool hasMessage = true;
+            auto text = thrownText(pendingError.value, &hasMessage);
+            std::cerr << "Flywheel: error in the destructor of " << name << ": "
+                      << (text.empty() ? pendingError.type : text) << '\n';
+            pendingError.clear();
+        }
+    }
+    pendingError.type = std::move(savedType);
+    pendingError.value = savedValue;
+    errorPending = savedValue != nullptr;
+}
 void recordFailure(const std::string &type, const std::string &message) {
     auto p = new Object(Object::ErrorValue);
     p->text = message;

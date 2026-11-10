@@ -110,6 +110,24 @@ int64_t collectCycles() {
     }
     for (auto p : touched)
         p->gcColor = gcBlack;
+    // Instances with destructors run them first, while the garbage is intact and held. A
+    // destructor may break the cycle or keep objects alive, so this round frees nothing else;
+    // whatever is still garbage is freed by the next collection, without running them again.
+    bool finalizing = false;
+    if (anyDestructors)
+        for (auto p : garbage)
+            if (p->kind == Object::Instance && !p->finalized && destructors().count(p->classId))
+                finalizing = true;
+    if (finalizing) {
+        for (auto p : garbage)
+            retain(p);
+        for (auto p : garbage)
+            if (p->kind == Object::Instance && !p->finalized && destructors().count(p->classId))
+                runDestructors(p);
+        for (auto p : garbage)
+            release(p);
+        return 0;
+    }
     // Break edges inside the garbage without releasing, then free it. Releasing the remaining
     // edges to live objects follows the ordinary path.
     std::unordered_set<Object *> dead(garbage.begin(), garbage.end());
@@ -223,6 +241,38 @@ Object *fw_thread_spawn(Frame *frame, Object *closure, TaskRunner runner) {
         }
         return object;
     });
+}
+// `spawn call` as a statement: nobody joins the task, so the runtime keeps it and joins it when
+// the program ends (fw_thread_wait_all), reporting an error the call raised.
+std::mutex detachedMutex;
+std::vector<Object *> detachedTasks;
+void fw_thread_detach(Object *task) {
+    retain(task);
+    std::lock_guard<std::mutex> lock(detachedMutex);
+    detachedTasks.push_back(task);
+}
+void fw_thread_wait_all() {
+    for (;;) {
+        std::vector<Object *> tasks;
+        {
+            std::lock_guard<std::mutex> lock(detachedMutex);
+            tasks.swap(detachedTasks);
+        }
+        if (tasks.empty())
+            return;
+        for (auto object : tasks) {
+            auto &task = *static_cast<TaskResource *>(object->nativeResource());
+            if (task.worker.joinable())
+                task.worker.join();
+            if (task.error) {
+                bool hasMessage = true;
+                auto text = thrownText(task.error, &hasMessage);
+                std::cerr << "Flywheel runtime error in a spawned task: " << shownErrorType(task.errorType)
+                          << ": " << (text.empty() ? "exception" : text) << '\n';
+            }
+            release(object);
+        }
+    }
 }
 // Waits for the task and returns its result box, or re-raises the task's error.
 Object *fw_thread_join(Frame *frame, Object *taskObject) {

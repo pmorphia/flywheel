@@ -672,7 +672,8 @@ int main(int argc, char **argv) {
         "       flywheel repl | lsp | selftest\n"
         "       flywheel help|h|--help | version|v|--version\n"
         "\n"
-        "SOURCE is a .fw/.fly path or a URL (https, http, ftp, ftps, sftp, ssh, scp, file).\n"
+        "SOURCE is a .fw/.fly path or a URL (https, http, ftp, ftps, sftp, ssh, scp, file);\n"
+        "`flywheel SOURCE [arguments]` (or `fw SOURCE`) runs it.\n"
         "Use -s CODE (--source CODE) instead of SOURCE to run code from the command line.\n"
         "\n"
         "Options:\n"
@@ -695,6 +696,38 @@ int main(int argc, char **argv) {
     std::string command = argv[1];
     if (auto alias = aliases.find(command); alias != aliases.end())
         command = alias->second;
+    // `flywheel SOURCE [arguments]` runs SOURCE and passes every later argument to the program;
+    // `flywheel -s CODE` is `flywheel run -s CODE`.
+    static const std::set<std::string> commands = {
+        "run",  "build",  "check", "desktop", "serve", "export", "debug", "test", "format",
+        "doc",  "update", "help",  "version", "repl",  "lsp",    "selftest", "new", "get",
+        "add",  "install"};
+    std::vector<std::string> implicitArgs;
+    std::vector<char *> implicitArgv;
+    if (!commands.count(command) &&
+        (command == "-s" || command == "--source" || command.rfind("-", 0) != 0 ||
+         command == "-")) {
+        implicitArgs.push_back(argv[0]);
+        implicitArgs.push_back("run");
+        implicitArgs.push_back(argv[1]);
+        if (command == "-s" || command == "--source") {
+            for (int i = 2; i < argc; ++i)
+                implicitArgs.push_back(argv[i]);
+        } else {
+            int i = 2;
+            if (i < argc && std::string(argv[i]) == "--")
+                ++i;
+            implicitArgs.push_back("--");
+            for (; i < argc; ++i)
+                implicitArgs.push_back(argv[i]);
+        }
+        for (auto &arg : implicitArgs)
+            implicitArgv.push_back(arg.data());
+        implicitArgv.push_back(nullptr);
+        argc = static_cast<int>(implicitArgs.size());
+        argv = implicitArgv.data();
+        command = "run";
+    }
     if (command == "version" && argc == 2) {
         std::cout << "Flywheel " FW_VERSION ", LLVM " LLVM_VERSION_STRING "\n";
         return 0;

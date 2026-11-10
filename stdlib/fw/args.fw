@@ -36,28 +36,28 @@ class Parsed
     map<string, string[]> lists = {}
 
     function flag(string name) returns bool
-        if name in inst flags do
-            return inst flags[name]
+        if name in this.flags do
+            return this.flags[name]
         end
         return false
     end
 
     # An option or single positional value ("" when absent without a default).
     function get(string name) returns string
-        if name in inst values do
-            return inst values[name]
+        if name in this.values do
+            return this.values[name]
         end
         return ""
     end
 
     # true when the option or positional was given on the command line or has a default.
     function has(string name) returns bool
-        return name in inst values or name in inst lists
+        return name in this.values or name in this.lists
     end
 
     # An option or positional as an int; raises ValueError for non-numeric text.
     function integer(string name) returns int
-        var text = inst get(name)
+        var text = this.get(name)
         try
             return int(text)
         catch CastError e
@@ -66,7 +66,7 @@ class Parsed
     end
 
     function number(string name) returns double
-        var text = inst get(name)
+        var text = this.get(name)
         try
             return double(text)
         catch CastError e
@@ -76,8 +76,8 @@ class Parsed
 
     # The values of a positional that accepts several (and of repeated options).
     function list(string name) returns string[]
-        if name in inst lists do
-            return inst lists[name]
+        if name in this.lists do
+            return this.lists[name]
         end
         return []
     end
@@ -91,26 +91,26 @@ class Parser
 
     # A boolean switch: --name or -s.
     function flag(string name, string short, string help)
-        inst options.push(Spec(name, short, help, false, "", false, false))
+        this.options.push(Spec(name, short, help, false, "", false, false))
     end
 
     # An option with a value: --name value, --name=value, or -s value. Use "" for no short
     # name and no default. Repeating an option keeps every value (see Parsed.list).
     function option(string name, string short, string help, string default_value = "")
-        inst options.push(Spec(name, short, help, true, default_value, false, false))
+        this.options.push(Spec(name, short, help, true, default_value, false, false))
     end
 
     # A positional argument; `many` collects all remaining positionals (it must come last).
     function positional(string name, string help, bool many = false, bool required = true)
-        inst positionals.push(Spec(name, "", help, true, "", required, many))
+        this.positionals.push(Spec(name, "", help, true, "", required, many))
     end
 
     function usage returns string
-        var line = "usage: " + inst program
-        if inst options.length > 0 do
+        var line = "usage: " + this.program
+        if this.options.length > 0 do
             line += " [options]"
         end
-        for p in inst positionals do
+        for p in this.positionals do
             var shown = p.name
             if p.many do
                 shown += "..."
@@ -126,19 +126,19 @@ class Parser
 
     # Usage, description, and a line per option and positional.
     function help returns string
-        var out = inst usage() + "\n"
-        if inst description != "" do
-            out += "\n" + inst description + "\n"
+        var out = this.usage() + "\n"
+        if this.description != "" do
+            out += "\n" + this.description + "\n"
         end
-        if inst positionals.length > 0 do
+        if this.positionals.length > 0 do
             out += "\narguments:\n"
-            for p in inst positionals do
+            for p in this.positionals do
                 out += "  " + p.name.pad_end(22) + p.help + "\n"
             end
         end
         out += "\noptions:\n"
         out += "  " + "-h, --help".pad_end(22) + "show this help and exit\n"
-        for o in inst options do
+        for o in this.options do
             var names = "    --" + o.name
             if o.short != "" do
                 names = "-" + o.short + ", --" + o.name
@@ -156,7 +156,7 @@ class Parser
     end
 
     function find(string name, bool short) returns Spec?
-        for o in inst options do
+        for o in this.options do
             if (short and o.short == name) or (not short and o.name == name) do
                 return o
             end
@@ -168,7 +168,7 @@ class Parser
     # Usage message is "help".
     function parse_or_throw(string[] arguments) returns Parsed
         var parsed = Parsed()
-        for o in inst options do
+        for o in this.options do
             if o.takes_value and o.default_value != "" do
                 parsed.values[o.name] = o.default_value
             end
@@ -198,7 +198,7 @@ class Parser
                 if equals >= 0 do
                     name = body.slice(0, equals)
                 end
-                var spec = inst find(name, false)
+                var spec = this.find(name, false)
                 if spec == null do
                     throw Usage("unknown option --" + name)
                 end
@@ -219,7 +219,7 @@ class Parser
                     value = arguments[i]
                     i += 1
                 end
-                inst store(parsed, name, value, given)
+                this.store(parsed, name, value, given)
                 continue
             end
             # Short options: -v, -vq (several flags), -o value, -ovalue.
@@ -227,7 +227,7 @@ class Parser
             int k = 0
             while k < letters.length do
                 var letter = string(letters[k])
-                var spec = inst find(letter, true)
+                var spec = this.find(letter, true)
                 if spec == null do
                     throw Usage("unknown option -" + letter)
                 end
@@ -244,12 +244,12 @@ class Parser
                     rest = arguments[i]
                     i += 1
                 end
-                inst store(parsed, spec.name, rest, given)
+                this.store(parsed, spec.name, rest, given)
                 k = letters.length
             end
         end
         int next = 0
-        for p in inst positionals do
+        for p in this.positionals do
             if p.many do
                 string[] rest = []
                 while next < loose.length do
@@ -287,13 +287,13 @@ class Parser
     # to standard error and exits 2 for an invalid command line.
     function parse(string[] arguments) returns Parsed
         try
-            return inst parse_or_throw(arguments)
+            return this.parse_or_throw(arguments)
         catch Usage problem
             if problem.message == "help" do
-                io.write(inst help())
+                io.write(this.help())
                 os.exit(0)
             end
-            io.write_error(inst program + ": " + problem.message + "\n" + inst usage() + "\n")
+            io.write_error(this.program + ": " + problem.message + "\n" + this.usage() + "\n")
             os.exit(2)
         end
         return Parsed()

@@ -2,7 +2,7 @@
 
 ## Classes and constructors
 
-A class declares fields and methods. Inside a method, `inst` names the receiver: `inst name` reads a field, `inst name = value` assigns it, and `inst method(...)` calls another method (with dynamic dispatch, see below).
+A class declares fields and methods. Inside a method, `this` is the receiver: `this.name` reads a field, `this.name = value` assigns it, and `this.method(...)` calls another method (with dynamic dispatch, see below). `this` alone is the instance itself, as in `registry.push(this)`.
 
 ```flywheel
 class Person
@@ -10,7 +10,7 @@ class Person
     int age = 0
 
     function greet() returns string
-        return "Hello, {inst name}!"
+        return "Hello, {this.name}!"
     end
 end
 
@@ -20,7 +20,7 @@ var bo = Person "Bo"          # outer call without parentheses; age uses its def
 
 A bare class name is a **class reference**, not an instance: `var Make = Person` stores the class, and `Make("Cy")` or `Make "Cy"` constructs. Construction always needs a call: `Person()`, `Person(args)`, or the outer form `Person args`. The same rule applies to native classes such as `desktop.window`. A class-reference statement on its own line (`Person`) is rejected because it does nothing.
 
-Class references convert to function types. A constructor's natural type takes the `init` parameters, or every field in order; trailing parameters with defaults may be left out of the target type:
+Class references convert to function types. A constructor's natural type takes the `constructor` parameters, or every field in order; trailing parameters with defaults may be left out of the target type:
 
 ```flywheel
 function(string) returns Person make = Person   # age has a default
@@ -28,37 +28,59 @@ var makers = [Person, Person]                    # array<function(string, int) r
 print makers[0]("Dee", 4)
 ```
 
-### Custom `init`
+### Constructors
 
-Defining `function init(...)` replaces the generated constructor. Fields with defaults are set before `init` runs; `init` must then assign every field without a default.
+Declaring a `constructor` replaces the generated constructor. Fields with defaults are set before it runs; it must then assign every field without a default. The parameter list is typed as for functions, and its parentheses are optional: `constructor`, `constructor()`, `constructor(int x, int y)`, and `constructor int x, int y` are all valid. `constructor` (like `destructor`) is a soft keyword, recognized only at the start of a class member.
 
 ```flywheel
 class Temperature
     double celsius
     string label = "temperature"
 
-    function init(double fahrenheit)
-        inst celsius = (fahrenheit - 32.0) * 5.0 / 9.0
+    constructor(double fahrenheit)
+        this.celsius = (fahrenheit - 32.0) * 5.0 / 9.0
     end
 end
 print Temperature(212.0).celsius   # 100
 ```
 
-Definite initialization is checked conservatively at compile time. Required fields must be assigned by **top-level** statements of `init` (or by a top-level `super.init(...)`, which covers the base class's fields) before `init` reads `inst`, calls a method, or can return. Violations are compile errors such as `init must assign required field 'x'` or `init uses 'inst' before assigning required field 'x'`. `init` cannot return a value. `Class.from_json` builds instances field by field and does not run `init`.
+Definite initialization is checked conservatively at compile time. Required fields must be assigned by **top-level** statements of the constructor (or by a top-level `super.constructor(...)`, which covers the base class's fields) before it reads `this`, calls a method, or can return. Violations are compile errors such as `the constructor must assign required field 'x'` or `the constructor uses 'this' before assigning required field 'x'`. A constructor cannot return a value. `Class.from_json` builds instances field by field and does not run the constructor.
+
+`function init` and `inst name` are older spellings that are now compile errors pointing at `constructor` and `this.name`.
+
+### Destructors
+
+A `destructor` runs when an instance is freed: when its last reference goes away, or when the cycle collector frees it. A class's own destructor runs first, then those of its base classes along the [linearization](#multiple-inheritance). An error raised in a destructor is reported on standard error and does not stop the program. Instances still alive when the program ends (such as those held by module globals) are destroyed as it exits.
+
+```flywheel
+class Connection
+    string host
+    destructor
+        print "closing {this.host}"
+    end
+end
+function ping()
+    var c = Connection("db")
+    print "ping {c.host}"
+end
+ping()           # ping db, then closing db
+```
+
+Destructors suit releasing outside resources; for cleanup at the end of a block, `defer` is more direct. A destructor takes no parameters and has no access modifier. In [Flywheel Lite](../lite/README.md) and flywheel.js destructors run when the collector frees an instance or at exit, not as soon as the last reference drops.
 
 ### Member visibility and readonly fields
 
-Fields and methods are public by default. A `private` member is visible only in the methods of its own class (not in subclasses or other code). A `readonly` field can be set by the generated constructor and by assignments in `init` of its own class; any other assignment is a compile error.
+Fields and methods are `public` by default. A `private` member is visible only in the methods of its own class (not in subclasses or other code), and a `protected` member also in the methods of its subclasses. A `readonly` field can be set by the generated constructor and by assignments in the constructor of its own class; any other assignment is a compile error. `public`, `private`, `protected`, `static`, and `readonly` are soft keywords: they modify a declaration that follows on the same line and are ordinary names elsewhere.
 
 ```flywheel
 class Account
     readonly string id
     private int balance = 0
     function deposit(int amount)
-        inst balance += amount
+        this.balance += amount
     end
     function total returns int
-        return inst balance
+        return this.balance
     end
 end
 var a = Account("acct-1")
@@ -67,6 +89,29 @@ print a.id, a.total()    # a.balance and a.id = "x" do not compile
 ```
 
 `readonly` makes the field's binding immutable; a collection stored in it can still change unless it is [frozen](collections.md#frozen-collections).
+
+### Static members
+
+A `static` field belongs to the class rather than to its instances, and a `static` method has no receiver. Both are reached through the class: `Counter.made`, `Counter.create()`. A static field needs an initial value, which is computed where the class is declared; `static const` (or `static readonly`) makes it constant. Static members take access modifiers, and a static method may use the private members of its class.
+
+```flywheel
+class Counter
+    static int made = 0
+    private int count = 0
+    constructor
+        Counter.made += 1
+    end
+    static function starting_at(int n) returns Counter
+        var c = Counter()
+        c.count = n              # allowed: a static method of Counter
+        return c
+    end
+end
+Counter.starting_at(5)
+print Counter.made               # 1
+```
+
+Statics of an imported module's class are reached the same way (`shapes.Circle.count`). `this` is not available in a static method.
 
 ### Operators and text
 
@@ -84,13 +129,13 @@ A class can define operators as methods named `operator` followed by the symbol:
 class Money
     readonly int cents
     function operator +(Money other) returns Money
-        return Money(inst cents + other.cents)
+        return Money(this.cents + other.cents)
     end
     function operator <(Money other) returns bool
-        return inst cents < other.cents
+        return this.cents < other.cents
     end
     function to_string returns string
-        return "${inst cents // 100}.{inst cents % 100:02}"
+        return "${this.cents // 100}.{this.cents % 100:02}"
     end
 end
 print Money(150) + Money(275)    # $4.25
@@ -100,7 +145,7 @@ The left operand selects the method, so `money * 2` works with `operator *(int k
 
 ## Inheritance
 
-`class Dog extends Animal` inherits fields and methods. The base class's fields come first in the subclass's field order (and its generated constructor). A subclass may override a method with exactly the same parameter and return types; a different signature is a compile error. `super.method(...)` calls the base class's implementation.
+`class Dog extends Animal` inherits fields and methods. The base class's fields come first in the subclass's field order (and its generated constructor). A subclass may override a method with exactly the same parameter and return types; a different signature is a compile error. `super.method(...)` calls the base class's implementation, `super.constructor(...)` runs the base class's constructor (or assigns its fields in order when it has none), and `super.field` reads an inherited field.
 
 ```flywheel
 class Animal
@@ -109,7 +154,7 @@ class Animal
         return "..."
     end
     function introduce() returns string
-        return "{inst name} says {inst speak()}"
+        return "{this.name} says {this.speak()}"
     end
 end
 class Dog extends Animal
@@ -123,7 +168,40 @@ print pet.introduce()   # Rex says Woof
 
 Method calls dispatch on the receiver's runtime class whenever subclasses or implementations differ; when every possible class uses the same method the call is direct. Because the whole program is compiled together, the set of possible classes is known statically. A subclass value converts implicitly to its base class or interface (including nullable forms). Redeclaring an inherited field is an error, and inheritance cycles are rejected.
 
-If a base class defines `init` and the subclass does not, the subclass inherits it only when it adds no required fields.
+If a base class defines a constructor and the subclass does not, the subclass inherits it only when every field the inherited constructor does not set has a default.
+
+### Multiple inheritance
+
+A class may extend several classes: `class Person extends Named, Aged`. Its fields are those of each base in order, then its own; a field reached along two paths (from a shared ancestor) appears once, while two different fields of the same name are a compile error. A `Person` is both a `Named` and an `Aged`, converts to either, and `is` tests either.
+
+Methods resolve along the class's **linearization** (C3, as in Python): the class first, then its bases so that every class comes before its own bases and the declared order of bases is kept. With `class C extends A, B`, a method of `A` wins over one of `B`, and an order with no consistent linearization (`class C extends A, B` where `B` extends `A`) is rejected. `super.method(...)` calls the next implementation after the current class in that order; `super.Base.method(...)` names the base explicitly, and `super.Base.constructor(...)` runs a particular base's constructor.
+
+```flywheel
+class Named
+    string name
+    function describe() returns string
+        return "named " + this.name
+    end
+end
+class Aged
+    int age = 0
+    function describe() returns string
+        return "aged {this.age}"
+    end
+end
+class Person extends Named, Aged
+    constructor(string name, int age)
+        super.Named.constructor(name)
+        this.age = age
+    end
+    function describe() returns string
+        return super.describe() + ", " + super.Aged.describe()
+    end
+end
+print Person("Ann", 30).describe()   # named Ann, aged 30
+```
+
+Fields keep their slot when no class in the program uses multiple inheritance; otherwise reading a field through a base type that other bases precede chooses its slot from the runtime class.
 
 ## Interfaces
 
@@ -136,7 +214,7 @@ end
 class Square implements Shape
     double side
     function area() returns double
-        return inst side * inst side
+        return this.side * this.side
     end
 end
 Shape[] shapes = [Square(2.0)]
@@ -261,7 +339,7 @@ Classes and top-level functions can declare type parameters:
 class Box<T>
     T value
     function map_to_string(function(T) returns string f) returns string
-        return f(inst value)
+        return f(this.value)
     end
 end
 function first<T>(T[] items) returns T
@@ -302,7 +380,7 @@ Methods can declare their own type parameters, inferred from the arguments like 
 class Box<T>
     T value
     function map<U>(function(T) returns U f) returns Box<U>
-        return Box<U>(f(inst value))
+        return Box<U>(f(this.value))
     end
 end
 print Box(4).map(function(int x) => "n{x}").value   # n4

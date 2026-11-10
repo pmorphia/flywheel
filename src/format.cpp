@@ -120,8 +120,19 @@ std::string format(const std::string &source) {
         size_t first = 0;
         while (first + 1 < line.size() &&
                (line[first]->text == "public" || line[first]->text == "private" ||
+                line[first]->text == "protected" || line[first]->text == "static" ||
                 line[first]->text == "readonly"))
             ++first;
+        // Decorators come before `function name` or `class name` on the line.
+        for (size_t i = first + 1; i + 1 < line.size(); ++i)
+            if ((line[i]->text == "function" || line[i]->text == "class") && line[i]->kind == "id" &&
+                line[i + 1]->kind == "id" && line[i]->depth == line[first]->depth &&
+                line[first]->kind == "id" && line[first]->text != "function" &&
+                line[first]->text != "class" && line[first]->text != "return" &&
+                line[first]->text != "var" && line[first]->text != "const") {
+                first = i;
+                break;
+            }
         auto &keyword = line[first]->text;
         bool isKeyword = line[first]->kind == "id";
         // `if/while/for/when ... run call` and `else run call` hold their one call on the line
@@ -184,6 +195,10 @@ std::string format(const std::string &source) {
             stack.push_back({"block", depth});
         else if (keyword == "interface")
             stack.push_back({"interface", depth});
+        else if ((keyword == "constructor" || keyword == "destructor") &&
+                 (first + 1 == line.size() || line[first + 1]->text == "(" ||
+                  line[first + 1]->kind == "id"))
+            stack.push_back({"block", depth});
         else if (keyword == "function" && first + 1 < line.size() && line[first + 1]->kind == "id" &&
                  (stack.empty() || stack.back().kind != "interface"))
             stack.push_back({"block", depth});

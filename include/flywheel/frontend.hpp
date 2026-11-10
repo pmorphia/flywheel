@@ -54,6 +54,7 @@ struct Param {
     EP value;
     Location loc;
     bool isPrivate = false, readonly = false; // class fields only
+    bool isProtected = false; // class fields only: visible in the class and its subclasses
 };
 // Function and Class declare noexcept moves because MSVC's std::map move constructor is not
 // noexcept. Without these, std::vector<Function> would copy on reallocation, and copying fails
@@ -68,6 +69,10 @@ struct Function {
     std::vector<SP> body;
     bool abstract = false; // interface method signature without a body
     bool isPrivate = false; // methods only
+    bool isProtected = false; // methods only: visible in the class and its subclasses
+    // A static method (`static function make()`) is a top-level function with no receiver;
+    // staticOf names its class, whose private and protected members it may use.
+    std::string staticOf;
     std::vector<std::string> typeParams;
     // Constraints on type parameters (`T implements Comparable`), by parameter name.
     std::map<std::string, std::string> typeBounds;
@@ -79,7 +84,10 @@ struct Class {
     Class() = default;
     Class(Class &&) noexcept = default;
     Class &operator=(Class &&) noexcept = default;
-    std::string name, base;
+    std::string name;
+    // Base classes in declaration order (`class C extends A, B`). Fields are inherited in this
+    // order, each shared ancestor once; methods resolve along the linearization (see mro).
+    std::vector<std::string> bases;
     Location loc;
     std::vector<Param> fields;
     std::vector<Function> methods;
@@ -182,6 +190,10 @@ struct Program {
     std::set<std::string> wildcards, privateNames;
     std::vector<UnitNamespace> unitNamespaces;
     std::vector<UnitConversion> unitConversions; // consumed by lowerUnits
+    // Static members (`static int count`, `static function make()`) become a module global or
+    // top-level function with a hidden name, Class$member; `Class.member` resolves to it. Maps
+    // the hidden name to its class and access ("", "private", or "protected").
+    std::map<std::string, std::pair<std::string, std::string>> statics;
 };
 class Parser {
     std::vector<Token> tokens;
@@ -215,8 +227,15 @@ class Parser {
     std::vector<SP> runBody(); // the call after `run`, with no `end`
     void runElse(Stmt &s);     // `else run call` / `else if condition run call` after a run body
     std::vector<SP> pending; // extra statements produced by the last statement (destructuring)
+    bool noTernary = false;  // case patterns: `if` starts the guard, not `x if c else y`
+    bool modifierAhead();    // public/private/protected/static (soft keywords) start a declaration
+    std::vector<EP> decorators(); // `memoize function f` / `register class C`: the decorators
+    EP spawn();              // `spawn call`: the call on a new thread (a thread.task)
     int temporaries = 0;
-    Function function(const std::string &owner = "", bool signatureOnly = false);
+    // `function name(...)`; in a class also `constructor(...)` and `destructor`, which `keyword`
+    // names when the caller has seen it.
+    Function function(const std::string &owner = "", bool signatureOnly = false,
+                      const std::string &keyword = "");
     EP lambda();
 
   public:

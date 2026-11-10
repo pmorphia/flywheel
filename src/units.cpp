@@ -347,98 +347,98 @@ std::string generate(Program &p, const std::vector<UnitNamespace> &imported, boo
             bool isInt = kind == 0;
             auto C = isInt ? ns.intClass : ns.realClass;
             auto T = isInt ? "int" : "double";
-            auto self = "inst __fwu_unit";
+            auto self = "this.__fwu_unit";
             out << "class " << C << "\n"
                 << "    readonly " << T << " value\n"
                 << "    readonly int __fwu_unit\n"
                 << "    function to_string returns string\n"
-                << "        return \"{inst value}\" + " << table("names") << "[" << self << "]\n"
+                << "        return \"{this.value}\" + " << table("names") << "[" << self << "]\n"
                 << "    end\n"
                 << "    function operator -() returns " << C << "\n"
-                << "        return " << C << "(-inst value, " << self << ")\n"
+                << "        return " << C << "(-this.value, " << self << ")\n"
                 << "    end\n"
                 << "    function __fwu_unit_name() returns string\n"
                 << "        return " << table("names") << "[" << self << "]\n"
                 << "    end\n"
                 // The value in unit j, in floating point.
                 << "    function __fwu_real(int j) returns double\n"
-                << "        return " << (isInt ? "double(inst value)" : "inst value") << " * "
+                << "        return " << (isInt ? "double(this.value)" : "this.value") << " * "
                 << table("num") << at(self, "j") << " / " << table("den") << at(self, "j") << "\n"
                 << "    end\n"
                 << "    function __fwu_base() returns double\n"
-                << "        return " << (isInt ? "double(inst value)" : "inst value") << " * "
+                << "        return " << (isInt ? "double(this.value)" : "this.value") << " * "
                 << table("factor") << "[" << self << "]\n"
                 << "    end\n";
             if (isInt) {
                 out << "    function __fwu_exact(int j) returns int\n"
                     << "        if " << self << " == j do\n"
-                    << "            return inst value\n"
+                    << "            return this.value\n"
                     << "        end\n"
                     << "        var m = " << table("mul") << at(self, "j") << "\n"
                     << "        if m == 0 do\n"
-                    << "            throw ValueError(\"{inst value}\" + " << table("names") << "["
+                    << "            throw ValueError(\"{this.value}\" + " << table("names") << "["
                     << self << "] + \" is not a whole number of \" + " << table("names")
                     << "[j] + \"; use float[" << ns.name << "]\")\n"
                     << "        end\n"
-                    << "        return inst value * m\n"
+                    << "        return this.value * m\n"
                     << "    end\n";
                 for (auto [name, op] : {std::pair{"add", "+"}, std::pair{"sub", "-"}})
                     out << "    function __fwu_" << name << "(" << C << " o) returns " << C << "\n"
                         << "        var j = " << table("finer") << at(self, "o.__fwu_unit") << "\n"
-                        << "        return " << C << "(inst __fwu_exact(j) " << op
+                        << "        return " << C << "(this.__fwu_exact(j) " << op
                         << " o.__fwu_exact(j), j)\n"
                         << "    end\n";
                 out << "    function __fwu_cmp(" << C << " o) returns int\n"
                     << "        var j = " << table("finer") << at(self, "o.__fwu_unit") << "\n"
                     << "        if " << table("mul") << at(self, "j") << " != 0 and "
                     << table("mul") << at("o.__fwu_unit", "j") << " != 0 do\n"
-                    << "            var a = inst __fwu_exact(j)\n"
+                    << "            var a = this.__fwu_exact(j)\n"
                     << "            var b = o.__fwu_exact(j)\n"
                     << "            if a < b do\n                return -1\n            end\n"
                     << "            if a > b do\n                return 1\n            end\n"
                     << "            return 0\n"
                     << "        end\n"
-                    << "        var x = inst __fwu_real(j)\n"
+                    << "        var x = this.__fwu_real(j)\n"
                     << "        var y = o.__fwu_real(j)\n"
                     << "        if x < y do\n            return -1\n        end\n"
                     << "        if x > y do\n            return 1\n        end\n"
                     << "        return 0\n"
                     << "    end\n"
                     << "    function __fwu_scale(int k) returns " << C << "\n"
-                    << "        return " << C << "(inst value * k, " << self << ")\n"
+                    << "        return " << C << "(this.value * k, " << self << ")\n"
                     << "    end\n"
                     << "    function __fwu_floordiv(int k) returns " << C << "\n"
-                    << "        return " << C << "(inst value // k, " << self << ")\n"
+                    << "        return " << C << "(this.value // k, " << self << ")\n"
                     << "    end\n";
                 out << "    function __fwu_float() returns " << ns.realClass << "\n"
-                    << "        return " << ns.realClass << "(double(inst value), " << self << ")\n"
+                    << "        return " << ns.realClass << "(double(this.value), " << self << ")\n"
                     << "    end\n"
                     << "    function __fwu_to(int j) returns " << ns.realClass << "\n"
-                    << "        return " << ns.realClass << "(inst __fwu_real(j), j)\n"
+                    << "        return " << ns.realClass << "(this.__fwu_real(j), j)\n"
                     << "    end\n";
             } else {
                 for (auto [name, op] : {std::pair{"add", "+"}, std::pair{"sub", "-"}})
                     out << "    function __fwu_" << name << "(" << C << " o) returns " << C << "\n"
                         << "        var j = " << table("finer") << at(self, "o.__fwu_unit") << "\n"
-                        << "        return " << C << "(inst __fwu_real(j) " << op
+                        << "        return " << C << "(this.__fwu_real(j) " << op
                         << " o.__fwu_real(j), j)\n"
                         << "    end\n";
                 out << "    function __fwu_cmp(" << C << " o) returns int\n"
                     << "        var j = " << table("finer") << at(self, "o.__fwu_unit") << "\n"
-                    << "        var x = inst __fwu_real(j)\n"
+                    << "        var x = this.__fwu_real(j)\n"
                     << "        var y = o.__fwu_real(j)\n"
                     << "        if x < y do\n            return -1\n        end\n"
                     << "        if x > y do\n            return 1\n        end\n"
                     << "        return 0\n"
                     << "    end\n"
                     << "    function __fwu_scale(double k) returns " << C << "\n"
-                    << "        return " << C << "(inst value * k, " << self << ")\n"
+                    << "        return " << C << "(this.value * k, " << self << ")\n"
                     << "    end\n"
                     << "    function __fwu_divide(double k) returns " << C << "\n"
-                    << "        return " << C << "(inst value / k, " << self << ")\n"
+                    << "        return " << C << "(this.value / k, " << self << ")\n"
                     << "    end\n"
                     << "    function __fwu_to(int j) returns " << C << "\n"
-                    << "        return " << C << "(inst __fwu_real(j), j)\n"
+                    << "        return " << C << "(this.__fwu_real(j), j)\n"
                     << "    end\n";
                 // Equivalences: this value in another namespace's unit (o's), and o in this one's.
                 for (auto &e : equivalences) {
@@ -448,12 +448,12 @@ std::string generate(Program &p, const std::vector<UnitNamespace> &imported, boo
                     auto BF = e.other->ref + "__fwu_" + e.other->name + "__factor";
                     auto key = unitKey(*e.other);
                     out << "    function __fwu_as__" << key << "(" << B << " o) returns " << B << "\n"
-                        << "        return " << B << "(inst __fwu_base() * " << real(e.k) << " / "
+                        << "        return " << B << "(this.__fwu_base() * " << real(e.k) << " / "
                         << BF << "[o.__fwu_unit], o.__fwu_unit)\n"
                         << "    end\n"
                         << "    function __fwu_from__" << key << "(" << B << " o) returns " << C << "\n"
                         << "        return " << C << "(o.__fwu_base() / " << real(e.k) << " / "
-                        << table("factor") << "[inst __fwu_unit], inst __fwu_unit)\n"
+                        << table("factor") << "[this.__fwu_unit], this.__fwu_unit)\n"
                         << "    end\n";
                 }
                 for (auto &r : relations) {
@@ -464,7 +464,7 @@ std::string generate(Program &p, const std::vector<UnitNamespace> &imported, boo
                     out << "    function __fwu_" << (r.op == "*" ? "mul" : "div") << "__"
                         << other.name << "(" << other.realClass << " o) returns "
                         << result.realClass << "\n"
-                        << "        return " << result.realClass << "(inst __fwu_base() "
+                        << "        return " << result.realClass << "(this.__fwu_base() "
                         << r.op << " o.__fwu_base() * " << real(r.k) << " / __fwu_" << result.name
                         << "__factor[" << r.resultUnit << "], " << r.resultUnit << ")\n"
                         << "    end\n";
@@ -472,14 +472,14 @@ std::string generate(Program &p, const std::vector<UnitNamespace> &imported, boo
             }
             out << "    function __fwu_ratio(" << C << " o) returns double\n"
                 << "        var j = " << table("finer") << at(self, "o.__fwu_unit") << "\n"
-                << "        return inst __fwu_real(j) / o.__fwu_real(j)\n"
+                << "        return this.__fwu_real(j) / o.__fwu_real(j)\n"
                 << "    end\n"
                 << "    function equals(" << C << " o) returns bool\n"
-                << "        return inst __fwu_cmp(o) == 0\n"
+                << "        return this.__fwu_cmp(o) == 0\n"
                 << "    end\n"
                 // Equal quantities hash alike: the base value, normalized to 12 digits.
                 << "    function hash() returns int\n"
-                << "        var h = inst __fwu_base()\n"
+                << "        var h = this.__fwu_base()\n"
                 << "        if h < 0.0 do\n            h = -h\n        end\n"
                 << "        if h == 0.0 or h != h or h > 1e300 do\n            return 0\n"
                 << "        end\n"

@@ -14,18 +14,18 @@ class Url
 
     # The decoded query parameters; a repeated name keeps its last value.
     function params returns map<string, string>
-        return parse_query(inst query)
+        return parse_query(this.query)
     end
 
     # The port, or the scheme's default (80 for http, 443 for https, 0 if unknown).
     function effective_port returns int
-        if inst port != 0 do
-            return inst port
+        if this.port != 0 do
+            return this.port
         end
-        if inst scheme == "https" or inst scheme == "wss" do
+        if this.scheme == "https" or this.scheme == "wss" do
             return 443
         end
-        if inst scheme == "http" or inst scheme == "ws" do
+        if this.scheme == "http" or this.scheme == "ws" do
             return 80
         end
         return 0
@@ -34,29 +34,29 @@ class Url
     # The URL as text.
     function to_string returns string
         var out = ""
-        if inst scheme != "" do
-            out = inst scheme + ":"
+        if this.scheme != "" do
+            out = this.scheme + ":"
         end
-        if inst host != "" or inst scheme == "file" do
+        if this.host != "" or this.scheme == "file" do
             out += "//"
-            if inst user != "" do
-                out += inst user + "@"
+            if this.user != "" do
+                out += this.user + "@"
             end
-            if inst host.contains(":") do
-                out += "[" + inst host + "]"
+            if this.host.contains(":") do
+                out += "[" + this.host + "]"
             else do
-                out += inst host
+                out += this.host
             end
-            if inst port != 0 do
-                out += ":" + string(inst port)
+            if this.port != 0 do
+                out += ":" + string(this.port)
             end
         end
-        out += inst path
-        if inst query != "" do
-            out += "?" + inst query
+        out += this.path
+        if this.query != "" do
+            out += "?" + this.query
         end
-        if inst fragment != "" do
-            out += "#" + inst fragment
+        if this.fragment != "" do
+            out += "#" + this.fragment
         end
         return out
     end

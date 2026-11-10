@@ -7,7 +7,7 @@ end
 class Circle implements Shape
     double radius
     function area() returns double
-        return 3.14159 * inst radius * inst radius
+        return 3.14159 * this.radius * this.radius
     end
     function name() returns string
         return "circle"
@@ -18,7 +18,7 @@ class Rectangle implements Shape
     double width
     double height
     function area() returns double
-        return inst width * inst height
+        return this.width * this.height
     end
     function name() returns string
         return "rectangle"
@@ -26,8 +26,8 @@ class Rectangle implements Shape
 end
 
 class Square extends Rectangle
-    function init(double side)
-        super.init(side, side)
+    constructor(double side)
+        super.constructor(side, side)
     end
     function name() returns string
         return "square"
@@ -51,17 +51,17 @@ end
 
 class Stack<T>
     T[] items
-    function init()
-        inst items = []
+    constructor()
+        this.items = []
     end
     function push(T item)
-        inst items.push(item)
+        this.items.push(item)
     end
     function pop() returns T?
-        if inst items.length == 0 do
+        if this.items.length == 0 do
             return null
         end
-        return inst items.pop()
+        return this.items.pop()
     end
 end
 

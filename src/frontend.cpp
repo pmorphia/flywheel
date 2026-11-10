@@ -635,8 +635,8 @@ Token Parser::identifier() {
         "import",  "as",      "var",  "const", "class",    "function", "component",
         "returns", "return",  "if",   "else",     "while",    "do",
         "for",     "in",      "end",  "break", "continue", "try",      "catch",
-        "finally", "throw",   "inst", "attr",  "true",     "false",    "null",
-        "public",  "private", "void", "weak",  "and",      "or",       "not",
+        "finally", "throw",   "this", "attr",  "true",     "false",    "null",
+        "void", "weak",  "and",      "or",       "not",
         "enum",    "interface", "extends", "implements", "match", "case", "super", "is", "which",
         "elements", "defer"};
     if (t.kind != "id" || reserved.count(t.text))
@@ -772,7 +772,7 @@ bool Parser::aliasDeclaration() {
     return true;
 }
 bool Parser::typedDeclaration() {
-    if (peek().text == "inst" || peek().text == "attr" || peek().text == "super")
+    if (peek().text == "this" || peek().text == "attr" || peek().text == "super")
         return false;
     size_t i = pos;
     try {
@@ -1129,10 +1129,45 @@ EP Parser::prefix() {
             }
             expect("}");
         }
-    } else if (accept("inst") || accept("attr")) {
+    } else if (t.kind == "id" && t.text == "inst" && peek(1).kind == "id" &&
+               peek(1).loc.line == t.loc.line) {
+        throw Error(t.loc, "'inst' was removed: write this." + peek(1).text);
+    } else if (accept("attr")) {
         e = node(t.text, identifier().text, t.loc);
+    } else if (accept("this")) {
+        // `this.name` reads a field or binds a method of the receiver (dispatching
+        // dynamically); `this` alone is the receiver itself.
+        if (peek().text == "." && peek(1).kind == "id") {
+            take();
+            auto m = identifier();
+            e = node("inst", m.text, m.loc);
+        } else
+            e = node("this", "", t.loc);
     } else if (accept("super")) {
         e = node("super", "", t.loc);
+        if (peek().text == "." && peek(1).kind == "id") {
+            // super.constructor(...) runs a base class's constructor; super.Base.name picks
+            // the base class explicitly.
+            take();
+            auto m = identifier();
+            if (m.text == "init")
+                throw Error(m.loc, "constructors are called with super.constructor(...)");
+            auto n = node("member", m.text == "constructor" ? "init" : m.text, m.loc);
+            n->args.push_back(std::move(e));
+            e = std::move(n);
+            // super.Base.member names the base class explicitly; the compiler tells it apart
+            // from a member of a field. Its `constructor` is the base constructor.
+            if (peek().text == "." && peek(1).text == "constructor") {
+                take();
+                auto c = take();
+                auto outer = node("member", "init", c.loc);
+                outer->args.push_back(std::move(e));
+                e = std::move(outer);
+            }
+        }
+    } else if (t.kind == "id" && t.text == "spawn" && peek(1).kind == "id" &&
+               peek(1).loc.line == t.loc.line) {
+        e = spawn();
     } else if (t.kind == "id" && t.text == "function" && peek(1).text == "(") {
         e = lambda();
     } else if (t.kind == "id" && t.text == "weak" && peek(1).text == "(") {
@@ -1140,7 +1175,7 @@ EP Parser::prefix() {
         e = node("name", "weak", t.loc);
     } else if (t.kind == "id") {
         static const std::set<std::string> structural = {
-            "function", "class", "component", "import",   "public", "private", "returns",
+            "function", "class", "component", "import",   "returns",
             "return",   "if",    "else",     "while",  "do",      "for",
             "in",       "end",   "break",     "continue", "try",    "catch",   "finally",
             "throw",    "as",    "void",      "weak",     "and",    "or",      "enum",
@@ -1204,6 +1239,27 @@ EP Parser::expression(int level) {
     auto e = operators(prefix(), level);
     while (level == 0 && peek().kind == "id" && peek().text == "which")
         e = which(std::move(e));
+    // `x if condition else y`: the lowest precedence, right associative.
+    if (level == 0 && !noTernary && peek().kind == "id" && peek().text == "if") {
+        auto t = take();
+        auto n = node("ternary", "", t.loc);
+        noTernary = true;
+        EP condition;
+        try {
+            condition = expression();
+        } catch (...) {
+            noTernary = false;
+            throw;
+        }
+        noTernary = false;
+        if (peek().text != "else" || peek().kind != "id")
+            throw Error(peek().loc, "'x if condition' needs 'else': x if condition else y");
+        take();
+        n->args.push_back(std::move(condition));
+        n->args.push_back(std::move(e));
+        n->args.push_back(expression());
+        e = std::move(n);
+    }
     return e;
 }
 EP Parser::which(EP sequence) {
@@ -1267,6 +1323,12 @@ EP Parser::operators(EP e, int level) {
     return e;
 }
 EP Parser::outer() {
+    if (peek().text == "spawn" && peek().kind == "id" && peek(1).kind == "id" &&
+        peek(1).loc.line == peek().loc.line) {
+        auto e = expression();
+        e->outer = true;
+        return e;
+    }
     // A known callable followed by a unary sign starts an outer call, not subtraction.
     bool callable = peek().text == "print";
     for (size_t i = 0; i + 1 < tokens.size(); ++i)
@@ -1620,10 +1682,18 @@ SP Parser::statement() {
                 binding.clear();
             }
             std::vector<EP> values;
-            if (patternType.empty())
-                do {
-                    values.push_back(expression());
-                } while (accept(","));
+            if (patternType.empty()) {
+                noTernary = true;
+                try {
+                    do {
+                        values.push_back(expression());
+                    } while (accept(","));
+                } catch (...) {
+                    noTernary = false;
+                    throw;
+                }
+                noTernary = false;
+            }
             s->catchTypes.push_back(patternType);
             s->catchNames.push_back(binding);
             s->patterns.push_back(std::move(values));
@@ -1838,6 +1908,89 @@ SP Parser::statement() {
     finish();
     return s;
 }
+// `spawn f(x)`, `spawn worker` (a zero-argument call), `spawn obj.method`, or
+// `spawn function() ... end`: the call, arguments included, runs on a new thread. The value is
+// the thread.task, which join() waits for.
+EP Parser::spawn() {
+    auto t = take();
+    EP target;
+    static const std::string usage =
+        "'spawn' expects a function call or a function, such as 'spawn work(5)'";
+    if (peek().text == "function" && peek(1).text == "(") {
+        auto call = node("call", "", peek().loc);
+        call->args.push_back(lambda());
+        target = std::move(call);
+    } else {
+        static const std::set<std::string> keywords = {
+            "import", "var", "const", "class", "return", "if", "else", "while", "do", "for",
+            "end", "break", "continue", "try", "catch", "finally", "throw", "match", "case"};
+        if (keywords.count(peek().text))
+            throw Error(peek().loc, usage + ", not '" + peek().text + "'");
+        target = outer(); // `spawn print "hi"`: parentheses are optional, as in statements
+        if ((target->kind == "name" || target->kind == "member" || target->kind == "inst") &&
+            !target->grouped) {
+            auto call = node("call", "", target->loc);
+            call->args.push_back(std::move(target));
+            target = std::move(call);
+        }
+        if (target->kind != "call")
+            throw Error(t.loc, usage);
+    }
+    auto f = std::make_shared<Function>();
+    f->loc = t.loc;
+    f->name = "lambda";
+    auto r = std::make_unique<Stmt>();
+    r->kind = "return";
+    r->loc = target->loc;
+    r->expr = std::move(target);
+    f->body.push_back(std::move(r));
+    auto e = node("spawn", "", t.loc);
+    e->lambda = std::move(f);
+    return e;
+}
+// Access modifiers and `static` are soft keywords: they modify a declaration that follows on
+// the same line, and are ordinary names elsewhere (`private = 3`).
+bool Parser::modifierAhead() {
+    auto &t = peek();
+    return t.kind == "id" &&
+           (t.text == "public" || t.text == "private" || t.text == "protected" ||
+            t.text == "static") &&
+           peek(1).kind == "id" && peek(1).loc.line == t.loc.line;
+}
+// Decorators precede a declaration on its line: `memoize function fib(int n) returns int`,
+// `logged("db") register class Store`. Each is an expression; the nearest applies first.
+std::vector<EP> Parser::decorators() {
+    std::vector<EP> out;
+    if (peek().kind != "id" || peek().text == "function" || peek().text == "class")
+        return out;
+    // Only when `function name` or `class name` follows later on the same line, outside
+    // brackets.
+    int depth = 0;
+    bool found = false;
+    for (size_t n = 0;; ++n) {
+        auto &t = peek(n);
+        if (t.kind == "nl" || t.kind == "eof")
+            break;
+        if (t.kind == "op" && (t.text == "(" || t.text == "[" || t.text == "{"))
+            ++depth;
+        else if (t.kind == "op" && (t.text == ")" || t.text == "]" || t.text == "}"))
+            --depth;
+        else if (depth == 0 && n > 0 && t.kind == "id" &&
+                 (t.text == "function" || t.text == "class") && peek(n + 1).kind == "id") {
+            found = true;
+            break;
+        } else if (depth == 0 && t.kind == "op" && t.text == "=")
+            break;
+    }
+    if (!found)
+        return out;
+    while (peek().text != "function" && peek().text != "class") {
+        if (peek().kind != "id")
+            throw Error(peek().loc, "expected a decorator name before 'function' or 'class'");
+        out.push_back(prefix());
+    }
+    return out;
+}
 EP Parser::lambda() {
     auto t = expect("function");
     auto f = std::make_shared<Function>();
@@ -1880,11 +2033,42 @@ EP Parser::lambda() {
     e->lambda = std::move(f);
     return e;
 }
-Function Parser::function(const std::string &owner, bool signatureOnly) {
-    auto t = expect("function");
+Function Parser::function(const std::string &owner, bool signatureOnly,
+                          const std::string &keyword) {
+    auto t = expect(keyword.empty() ? "function" : keyword);
     Function f;
     f.loc = t.loc;
     f.owner = owner;
+    if (!keyword.empty()) {
+        // `constructor(int x, int y)`, `constructor int x, int y`, or `constructor`; and
+        // `destructor`, which takes nothing. Internally they are the methods init and $destroy.
+        f.name = keyword == "constructor" ? "init" : "$destroy";
+        f.result = "void";
+        bool parens = accept("(");
+        if (keyword == "destructor" && !(parens ? peek().text == ")"
+                                               : peek().kind == "nl" || peek().kind == "eof"))
+            throw Error(peek().loc, "a destructor takes no parameters");
+        if (parens ? !accept(")") : peek().kind != "nl" && peek().kind != "eof") {
+            do {
+                Param p;
+                p.loc = peek().loc;
+                p.type = type();
+                p.name = identifier().text;
+                if (accept("="))
+                    p.value = expression();
+                f.params.push_back(std::move(p));
+            } while (accept(","));
+            if (parens)
+                expect(")");
+        }
+        if (peek().text == "returns")
+            throw Error(peek().loc, keyword + "s cannot return a value");
+        finish();
+        f.body = block();
+        expect("end");
+        finish();
+        return f;
+    }
     if (!owner.empty() && peek().text == "operator" && peek(1).kind != "nl" &&
         peek(1).text != "(") {
         // Operator methods: `function operator +(Vec2 other) returns Vec2`, `operator []`
@@ -1906,6 +2090,9 @@ Function Parser::function(const std::string &owner, bool signatureOnly) {
         }
     } else
         f.name = identifier().text;
+    if (!owner.empty() && f.name == "init")
+        throw Error(f.loc, "constructors are declared with constructor(...) ... end, not "
+                           "function init");
     f.typeParams = typeParameters(&f.typeBounds);
     if (accept("(")) {
         if (!accept(")")) {
@@ -1948,7 +2135,42 @@ Program Parser::parse() {
     Program p;
     newlines();
     while (peek().kind != "eof") {
-        bool hidden = accept("private"), visible = !hidden && accept("public");
+        bool hidden = false, visible = false;
+        if (modifierAhead()) {
+            if (peek().text == "protected" || peek().text == "static")
+                throw Error(peek().loc, "'" + peek().text + "' applies to class members");
+            hidden = take().text == "private";
+            visible = !hidden;
+        }
+        auto decorations = decorators();
+        if (!decorations.empty() && peek().text == "function") {
+            // f = decorator(f): the declared function is renamed, and `f` becomes a constant
+            // holding the decorated value, initialized where the declaration stands.
+            auto f = function();
+            auto name = f.name;
+            if (!f.typeParams.empty())
+                throw Error(f.loc, "generic functions cannot be decorated");
+            f.name += "$undecorated";
+            auto loc = f.loc;
+            EP value = node("name", f.name, loc);
+            for (size_t i = decorations.size(); i-- > 0;) {
+                auto call = node("call", "", decorations[i]->loc);
+                call->args.push_back(std::move(decorations[i]));
+                call->args.push_back(std::move(value));
+                value = std::move(call);
+            }
+            p.functions.push_back(std::move(f));
+            auto d = std::make_unique<Stmt>();
+            d->kind = "declare";
+            d->op = "const";
+            d->name = name;
+            d->loc = loc;
+            d->expr = std::move(value);
+            p.body.push_back(std::move(d));
+            if (hidden)
+                p.privateNames.insert(name);
+            continue;
+        }
         size_t nf = p.functions.size(), nc = p.classes.size(), nb = p.body.size(),
                ne = p.enums.size();
         std::set<std::string> components;
@@ -2116,7 +2338,7 @@ Program Parser::parse() {
                     Class variant;
                     variant.name = en.name + "." + en.members[i];
                     variant.loc = locations[i];
-                    variant.base = en.name;
+                    variant.bases.push_back(en.name);
                     variant.variantOf = en.name;
                     variant.fields = std::move(payloads[i]);
                     base.variants.push_back(variant.name);
@@ -2276,6 +2498,8 @@ Program Parser::parse() {
             c.fields.push_back(std::move(message));
             finish();
             p.classes.push_back(std::move(c));
+        } else if (!decorations.empty() && peek().text != "class") {
+            throw Error(peek().loc, "decorators apply to functions and classes");
         } else if (peek().text == "class" || peek().text == "interface") {
             Class c;
             c.isInterface = take().text == "interface";
@@ -2283,32 +2507,119 @@ Program Parser::parse() {
             c.name = identifier().text;
             c.typeParams = typeParameters(&c.typeBounds);
             if (!c.isInterface && accept("extends"))
-                c.base = type();
+                do {
+                    c.bases.push_back(type());
+                } while (accept(","));
             if (accept(c.isInterface ? "extends" : "implements"))
                 do {
                     c.interfaces.push_back(type());
                 } while (accept(","));
             finish();
+            std::vector<SP> statics; // static fields, initialized where the class is declared
             while (peek().text != "end" && peek().kind != "eof") {
-                // Members are public unless marked `private` (visible only inside the class).
+                // Members are public unless marked `private` (visible only inside the class)
+                // or `protected` (also in subclasses). The modifiers, `static`, `readonly`,
+                // `constructor`, and `destructor` are soft keywords.
                 auto modifier = peek();
-                bool hiddenMember = accept("private");
-                if (!hiddenMember)
-                    accept("public");
-                bool readonly = peek().text == "readonly" && peek(1).kind == "id" && accept("readonly");
-                if ((hiddenMember || readonly) && c.isInterface)
+                std::string access;
+                bool isStatic = false, readonly = false;
+                while (true) {
+                    if (modifierAhead()) {
+                        auto m = take();
+                        if (m.text == "static") {
+                            if (isStatic)
+                                throw Error(m.loc, "duplicate 'static'");
+                            isStatic = true;
+                        } else {
+                            if (!access.empty())
+                                throw Error(m.loc, "a member has one access modifier");
+                            access = m.text;
+                        }
+                    } else if (peek().text == "readonly" && peek(1).kind == "id" &&
+                               peek(1).loc.line == peek().loc.line) {
+                        take();
+                        readonly = true;
+                    } else
+                        break;
+                }
+                if ((!access.empty() || readonly || isStatic) && c.isInterface)
                     throw Error(modifier.loc, "interface members cannot have modifiers");
-                if (peek().text == "function" && peek(1).text != "(") {
+                bool special = (peek().text == "constructor" || peek().text == "destructor") &&
+                               peek().kind == "id" &&
+                               (peek(1).kind == "nl" || peek(1).kind == "eof" ||
+                                peek(1).text == "(" || peek(1).kind == "id");
+                if (special && c.isInterface)
+                    throw Error(peek().loc, "interfaces cannot declare " + peek().text + "s");
+                if (special) {
+                    if (readonly || isStatic)
+                        throw Error(modifier.loc, "'" + std::string(readonly ? "readonly" : "static") +
+                                                      "' does not apply to " + peek().text + "s");
+                    auto keyword = peek().text;
+                    auto f = function(c.name, false, keyword);
+                    for (auto &m : c.methods)
+                        if (m.name == f.name)
+                            throw Error(f.loc, "class " + c.name + " already has a " + keyword);
+                    if (keyword == "destructor" && !access.empty())
+                        throw Error(modifier.loc, "destructors cannot have access modifiers");
+                    f.isPrivate = access == "private";
+                    f.isProtected = access == "protected";
+                    c.methods.push_back(std::move(f));
+                } else if (!c.isInterface && peek().kind == "id" && peek().text != "function" &&
+                           peek(1).text == "function" && peek(1).kind == "id") {
+                    throw Error(peek().loc, "decorators apply to top-level functions and classes");
+                } else if (peek().text == "function" && peek(1).text != "(") {
                     if (readonly)
                         throw Error(modifier.loc, "readonly applies to fields");
-                    c.methods.push_back(function(c.name, c.isInterface));
-                    c.methods.back().isPrivate = hiddenMember;
+                    auto f = function(c.name, c.isInterface);
+                    f.isPrivate = access == "private";
+                    f.isProtected = access == "protected";
+                    if (isStatic) {
+                        // A top-level function Class$name without a receiver.
+                        if (!c.typeParams.empty() || !f.typeParams.empty())
+                            throw Error(f.loc, "static methods of generic classes and generic "
+                                               "static methods are not supported");
+                        if (f.name.rfind("operator", 0) == 0)
+                            throw Error(f.loc, "operators cannot be static");
+                        f.owner.clear();
+                        f.staticOf = c.name;
+                        auto hidden = c.name + "$" + f.name;
+                        if (p.statics.count(hidden))
+                            throw Error(f.loc, "duplicate static member '" + f.name + "'");
+                        p.statics[hidden] = {c.name, access};
+                        f.name = hidden;
+                        p.functions.push_back(std::move(f));
+                    } else
+                        c.methods.push_back(std::move(f));
                 } else if (c.isInterface)
                     throw Error(peek().loc, "interfaces declare only function signatures");
-                else {
+                else if (isStatic) {
+                    // A module global Class$name, initialized where the class is declared.
+                    auto d = std::make_unique<Stmt>();
+                    d->kind = "declare";
+                    d->loc = peek().loc;
+                    d->op = readonly || (peek().text == "const" && accept("const")) ? "const"
+                                                                                     : "var";
+                    if (peek().text == "var" && peek().kind == "id")
+                        take();
+                    else if (peek(1).text != "=")
+                        d->type = type();
+                    auto name = identifier();
+                    if (!accept("="))
+                        throw Error(name.loc, "static fields need an initial value, such as "
+                                              "static int count = 0");
+                    d->expr = expression();
+                    finish();
+                    auto hidden = c.name + "$" + name.text;
+                    if (p.statics.count(hidden))
+                        throw Error(name.loc, "duplicate static member '" + name.text + "'");
+                    p.statics[hidden] = {c.name, access};
+                    d->name = hidden;
+                    statics.push_back(std::move(d));
+                } else {
                     Param field;
                     field.loc = peek().loc;
-                    field.isPrivate = hiddenMember;
+                    field.isPrivate = access == "private";
+                    field.isProtected = access == "protected";
                     field.readonly = readonly;
                     field.type = type();
                     field.name = identifier().text;
@@ -2317,6 +2628,25 @@ Program Parser::parse() {
                     c.fields.push_back(std::move(field));
                     finish();
                 }
+            }
+            for (auto &d : statics)
+                p.body.push_back(std::move(d));
+            if (!decorations.empty()) {
+                // A class decorator is called with the class reference where the class is
+                // declared (for registration and similar effects); its result is discarded.
+                auto name = c.name;
+                for (size_t i = decorations.size(); i-- > 0;) {
+                    auto call = node("call", "", decorations[i]->loc);
+                    call->args.push_back(std::move(decorations[i]));
+                    call->args.push_back(node("name", name, c.loc));
+                    auto st = std::make_unique<Stmt>();
+                    st->kind = "expr";
+                    st->loc = call->loc;
+                    st->target = std::move(call);
+                    st->target->outer = true;
+                    p.body.push_back(std::move(st));
+                }
+                decorations.clear();
             }
             expect("end");
             finish();
@@ -2337,10 +2667,10 @@ Program Parser::parse() {
             pending.clear();
         }
         std::string declared;
-        if (p.functions.size() > nf)
-            declared = p.functions.back().name;
-        else if (p.classes.size() > nc)
+        if (p.classes.size() > nc)
             declared = p.classes.back().name;
+        else if (p.functions.size() > nf)
+            declared = p.functions.back().name;
         else if (p.enums.size() > ne)
             declared = p.enums.back().name;
         else if (p.body.size() > nb && p.body.back()->kind == "declare")
@@ -2384,7 +2714,7 @@ std::vector<Param> cloneParams(const std::vector<Param> &params) {
     std::vector<Param> out;
     for (auto &p : params)
         out.push_back({p.name, p.type, p.value ? clone(*p.value) : nullptr, p.loc, p.isPrivate,
-                       p.readonly});
+                       p.readonly, p.isProtected});
     return out;
 }
 } // namespace
@@ -2426,6 +2756,8 @@ Function clone(const Function &f) {
     out.body = cloneBody(f.body);
     out.abstract = f.abstract;
     out.isPrivate = f.isPrivate;
+    out.isProtected = f.isProtected;
+    out.staticOf = f.staticOf;
     out.typeParams = f.typeParams;
     out.typeBounds = f.typeBounds;
     out.foreign = f.foreign;
@@ -2434,7 +2766,7 @@ Function clone(const Function &f) {
 Class clone(const Class &c) {
     Class out;
     out.name = c.name;
-    out.base = c.base;
+    out.bases = c.bases;
     out.loc = c.loc;
     out.fields = cloneParams(c.fields);
     for (auto &m : c.methods)
