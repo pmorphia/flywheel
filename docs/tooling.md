@@ -4,7 +4,7 @@
 
 Each `flywheel` command has a short alias: `r` (run), `b` (build), `c` (check), `d` (desktop), `s` (serve), `e` (export), `db` (debug), `t` (test), `f` or `fmt` (format), and `u` (update). `doc`, `repl`, `lsp`, and `selftest` have none. `help`, `h`, `-h`, and `--help` print the usage; `version`, `v`, and `--version` print the version.
 
-A source file in place of a command runs it, as `run` does: `flywheel app.fw a b` (or `fw app.fw a b`, the short name installed beside `flywheel`) is `flywheel run app.fw -- a b`, so every argument after the file goes to the program. `flywheel -s CODE` is `flywheel run -s CODE`. Flywheel Lite (`flywheel-lite`, `fwl`) and `flywheel-js` accept the same form.
+A source file in place of a command runs it, as `run` does: `flywheel app.fw a b` (or `fw app.fw a b`, the short name installed beside `flywheel`) is `flywheel run app.fw -- a b`, so every argument after the file goes to the program. `flywheel -s CODE` is `flywheel run -s CODE`. A directory in place of a source file stands for its `source.fw`: `flywheel app` (like `flywheel run app`, `check app`, or `build app`, which writes the executable `app/app`) uses `app/source.fw`, whose imports resolve beside it. Flywheel Lite (`flywheel-lite`, `fwl`) and `flywheel-js` accept the same form.
 
 ## Testing
 

@@ -27,7 +27,7 @@ SQLite 3.54.1 and Mbed TLS 4.1.1 (HTTPS) are compiled into the runtime, so progr
 
 ```sh
 build/flywheel run examples/hello.fly
-build/flywheel examples/hello.fly            # the same: `flywheel SOURCE [arguments]` runs it (also `fw SOURCE`)
+build/flywheel examples/hello.fly            # the same: `flywheel SOURCE [arguments]` runs it (also `fw SOURCE`; a directory runs its source.fw)
 build/flywheel run app.fw -- arguments for the program
 build/flywheel build examples/core.fly -O3 -o core
 build/flywheel check examples/demo.fly --emit-ir demo.ll

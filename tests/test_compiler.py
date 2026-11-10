@@ -4073,6 +4073,25 @@ print web.static("/assets", "public", {port})
         self.assertEqual(symbols, ["total", "p", "twice"])
         request(8, "shutdown", None)
 
+    def test_directory_source(self):
+        app = self.root / "app"
+        (app / "empty").mkdir(parents=True)
+        (app / "helper.fw").write_text('function greet(string n) returns string\n    return "hi {n}"\nend\n', encoding="utf-8")
+        (app / "source.fw").write_text('import helper\nimport os\nprint helper.greet("dir"), os.args()\n', encoding="utf-8")
+        result = self.command("app", "a", "b")
+        self.assertEqual((result.returncode, result.stdout), (0, 'hi dir ["a", "b"]\n'), result.stderr)
+        result = self.command("run", "app/", "--", "x")
+        self.assertEqual((result.returncode, result.stdout), (0, 'hi dir ["x"]\n'), result.stderr)
+        result = self.command("check", "app")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.command("build", "app/")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        built = subprocess.run([str(app / ("app.exe" if os.name == "nt" else "app"))], capture_output=True, text=True, check=False, timeout=45)
+        self.assertEqual(built.stdout, 'hi dir []\n', built.stderr)
+        result = self.command("app/empty")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("is a directory without a source.fw entry point", result.stderr)
+
     def test_beta8_commands(self):
         calc = 'import os\nvar total = 0\nfor a in os.args() do\n    total += int(a)\nend\nreturn {"sum": total, "count": os.args().length}\n'
         (self.root / "calc.fw").write_text(calc, encoding="utf-8")

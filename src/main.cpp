@@ -880,6 +880,30 @@ int main(int argc, char **argv) {
         size_t next = 0;
         if (!source && next < positionals.size())
             filename = positionals[next++];
+        // A directory stands for its entry point: `flywheel app/` runs app/source.fw.
+        if (!source && filename != "-") {
+            std::error_code ec;
+            if (fs::is_directory(filename, ec)) {
+                auto entry = fs::path(filename) / "source.fw";
+                if (!fs::is_regular_file(entry, ec)) {
+                    std::cerr << "flywheel: " << filename
+                              << " is a directory without a source.fw entry point\n";
+                    return 2;
+                }
+                // `flywheel build app` writes app/app (named after the directory, not `source`).
+                if (command == "build" && output.empty()) {
+                    auto dir = fs::absolute(filename).lexically_normal();
+                    if (dir.filename().empty())
+                        dir = dir.parent_path();
+#ifdef _WIN32
+                    output = (dir / (dir.filename().string() + ".exe")).string();
+#else
+                    output = (dir / dir.filename()).string();
+#endif
+                }
+                filename = entry.string();
+            }
+        }
         if (command == "export" && output.empty() && next < positionals.size())
             output = positionals[next++];
         if (next < positionals.size()) {
