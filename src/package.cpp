@@ -2,9 +2,10 @@
 // installed; it does not read dependency lists or fetch anything.
 //
 // A package is a directory named by its import name, or a file `<name>.link` holding the path
-// of the package directory (used for path dependencies). Packages are searched in the nearest
-// `.flywheel-modules` directory at or above the importing file, then in the installation-wide
-// `modules` directory: `<install>/modules`, where <install> is the directory containing
+// of the package directory (used for path dependencies). Packages are searched in every
+// `.flywheel-modules` directory at or above the importing file, nearest first (so a nested
+// project that installs only some packages still sees its enclosing project's), then in the
+// installation-wide `modules` directory: `<install>/modules`, where <install> is the directory containing
 // `bin/flywheel` (or the executable's directory when it is not in a `bin` directory), or
 // `$FLYWHEEL_HOME/modules` when that variable is set.
 #include "flywheel/frontend.hpp"
@@ -65,10 +66,8 @@ std::vector<std::string> moduleDirectories(const std::string &sourceFile) {
     std::error_code ec;
     for (auto directory = fs::absolute(fs::path(sourceFile).parent_path(), ec);;
          directory = directory.parent_path()) {
-        if (fs::is_directory(directory / ".flywheel-modules", ec)) {
+        if (fs::is_directory(directory / ".flywheel-modules", ec))
             out.push_back((directory / ".flywheel-modules").string());
-            break;
-        }
         if (directory == directory.parent_path())
             break;
     }

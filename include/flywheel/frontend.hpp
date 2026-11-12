@@ -299,7 +299,8 @@ const std::map<std::string, std::string> &libraryModules();
 // The executable's path locates the installation-wide modules directory.
 void setExecutablePath(const std::string &path);
 std::string globalModulesDirectory();
-// Directories searched for packages: the nearest .flywheel-modules, then the global one.
+// Directories searched for packages: every .flywheel-modules at or above the file, nearest
+// first, then the global one.
 std::vector<std::string> moduleDirectories(const std::string &sourceFile);
 // Packages visible to a source file: import name -> package directory.
 std::map<std::string, std::string> packageRoots(const std::string &sourceFile);

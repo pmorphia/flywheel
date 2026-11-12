@@ -216,10 +216,10 @@ pulley install -g wednesware.shapes # for every program of this Flywheel install
 
 The compiler resolves `import name` (after local `.fw`/`.fly` files) in:
 
-1. the nearest `.flywheel-modules` directory at or above the importing file, then
+1. every `.flywheel-modules` directory at or above the importing file, nearest first (a nested project that installs only some packages still sees the enclosing project's, and the nearest directory wins a name), then
 2. the installation-wide `modules` directory: `<install>/modules`, where `<install>` holds `bin/flywheel` (or is the executable's directory when it is not in `bin`), or `$FLYWHEEL_HOME/modules` when `FLYWHEEL_HOME` is set;
 
-and then library and native modules. In a modules directory, a package is a directory named by its import name, or a `name.link` file containing the path of the package directory (Pulley uses these for path dependencies). `import name` loads the package's main module (`main` in its `pulley.toml`, else `name.fw`, `main.fw`, or `lib.fw`); `import name.part` loads `part.fw` in the package. Packages see each other by import name, because one project's packages share one directory.
+and then library and native modules. In a modules directory, a package is a directory named by its import name, or a `name.link` file containing the path of the package directory (Pulley uses these for path dependencies). `import name` loads the package's main module (`main` in its `pulley.toml`, else `name.fw`, `main.fw`, or `lib.fw`); `import name.part` loads `part.fw` in the package. Packages see each other by import name, because one project's packages share one directory; a package that ships its own `.flywheel-modules` resolves from it first. A module that is not found is reported with the directories that were searched.
 
 ## Editor integration
 

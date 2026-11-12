@@ -1376,7 +1376,7 @@ NEGATIVE = {
     ),
     "import_collision": ("import fs\nimport math as fs", "duplicate import"),
     "unicode": ('print "\\u{D800}"', "Unicode"),
-    "unsupported_module": ("import gizmo", "not found or not implemented"),
+    "unsupported_module": ("import gizmo", "module 'gizmo' not found (searched local"),
     "init_unassigned": (
         "class C\nint x\nconstructor()\nend\nend",
         "the constructor must assign required field 'x'",
@@ -4034,6 +4034,29 @@ print web.static("/assets", "public", {port})
         result = subprocess.run([COMPILER, "run", app / "src" / "app.fw"], cwd=self.root, capture_output=True,
                                 text=True, timeout=60, env=dict(os.environ, FLYWHEEL_HOME=str(home)))
         self.assertEqual((result.returncode, result.stdout), (0, "8 6 linked 7\n"), result.stderr)
+        # A nested project with its own .flywheel-modules still sees the enclosing project's
+        # packages (the nearest directory wins a name), and a package resolves its imports from
+        # the directories around itself, so its own .flywheel-modules works too.
+        nested = app / "tool"
+        (nested / ".flywheel-modules" / "geometry").mkdir(parents=True)
+        (nested / ".flywheel-modules" / "geometry" / "geometry.fw").write_text(
+            "function double_it(int n) returns int\n    return n * 20\nend\n", encoding="utf-8")
+        (modules / "vendor" / ".flywheel-modules" / "inner").mkdir(parents=True)
+        (modules / "vendor" / "vendor.fw").write_text(
+            "import inner\nfunction v returns int\n    return inner.i() + 1\nend\n", encoding="utf-8")
+        (modules / "vendor" / ".flywheel-modules" / "inner" / "inner.fw").write_text(
+            "function i returns int\n    return 40\nend\n", encoding="utf-8")
+        (nested / "tool.fw").write_text(
+            "import geometry\nimport linked\nimport vendor\nprint geometry.double_it(1), linked.hi(), vendor.v()\n",
+            encoding="utf-8")
+        result = subprocess.run([COMPILER, "run", nested / "tool.fw"], cwd=self.root, capture_output=True,
+                                text=True, timeout=60)
+        self.assertEqual((result.returncode, result.stdout), (0, "20 linked 41\n"), result.stderr)
+        (nested / "missing.fw").write_text("import nowhere\n", encoding="utf-8")
+        result = subprocess.run([COMPILER, "check", nested / "missing.fw"], cwd=self.root, capture_output=True,
+                                text=True, timeout=60)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(str(nested / ".flywheel-modules") + ", " + str(modules), result.stderr)
         result = self.command("get")
         self.assertEqual(result.returncode, 2)
         self.assertIn("managed by Pulley", result.stderr)

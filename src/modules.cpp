@@ -85,7 +85,38 @@ std::string languageName(const std::string &language) {
 class Loader {
     fs::path root;
     std::string rootUrl; // the entry file's URL directory when it was named by URL
-    std::map<std::string, std::string> packages; // package name -> directory
+    std::map<std::string, std::string> packages; // the entry's packages: name -> directory
+    std::map<std::string, std::map<std::string, std::string>> packagesByDirectory;
+    // The packages a module sees: those of the .flywheel-modules directories at or above it
+    // (nearest first), then the entry's. URL modules see the entry's.
+    const std::map<std::string, std::string> &packagesFor(const fs::path &file, bool remote) {
+        if (remote || file.empty())
+            return packages;
+        auto key = file.parent_path().string();
+        auto it = packagesByDirectory.find(key);
+        if (it == packagesByDirectory.end()) {
+            auto roots = packageRoots(file.string());
+            for (auto &[name, directory] : packages)
+                roots.emplace(name, directory);
+            it = packagesByDirectory.emplace(key, std::move(roots)).first;
+        }
+        return it->second;
+    }
+    // Where a missing module was looked for, for the error message.
+    std::string searched(const fs::path &file, bool remote) {
+        std::string out = "local .fw and .fly files";
+        std::vector<std::string> directories;
+        if (!remote && !file.empty())
+            directories = moduleDirectories(file.string());
+        else
+            directories = moduleDirectories((root / "main.fw").string());
+        if (!directories.empty()) {
+            out += ", packages in ";
+            for (size_t i = 0; i < directories.size(); i++)
+                out += (i ? ", " : "") + directories[i];
+        }
+        return out + ", library and native modules";
+    }
     std::map<std::string, std::string> downloads; // URL -> contents, fetched once per load
     std::set<std::string> variants; // qualified Enum.Member classes of enums with data
     std::set<std::string> statics;  // qualified Class$member names of static members
@@ -708,8 +739,9 @@ class Loader {
                 bases = {path.parent_path(), root};
             // A module loaded by URL finds its sibling modules by URL (the entry's directory
             // too), except names of library and native modules, which are never fetched.
+            auto &visible = packagesFor(path, remote);
             if (remote && found.empty() && !native.count(name) && !libraryModules().count(name) &&
-                !packages.count(name.substr(0, name.find('.')))) {
+                !visible.count(name.substr(0, name.find('.')))) {
                 auto slashed = name;
                 std::replace(slashed.begin(), slashed.end(), '.', '/');
                 std::vector<std::string> directories = {urlDirectory(location)};
@@ -751,8 +783,8 @@ class Loader {
             // Packages from the project manifest: `import pkg` loads the package's main module,
             // `import pkg.part` its part.fw.
             auto head = name.substr(0, name.find('.'));
-            if (found.empty() && !library && packages.count(head)) {
-                fs::path directory = packages.at(head);
+            if (found.empty() && !library && visible.count(head)) {
+                fs::path directory = visible.at(head);
                 auto rest = name.find('.') == std::string::npos ? "" : relative.substr(head.size() + 1);
                 for (auto extension : {".fw", ".fly"}) {
                     auto candidate =
@@ -803,8 +835,7 @@ class Loader {
             } else
                 throw Error(
                     importLoc,
-                    "module '" + name +
-                        "' not found or not implemented (searched local .fw and .fly files)");
+                    "module '" + name + "' not found (searched " + searched(path, remote) + ")");
         }
         for (auto &family : u.program.families)
             for (auto &[tag, info] : family.tags)
