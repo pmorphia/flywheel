@@ -189,6 +189,19 @@ Markup supports named tags, self-closing tags, and fragments. Attribute values a
 
 Components specialize from supplied concrete attribute types and must use each referenced attribute consistently across uses. `style` defaults to empty string and `inner` to an empty fragment. Other referenced attributes are required. Attribute types are checked when a component is instantiated; components that are never used still have their tags, attribute names, and void-element children checked.
 
+`void component` declares a component that is used like an HTML void element: `<Icon name="star">` needs no `/>` or closing tag, and the component takes no children. Its template cannot read `attr inner`, and children given to it are a compile error. `void` is a soft keyword here; elsewhere it keeps its meaning as a type.
+
+```flywheel
+import html.*
+void component Icon = <i class="icon icon-{attr name}"></i>
+component Rating = <p>{attr label}: <Icon name="star"> <Icon name="star"> <Icon name="star"></p>
+
+print <Rating label="Score" />
+print <Icon name="heart" />
+```
+
+Markup is delimited before declarations are parsed, so the open form `<Icon ...>` works in the module that declares the void component. A void component imported from another module (`<widgets.Icon />`, or `<Icon />` after `import widgets.*`) is written self-closing.
+
 Imports resolve local `.fw` and `.fly` modules before native modules, supporting aliases, local wildcard exports, public/private declarations, and import-cycle diagnostics. See [module resolution](modules.md).
 
 Elements and fragments format as escaped HTML in `print`, `string(value)`, and string interpolation. Explicit `html.render(tree)` remains available. Formatting returns an ordinary string; inserting that string into markup escapes it as text, while inserting an element directly preserves its node structure. An `element` binding accepts a fragment as a renderable sequence, and both expose `.render()`.

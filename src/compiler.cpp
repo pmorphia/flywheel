@@ -2102,6 +2102,9 @@ end
             if (rules && rules->isVoid && e.args.size() != e.names.size())
                 error("void element <" + e.text + "> cannot have children");
         }
+        if (e.kind == "element" && p.voidComponents.count(e.text) &&
+            e.args.size() != e.names.size())
+            error("void component <" + displayName(e.text) + "> cannot have children");
         for (auto &a : e.args)
             if (a)
                 checkTemplate(*a);
@@ -3707,6 +3710,8 @@ Val Compiler::value(Expr &e, Ty expected) {
     }
     if (e.kind == "element") {
         if (p.components.count(e.text)) {
+            if (p.voidComponents.count(e.text) && e.args.size() != e.names.size())
+                error("void component <" + displayName(e.text) + "> cannot have children");
             instantiatedComponents.insert(e.text);
             if (!componentStack.insert(e.text).second)
                 error("recursive component expansion is not supported");

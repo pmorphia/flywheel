@@ -2377,6 +2377,59 @@ MODULE_CASES.extend(
 MODULE_ERRORS.append(("self_import", {"main.fw": "import main"}, "module 'main' imports itself"))
 
 
+# 2.18: `void component` declares a component used like an HTML void element.
+POSITIVE.update(
+    {
+        "void_component": (
+            'import html.*\nvoid component Icon = <i class="icon-{attr name}" style={attr style}></i>\ncomponent Card = <div><Icon name="card">{attr inner}</div>\nvar star = <Icon name="star">\nprint star\nprint <p><Icon name="a"> and <Icon name="b" style="x" /></p>\nprint <Card><b>c</b></Card>\nprint <ul>{<li><Icon name="d"></li>}</ul>\npublic void component Rule = <hr>\nprint <Rule>\n',
+            '<i class="icon-star" style=""></i>\n<p><i class="icon-a" style=""></i> and <i class="icon-b" style="x"></i></p>\n<div><i class="icon-card" style=""></i><b>c</b></div>\n<ul><li><i class="icon-d" style=""></i></li></ul>\n<hr>\n',
+        ),
+    }
+)
+NEGATIVE.update(
+    {
+        "void_component_inner": (
+            "import html.*\nvoid component Icon = <i>{attr inner}</i>",
+            "void component Icon has no children",
+        ),
+        "void_component_children": (
+            "import html.*\nvoid component Icon = <i />\nvar x = <p><Icon>text</Icon></p>",
+            "mismatched closing tag",
+        ),
+    }
+)
+MODULE_CASES.append(
+    (
+        "void_components",
+        {
+            "main.fw": 'import html.*\nimport widgets as w\nimport widgets.*\nprint <w.Icon name="a" />\nprint <p><Icon name="b" /></p>',
+            "widgets.fw": "import html.*\nvoid component Icon = <i class={attr name} />\nprint <Icon name=\"own\">",
+        },
+        '<i class="own"></i>\n<i class="a"></i>\n<p><i class="b"></i></p>\n',
+    )
+)
+MODULE_ERRORS.extend(
+    [
+        (
+            "void_component_children",
+            {
+                "main.fw": "import html.*\nimport widgets as w\nprint <w.Icon>text</w.Icon>",
+                "widgets.fw": "import html.*\nvoid component Icon = <i />",
+            },
+            "void component <Icon> cannot have children",
+        ),
+        (
+            "void_component_unclosed",
+            {
+                "main.fw": "import html.*\nimport widgets.*\nprint <Icon>",
+                "widgets.fw": "import html.*\nvoid component Icon = <i />",
+            },
+            "a void component declared in another module needs '/>'",
+        ),
+    ]
+)
+
+
 # 2.3 beta-3: language and library additions.
 POSITIVE.update(
     {

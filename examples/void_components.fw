@@ -1,0 +1,16 @@
+# `void component` declares a component used like an HTML void element:
+# <Icon name="star"> needs no `/>` or closing tag, and takes no children.
+import html.*
+
+void component Icon = <i class="icon icon-{attr name}" title={attr name}></i>
+void component Avatar = <img src="/avatars/{attr user}.png" alt={attr user} style={attr style}>
+
+component Card = <div class="card">
+    <Avatar user={attr user} style="width: 2em">
+    <h3>{attr user}</h3>
+    {attr inner}
+</div>
+
+print <Icon name="star">
+print <p>Rated <Icon name="star"> <Icon name="star" /> <Icon name="star"> of 5</p>
+print <Card user="ann"><p>Hello <Icon name="wave"></p></Card>

@@ -180,6 +180,8 @@ struct Program {
     bool svg = false;
     std::vector<SP> body;
     std::map<std::string, EP> components;
+    // Components declared `void component`: used like void elements, with no children.
+    std::set<std::string> voidComponents;
     std::map<std::string, std::string> imports;
     // Native imports by alias: "c", "cxx", "rust", or "zig" (absent for Flywheel modules).
     std::map<std::string, std::string> importKinds;
@@ -239,7 +241,10 @@ class Parser {
     EP lambda();
 
   public:
-    explicit Parser(std::vector<Token> t) : tokens(std::move(t)) {}
+    explicit Parser(std::vector<Token> t);
+    // Names declared `void component` in this source (and in the source an embedded
+    // expression's parser belongs to): `<Name>` needs no closing tag.
+    std::set<std::string> voidComponents;
     Program parse();
     // The module loader lowers units itself, once the imported modules' namespaces are known.
     bool deferUnits = false;

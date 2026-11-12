@@ -134,6 +134,41 @@ bool htmlVoidTag(const std::string &tag) {
                                                "param", "source", "track", "wbr"};
     return tags.count(tag) > 0;
 }
+// Void components (`void component Icon = ...`) are used like HTML void elements: `<Icon>` needs
+// no `/>` or closing tag. Markup is delimited while lexing, before declarations are parsed, so the
+// lexer finds the names with a scan of the source. Nested lexers (embedded expressions inside
+// markup) see the names of the source being parsed through `ambientVoidComponents`.
+thread_local std::set<std::string> ambientVoidComponents;
+thread_local const std::set<std::string> *lexingVoidComponents = nullptr;
+bool identifierPart(char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+}
+std::set<std::string> scanVoidComponents(const std::string &s) {
+    std::set<std::string> out;
+    for (size_t p = s.find("void"); p != std::string::npos; p = s.find("void", p + 4)) {
+        if (p > 0 && identifierPart(s[p - 1]))
+            continue;
+        size_t q = p + 4, gap = q;
+        while (q < s.size() && (s[q] == ' ' || s[q] == '\t'))
+            ++q;
+        if (q == gap || s.compare(q, 9, "component") != 0)
+            continue;
+        q += 9;
+        gap = q;
+        while (q < s.size() && (s[q] == ' ' || s[q] == '\t'))
+            ++q;
+        size_t begin = q;
+        while (q < s.size() && identifierPart(s[q]))
+            ++q;
+        if (begin > gap && q > begin)
+            out.insert(s.substr(begin, q - begin));
+    }
+    return out;
+}
+bool voidTag(const std::string &tag) {
+    return htmlVoidTag(tag) || ambientVoidComponents.count(tag) ||
+           (lexingVoidComponents && lexingVoidComponents->count(tag));
+}
 // The position after the '-->' closing the '<!--' comment at p. Markup comments are dropped,
 // as html.parse drops them; their contents are never interpolated.
 size_t markupCommentEnd(const std::string &s, size_t p) {
@@ -144,6 +179,7 @@ size_t markupCommentEnd(const std::string &s, size_t p) {
 }
 size_t markupEnd(const std::string &s, size_t p) {
     int depth = 0;
+    std::vector<std::string> open; // unclosed tags, for the diagnostic
     for (; p < s.size(); ++p) {
         if (s[p] == '{' && p + 1 < s.size() && s[p + 1] == '{') {
             ++p;
@@ -172,14 +208,24 @@ size_t markupEnd(const std::string &s, size_t p) {
         size_t nameEnd = p + 1;
         while (nameEnd < q && (part(s[nameEnd]) || s[nameEnd] == '-' || s[nameEnd] == ':' || s[nameEnd] == '.'))
             ++nameEnd;
-        if (closing)
+        auto tag = s.substr(p + 1, nameEnd - p - 1);
+        if (closing) {
             --depth;
-        else if ((q == 0 || s[q - 1] != '/') && !htmlVoidTag(s.substr(p + 1, nameEnd - p - 1)))
+            if (!open.empty())
+                open.pop_back();
+        } else if ((q == 0 || s[q - 1] != '/') && !voidTag(tag)) {
             ++depth;
+            open.push_back(tag);
+        }
         if (depth == 0)
             return q;
         p = q;
     }
+    if (!open.empty() && !open.back().empty())
+        throw Error({}, "unterminated markup literal: <" + open.back() +
+                            "> is never closed; close it with </" + open.back() +
+                            ">, or write <" + open.back() +
+                            " /> (a void component declared in another module needs '/>')");
     throw Error({}, "unterminated markup literal");
 }
 // Validates the JSON text of a `<json>...</json>` literal; returns an error description or "".
@@ -387,6 +433,12 @@ std::string entities(const std::string &text, Location l) {
 }
 } // namespace
 std::vector<Token> lex(const std::string &source) {
+    auto voids = scanVoidComponents(source);
+    struct Restore {
+        const std::set<std::string> *saved;
+        ~Restore() { lexingVoidComponents = saved; }
+    } restore{lexingVoidComponents};
+    lexingVoidComponents = &voids;
     // Validate UTF-8 before tokenization; identifier spelling is ASCII in this prototype.
     for (size_t i = 0; i < source.size();) {
         auto c = static_cast<unsigned char>(source[i++]);
@@ -518,7 +570,13 @@ std::vector<Token> lex(const std::string &source) {
         }
         if (c == '<' && !genericType && (expected || markupArgumentStart(source, p)) &&
             p + 1 < source.size() && (start(source[p + 1]) || source[p + 1] == '>')) {
-            auto end = markupEnd(source, p);
+            size_t end;
+            try {
+                end = markupEnd(source, p);
+            } catch (Error &e) {
+                e.loc = loc; // markupEnd reports no position of its own
+                throw;
+            }
             emit("markup", source.substr(p, end - p + 1), end + 1);
             expected = false;
             continue;
@@ -901,6 +959,12 @@ EP Parser::stringExpr(const Token &t) {
 }
 EP Parser::markup() {
     auto token = take();
+    auto saved = ambientVoidComponents;
+    struct Restore {
+        std::set<std::string> &target, saved;
+        ~Restore() { target = std::move(saved); }
+    } restore{ambientVoidComponents, saved};
+    ambientVoidComponents.insert(voidComponents.begin(), voidComponents.end());
     const auto &s = token.text;
     size_t p = 0;
     auto space = [&] {
@@ -987,7 +1051,7 @@ EP Parser::markup() {
         }
         if (p == s.size() || s[p++] != '>')
             throw Error(token.loc, "expected '>'");
-        if (htmlVoidTag(tag))
+        if (voidTag(tag))
             return e;
         std::string text;
         auto flush = [&] {
@@ -2131,6 +2195,12 @@ Function Parser::function(const std::string &owner, bool signatureOnly,
     finish();
     return f;
 }
+Parser::Parser(std::vector<Token> t) : tokens(std::move(t)), voidComponents(ambientVoidComponents) {
+    for (size_t i = 0; i + 2 < tokens.size(); ++i)
+        if (tokens[i].kind == "id" && tokens[i].text == "void" && tokens[i + 1].kind == "id" &&
+            tokens[i + 1].text == "component" && tokens[i + 2].kind == "id")
+            voidComponents.insert(tokens[i + 2].text);
+}
 Program Parser::parse() {
     Program p;
     newlines();
@@ -2651,12 +2721,31 @@ Program Parser::parse() {
             expect("end");
             finish();
             p.classes.push_back(std::move(c));
-        } else if (accept("component")) {
+        } else if ((peek().text == "component" && peek().kind == "id") ||
+                   (peek().text == "void" && peek(1).text == "component" && peek(1).kind == "id")) {
+            // `void component Name = ...` (`void` is a soft keyword here) declares a component
+            // used like an HTML void element: `<Name attr={x}>`, with no children.
+            bool isVoid = peek().text == "void";
+            if (isVoid)
+                take();
+            take();
             auto n = identifier();
             expect("=");
             if (p.components.count(n.text))
                 throw Error(n.loc, "duplicate component");
             p.components[n.text] = expression();
+            if (isVoid) {
+                p.voidComponents.insert(n.text);
+                std::function<void(const Expr &)> noInner = [&](const Expr &e) {
+                    if (e.kind == "attr" && e.text == "inner")
+                        throw Error(n.loc, "void component " + n.text +
+                                               " has no children; 'attr inner' is not available");
+                    for (auto &a : e.args)
+                        if (a)
+                            noInner(*a);
+                };
+                noInner(*p.components[n.text]);
+            }
             finish();
         } else {
             p.body.push_back(statement());

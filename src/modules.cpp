@@ -840,6 +840,8 @@ class Loader {
         }
         for (auto &[name, e] : u.program.components) {
             expression(u, *e, {});
+            if (u.program.voidComponents.count(name))
+                merged.voidComponents.insert(u.own.at(name));
             merged.components[u.own.at(name)] = std::move(e);
         }
         statements(u, u.program.body, {}, true);
