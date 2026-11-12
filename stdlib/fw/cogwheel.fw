@@ -1,0 +1,665 @@
+# Cogwheel: configuration written as Markdown (.cw files).
+#
+# A .cw file is ordinary Markdown. Headings (`#` to `######`) open nested sections named by
+# their text, a quote line with `=` in it (`> name = danny`) is an entry, and everything else is
+# text. Fenced code blocks are text. Reading and writing a file keeps it as written: only the
+# entries you change are rewritten.
+#
+#     import cogwheel
+#     var conf = cogwheel.confile("main.cw")
+#     print conf["#Main"]["#User Section"][">name"]
+#     print conf.getById("User Section").get("name")
+#     print conf.selectorAll()[">email"]
+#
+# See https://github.com/pmorphia/cogwheel for the format.
+import fs
+
+elements cogwheel_markup
+    cw-doc: *
+    cw-heading: name
+    cw-rawstr: *
+    cw-conf void: key, value
+end
+
+# Markup that builds a document: <cogwheel.cw><cogwheel.heading name="Main">
+# <cogwheel.rawstr>Text</cogwheel.rawstr><cogwheel.conf key="name" value="danny">
+# </cogwheel.heading></cogwheel.cw>. `cogwheel.from_markup` turns it into a Node.
+component cw = <cw-doc>{attr inner}</cw-doc>
+component heading = <cw-heading name={attr name}>{attr inner}</cw-heading>
+component rawstr = <cw-rawstr>{attr inner}</cw-rawstr>
+component conf = <cw-conf key={attr key} value={attr value} />
+
+# A part of a document. `kind` is "document", "section", "entry", "text", or "all" (the view
+# returned by selectorAll, which searches every level).
+class Node
+    string kind
+    # A section's heading text, or an entry's key.
+    string name = ""
+    # An entry's value.
+    string value = ""
+    # A section's heading level (1 to 6); 0 for the document.
+    int level = 0
+    # The source text of this node itself, with its line breaks: a heading line, an entry
+    # line, or the lines of a text block. Empty for an entry or heading that was changed.
+    string raw = ""
+    Node[] children = []
+    # The file a document was read from.
+    string file = ""
+
+    # `["#Name"]` is the section named Name, `[">key"]` (or `["key"]`) the entry key. Missing
+    # parts raise KeyError.
+    function operator [](string selector) returns Node
+        var found = this.find(selector)
+        if found == null do
+            throw KeyError("no {describe(selector)} in {this.label()}")
+        end
+        return found
+    end
+
+    # The first match of a selector, or null.
+    function find(string selector) returns Node?
+        var want = parse_selector(selector)
+        bool deep = this.kind == "all"
+        return search(this.children, want[0], want[1], deep)
+    end
+
+    function has(string selector) returns bool
+        return this.find(selector) != null
+    end
+
+    # Every match of a selector, at this level (or every level, for selectorAll).
+    function find_all(string selector) returns Node[]
+        var want = parse_selector(selector)
+        Node[] out = []
+        collect(this.children, want[0], want[1], this.kind == "all", out)
+        return out
+    end
+
+    # The section with this name at any depth.
+    function getById(string id) returns Node
+        var found = search(this.children, "section", id.trim(), true)
+        if found == null do
+            throw KeyError("no section '{id}' in {this.label()}")
+        end
+        return found
+    end
+    function get_by_id(string id) returns Node
+        return this.getById(id)
+    end
+
+    # A view of this node whose selectors search every level below it.
+    function selectorAll returns Node
+        return Node("all", this.name, "", this.level, "", [this])
+    end
+    function selector_all returns Node
+        return this.selectorAll()
+    end
+
+    # Entry values. get raises KeyError when the entry is missing.
+    function get(string key) returns string
+        return this[entry_selector(key)].value
+    end
+    function get_or(string key, string fallback) returns string
+        var found = this.find(entry_selector(key))
+        if found == null do
+            return fallback
+        end
+        return found.value
+    end
+    function get_int(string key) returns int
+        var v = this.get(key).replace("_", "")
+        try
+            return int(v)
+        catch Error e
+            throw ValueError("cogwheel entry '{key}' is not an integer: {v}")
+        end
+    end
+    function get_float(string key) returns double
+        var v = this.get(key).replace("_", "")
+        try
+            return double(v)
+        catch Error e
+            throw ValueError("cogwheel entry '{key}' is not a number: {v}")
+        end
+    end
+    function get_bool(string key) returns bool
+        var v = this.get(key).lower()
+        if v == "true" or v == "yes" or v == "on" or v == "1" do
+            return true
+        end
+        if v == "false" or v == "no" or v == "off" or v == "0" do
+            return false
+        end
+        throw ValueError("cogwheel entry '{key}' is not true or false: {v}")
+    end
+    # A comma-separated value, optionally in brackets: `> tags = [a, b, c]`.
+    function get_list(string key) returns string[]
+        return split_list(this.get(key))
+    end
+
+    # The sections, entries, and text blocks directly inside this one.
+    function sections returns Node[]
+        return this.children.filter(function(Node n) => n.kind == "section")
+    end
+    function entries returns Node[]
+        return this.children.filter(function(Node n) => n.kind == "entry")
+    end
+    function keys returns string[]
+        return this.entries().map(function(Node n) => n.name)
+    end
+    # The text directly in this section (or a text block's own text), without entries.
+    function text returns string
+        if this.kind == "text" do
+            return this.raw.trim()
+        end
+        string[] parts = []
+        for child in this.children do
+            if child.kind == "text" and child.raw.trim() != "" do
+                parts.push(child.raw.trim())
+            end
+        end
+        return "\n\n".join(parts)
+    end
+
+    # Sets an entry of this section, adding it after the last entry (or the text) when missing.
+    function set(string key, string value) returns Node
+        var found = this.find(entry_selector(key))
+        if found != null do
+            var n = found
+            n.value = value
+            n.raw = ""
+            return this
+        end
+        if this.kind == "all" do
+            throw ValueError("set needs a section, not a selectorAll view")
+        end
+        int at = 0
+        for i, child in this.children do
+            if child.kind == "section" do
+                break
+            end
+            at = i + 1
+        end
+        Node[] added = [Node("entry", key.trim(), value)]
+        this.insert_block(at, added)
+        return this
+    end
+
+    # Adds a subsection at the end of this one and returns it.
+    function add_section(string name) returns Node
+        var section = Node("section", name.trim(), "", min_level(this.level + 1))
+        this.insert_block(this.children.length, [section])
+        return section
+    end
+
+    # Adds a text block (a paragraph) after the entries and text of this section.
+    function add_text(string text) returns Node
+        int at = 0
+        for i, child in this.children do
+            if child.kind == "section" do
+                break
+            end
+            at = i + 1
+        end
+        this.insert_block(at, [Node("text", "", "", 0, text.trim() + "\n")])
+        return this
+    end
+
+    # Removes the first match of a selector; whether there was one.
+    function remove(string selector) returns bool
+        var want = parse_selector(selector)
+        return remove_from(this, want[0], want[1], this.kind == "all")
+    end
+
+    # Every entry at every level, keyed by section path and key: "Main.User Section.name".
+    function to_map returns map<string, string>
+        map<string, string> out = {}
+        flatten(this, "", out)
+        return out
+    end
+
+    # The .cw text of this node: a document or section as written (with any changes), an
+    # entry's line, a text block's lines.
+    function source returns string
+        string out = ""
+        if this.kind == "all" do
+            return this.children[0].source()
+        end
+        if this.kind == "section" do
+            out = this.raw if this.raw != "" else "#".repeat(this.level) + " " + this.name + "\n"
+        else if this.kind == "document" do
+            out = this.raw
+        else if this.kind == "entry" do
+            return this.raw if this.raw != "" else entry_line(this.name, this.value)
+        else if this.kind == "text" do
+            return this.raw
+        end
+        for child in this.children do
+            out += child.source()
+        end
+        return out
+    end
+
+    # Writes a document to a file: the one it was read from when no path is given.
+    function save(string path = "") returns void
+        var target = path if path != "" else this.file
+        if target == "" do
+            throw ValueError("save needs a path for a document that was not read from a file")
+        end
+        fs.write(target, this.source())
+    end
+
+    # An entry formats as its value, a text block as its text, anything else as .cw text.
+    function to_string returns string
+        if this.kind == "entry" do
+            return this.value
+        end
+        if this.kind == "text" do
+            return this.text()
+        end
+        return this.source()
+    end
+
+    function label returns string
+        if this.kind == "section" do
+            return "section '{this.name}'"
+        end
+        if this.kind == "all" do
+            return this.children[0].label()
+        end
+        if this.file != "" do
+            return this.file
+        end
+        return "the document"
+    end
+
+    # Inserts nodes at a child position, keeping a blank line between blocks.
+    function insert_block(int at, Node[] nodes) returns void
+        Node[] before = []
+        Node[] after = []
+        for i, child in this.children do
+            if i < at do
+                before.push(child)
+            else do
+                after.push(child)
+            end
+        end
+        bool needs_gap = false
+        if before.length > 0 do
+            var last = before[before.length - 1]
+            needs_gap = not ends_blank(last)
+        else if this.kind == "section" do
+            needs_gap = true
+        end
+        if needs_gap and (before.length > 0 or this.kind == "section") do
+            before.push(Node("text", "", "", 0, "\n"))
+        end
+        for n in nodes do
+            before.push(n)
+        end
+        if after.length > 0 and not starts_blank(after[0]) do
+            before.push(Node("text", "", "", 0, "\n"))
+        end
+        for n in after do
+            before.push(n)
+        end
+        this.children = before
+    end
+end
+
+private function min_level(int level) returns int
+    return level if level <= 6 else 6
+end
+
+private function ends_blank(Node n) returns bool
+    if n.kind == "section" do
+        if n.children.length == 0 do
+            return false
+        end
+        return ends_blank(n.children[n.children.length - 1])
+    end
+    return n.kind == "text" and (n.raw.trim() == "" or n.raw.ends_with("\n\n"))
+end
+
+private function starts_blank(Node n) returns bool
+    return n.kind == "text" and n.raw.lines().length > 0 and n.raw.lines()[0].trim() == ""
+end
+
+# "#Name" is a section, ">key" or "key" an entry.
+private function parse_selector(string selector) returns string[]
+    var s = selector.trim()
+    if s.starts_with("#") do
+        return ["section", s.slice(1).trim()]
+    end
+    if s.starts_with(">") do
+        return ["entry", s.slice(1).trim()]
+    end
+    return ["entry", s]
+end
+
+private function entry_selector(string key) returns string
+    var k = key.trim()
+    return k if k.starts_with(">") else ">" + k
+end
+
+private function describe(string selector) returns string
+    var want = parse_selector(selector)
+    return "{want[0]} '{want[1]}'"
+end
+
+private function search(Node[] nodes, string kind, string name, bool deep) returns Node?
+    for n in nodes do
+        if n.kind == kind and n.name == name do
+            return n
+        end
+    end
+    if deep do
+        for n in nodes do
+            if n.kind == "section" or n.kind == "document" do
+                var found = search(n.children, kind, name, true)
+                if found != null do
+                    return found
+                end
+            end
+        end
+    end
+    return null
+end
+
+private function collect(Node[] nodes, string kind, string name, bool deep, Node[] out) returns void
+    for n in nodes do
+        if n.kind == kind and n.name == name do
+            out.push(n)
+        end
+        if deep and (n.kind == "section" or n.kind == "document") do
+            collect(n.children, kind, name, true, out)
+        end
+    end
+end
+
+private function remove_from(Node parent, string kind, string name, bool deep) returns bool
+    for i, n in parent.children do
+        if n.kind == kind and n.name == name do
+            Node[] kept = []
+            for j, other in parent.children do
+                if j != i do
+                    kept.push(other)
+                end
+            end
+            parent.children = kept
+            return true
+        end
+    end
+    if deep do
+        for n in parent.children do
+            if (n.kind == "section" or n.kind == "document") and remove_from(n, kind, name, true) do
+                return true
+            end
+        end
+    end
+    return false
+end
+
+private function flatten(Node n, string prefix, map<string, string> out) returns void
+    for child in n.children do
+        if child.kind == "entry" do
+            out[prefix + child.name] = child.value
+        else if child.kind == "section" do
+            flatten(child, prefix + child.name + ".", out)
+        else if child.kind == "document" do
+            flatten(child, prefix, out)
+        end
+    end
+end
+
+private function split_list(string value) returns string[]
+    var v = value.trim()
+    if v.starts_with("[") and v.ends_with("]") do
+        v = v.slice(1, v.length - 1)
+    end
+    string[] out = []
+    if v.trim() == "" do
+        return out
+    end
+    # split on commas outside quotes
+    string item = ""
+    bool quoted = false
+    bool escaped = false
+    for c in v do
+        if escaped do
+            escaped = false
+        else if quoted and c == '\\' do
+            escaped = true
+        else if c == '"' do
+            quoted = not quoted
+        else if c == ',' and not quoted do
+            out.push(unquote(item))
+            item = ""
+            continue
+        end
+        item += string(c)
+    end
+    out.push(unquote(item))
+    return out
+end
+
+# A value is written as is, or in double quotes when it has surrounding spaces, quotes, or
+# line breaks: `> greeting = "  hi\n"`.
+function quote(string value) returns string
+    bool plain = value == value.trim() and value != "" and not value.starts_with("\"") and
+        not value.contains("\n") and not value.contains("\r")
+    if plain do
+        return value
+    end
+    var escaped = value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+    escaped = escaped.replace("\r", "\\r").replace("\t", "\\t")
+    return "\"" + escaped + "\""
+end
+
+# The value an entry's text stands for: quoted values have their escapes read.
+function unquote(string text) returns string
+    var t = text.trim()
+    if t.length < 2 or not t.starts_with("\"") or not t.ends_with("\"") do
+        return t
+    end
+    var chars = t.slice(1, t.length - 1).chars()
+    string out = ""
+    int i = 0
+    while i < chars.length do
+        var c = chars[i]
+        if c == '\\' and i + 1 < chars.length do
+            i += 1
+            var e = chars[i]
+            if e == 'n' do
+                out += "\n"
+            else if e == 't' do
+                out += "\t"
+            else if e == 'r' do
+                out += "\r"
+            else do
+                out += string(e)
+            end
+        else do
+            out += string(c)
+        end
+        i += 1
+    end
+    return out
+end
+
+private function entry_line(string key, string value) returns string
+    return "> {key} = {quote(value)}\n"
+end
+
+# The heading level and text of a line (`## Name`), or level 0.
+private function heading_of(string line) returns string[]
+    var t = line.trim_start()
+    if line.length - t.length > 3 or not t.starts_with("#") do
+        return ["0", ""]
+    end
+    int level = 0
+    while level < t.length and t[level] == '#' do
+        level += 1
+    end
+    if level > 6 or (level < t.length and t[level] != ' ' and t[level] != '\t') do
+        return ["0", ""]
+    end
+    var name = t.slice(level).trim()
+    # an optional closing sequence: `## Name ##`
+    var stripped = name
+    while stripped.ends_with("#") do
+        stripped = stripped.slice(0, stripped.length - 1)
+    end
+    if stripped == "" or stripped.ends_with(" ") or stripped.ends_with("\t") do
+        name = stripped.trim()
+    end
+    return [string(level), name]
+end
+
+# The key and value of an entry line (`> key = value`), or an empty key.
+private function entry_of(string line) returns string[]
+    var t = line.trim_start()
+    if line.length - t.length > 3 or not t.starts_with(">") do
+        return ["", ""]
+    end
+    var body = t.slice(1)
+    var eq = body.find("=")
+    if eq < 0 do
+        return ["", ""]
+    end
+    var key = body.slice(0, eq).trim()
+    if key == "" do
+        return ["", ""]
+    end
+    return [key, unquote(body.slice(eq + 1))]
+end
+
+# The fence a line opens or closes (``` or ~~~, three or more), or "".
+private function fence_of(string line) returns string
+    var t = line.trim_start()
+    if line.length - t.length > 3 do
+        return ""
+    end
+    for mark in ["`", "~"] do
+        if t.starts_with(mark.repeat(3)) do
+            int n = 0
+            while n < t.length and string(t[n]) == mark do
+                n += 1
+            end
+            return mark.repeat(n)
+        end
+    end
+    return ""
+end
+
+private function split_lines(string text) returns string[]
+    # lines with their line breaks, so the source joins back exactly
+    string[] out = []
+    string current = ""
+    for c in text do
+        current += string(c)
+        if c == '\n' do
+            out.push(current)
+            current = ""
+        end
+    end
+    if current != "" do
+        out.push(current)
+    end
+    return out
+end
+
+# Reads .cw text.
+function parse(string text) returns Node
+    var doc = Node("document")
+    Node[] stack = [doc]
+    string block = ""
+    string fence = ""
+    var body = text
+    if body.starts_with("\u{FEFF}") do
+        # kept as the document's own raw text, so it is written back
+        doc.raw = "\u{FEFF}"
+        body = body.slice(1)
+    end
+    for line in split_lines(body) do
+        var bare = line.replace("\r", "").replace("\n", "")
+        if fence != "" do
+            block += line
+            var f = fence_of(bare)
+            if f != "" and f.starts_with(fence) and bare.trim() == f do
+                fence = ""
+            end
+            continue
+        end
+        var f = fence_of(bare)
+        if f != "" do
+            fence = f
+            block += line
+            continue
+        end
+        var h = heading_of(bare)
+        var e = entry_of(bare)
+        if h[0] == "0" and e[0] == "" do
+            block += line
+            continue
+        end
+        var top = stack[stack.length - 1]
+        if block != "" do
+            top.children.push(Node("text", "", "", 0, block))
+            block = ""
+        end
+        if h[0] != "0" do
+            var level = int(h[0])
+            while stack.length > 1 and stack[stack.length - 1].level >= level do
+                stack.pop()
+            end
+            var section = Node("section", h[1], "", level, line)
+            stack[stack.length - 1].children.push(section)
+            stack.push(section)
+        else do
+            top.children.push(Node("entry", e[0], e[1], 0, line))
+        end
+    end
+    if block != "" do
+        stack[stack.length - 1].children.push(Node("text", "", "", 0, block))
+    end
+    return doc
+end
+
+# Reads a .cw file.
+function confile(string path) returns Node
+    var doc = parse(fs.read(path))
+    doc.file = path
+    return doc
+end
+
+private function markup_source(element e, int depth) returns string
+    if e.tag == "cw-heading" do
+        var out = "#".repeat(min_level(depth + 1)) + " " + (e.get_attribute("name") ?? "") + "\n\n"
+        for child in e.children do
+            out += markup_source(child, depth + 1)
+        end
+        return out
+    end
+    if e.tag == "cw-rawstr" do
+        return e.text_content.trim() + "\n\n"
+    end
+    if e.tag == "cw-conf" do
+        return entry_line(e.get_attribute("key") ?? "", e.get_attribute("value") ?? "") + "\n"
+    end
+    string out = ""
+    for child in e.children do
+        out += markup_source(child, depth)
+    end
+    return out
+end
+
+# The .cw text of <cogwheel.cw> markup.
+function render(element e) returns string
+    return markup_source(e, 0).trim_end() + "\n"
+end
+
+# A document from <cogwheel.cw> markup.
+function from_markup(element e) returns Node
+    return parse(render(e))
+end

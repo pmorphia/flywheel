@@ -1238,6 +1238,228 @@ Object *fw_os_pipeline(Frame *frame, Object *commands, Object *input) {
     });
 }
 
+} // extern "C"
+namespace {
+// Background processes: os.start returns at once with the child's process ID. The runtime
+// remembers each child it started, so os.alive / os.wait can report its exit status after it
+// has been reaped.
+struct StartedChildren {
+    std::mutex lock;
+    std::map<int64_t, int64_t> exited; // pid -> exit status, once reaped
+#ifdef _WIN32
+    std::map<int64_t, HANDLE> handles;
+#endif
+};
+StartedChildren &startedChildren() {
+    static StartedChildren children;
+    return children;
+}
+#ifdef _WIN32
+int64_t startRequest(const ProcessRequest &request, const std::string &log) {
+    auto &stage = request.stages.at(0);
+    std::wstring command;
+    for (auto &arg : stage) {
+        processArgument(arg);
+        if (!command.empty())
+            command += L' ';
+        command += processQuote(processWide(arg));
+    }
+    std::wstring block;
+    for (auto &entry : childEnvironment(request))
+        block += processWide(entry) + L'\0';
+    block += L'\0';
+    SECURITY_ATTRIBUTES inherit{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    HANDLE out = INVALID_HANDLE_VALUE;
+    if (!log.empty()) {
+        out = CreateFileW(processWide(log).c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                          &inherit, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (out == INVALID_HANDLE_VALUE)
+            fail("cannot open log file '" + log + "'", "FileError");
+    }
+    HANDLE in = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit,
+                            OPEN_EXISTING, 0, nullptr);
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = in;
+    startup.hStdOutput = log.empty() ? GetStdHandle(STD_OUTPUT_HANDLE) : out;
+    startup.hStdError = log.empty() ? GetStdHandle(STD_ERROR_HANDLE) : out;
+    PROCESS_INFORMATION info{};
+    auto cwd = processWide(request.cwd);
+    BOOL ok = CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE,
+                             CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP, block.data(),
+                             request.cwd.empty() ? nullptr : cwd.c_str(), &startup, &info);
+    DWORD code = GetLastError();
+    if (out != INVALID_HANDLE_VALUE)
+        CloseHandle(out);
+    if (in != INVALID_HANDLE_VALUE)
+        CloseHandle(in);
+    if (!ok)
+        fail("cannot start process '" + stage[0] + "' (Windows error " + std::to_string(code) + ")",
+             "ProcessError");
+    CloseHandle(info.hThread);
+    auto &children = startedChildren();
+    std::lock_guard<std::mutex> hold(children.lock);
+    children.handles[info.dwProcessId] = info.hProcess;
+    return info.dwProcessId;
+}
+// The exit status of a started child, or nullopt while it runs; waits when `block`.
+std::optional<int64_t> childStatus(int64_t pid, bool block) {
+    auto &children = startedChildren();
+    HANDLE handle;
+    {
+        std::lock_guard<std::mutex> hold(children.lock);
+        if (auto it = children.exited.find(pid); it != children.exited.end())
+            return it->second;
+        auto it = children.handles.find(pid);
+        if (it == children.handles.end())
+            fail("process " + std::to_string(pid) + " was not started by os.start", "ProcessError");
+        handle = it->second;
+    }
+    if (WaitForSingleObject(handle, block ? INFINITE : 0) != WAIT_OBJECT_0)
+        return std::nullopt;
+    DWORD status = 0;
+    GetExitCodeProcess(handle, &status);
+    std::lock_guard<std::mutex> hold(children.lock);
+    children.exited[pid] = status;
+    CloseHandle(handle);
+    children.handles.erase(pid);
+    return static_cast<int64_t>(status);
+}
+bool signalChild(int64_t pid, int64_t) {
+    auto &children = startedChildren();
+    std::lock_guard<std::mutex> hold(children.lock);
+    auto it = children.handles.find(pid);
+    return it != children.handles.end() && TerminateProcess(it->second, 1);
+}
+int64_t ownProcessId() { return GetCurrentProcessId(); }
+#else
+int64_t startRequest(const ProcessRequest &request, const std::string &log) {
+    auto environment = childEnvironment(request);
+    std::vector<char *> envp;
+    for (auto &entry : environment)
+        envp.push_back(const_cast<char *>(entry.c_str()));
+    envp.push_back(nullptr);
+    auto &stage = request.stages.at(0);
+    if (stage.empty() || stage[0].empty())
+        fail("os.start needs a nonempty command", "ProcessError");
+    std::vector<char *> argv;
+    for (auto &arg : stage) {
+        processArgument(arg);
+        argv.push_back(const_cast<char *>(arg.c_str()));
+    }
+    argv.push_back(nullptr);
+    processArgument(request.cwd);
+    processArgument(log);
+    FdOwner out;
+    if (!log.empty()) {
+        out.reset(open(log.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644));
+        if (out.value < 0)
+            fail("cannot open log file '" + log + "': " + std::strerror(errno), "FileError");
+    }
+    FdOwner errorRead, errorWrite;
+    makePipe(errorRead, errorWrite);
+    flushProcessOutput();
+    pid_t child = fork();
+    if (child < 0)
+        fail("cannot start process: " + std::string(std::strerror(errno)), "ProcessError");
+    if (child == 0) {
+        // The child stays in this program's process group, so a Ctrl-C in the terminal reaches
+        // it too.
+        int null = open("/dev/null", O_RDONLY);
+        if (null >= 0)
+            dup2(null, 0);
+        if (out.value >= 0) {
+            dup2(out.value, 1);
+            dup2(out.value, 2);
+        }
+        if (!request.cwd.empty() && chdir(request.cwd.c_str()) != 0) {
+            int code = errno;
+            (void)!write(errorWrite.value, &code, sizeof(code));
+            _exit(127);
+        }
+        environ = envp.data();
+        execvp(argv[0], argv.data());
+        int code = errno;
+        (void)!write(errorWrite.value, &code, sizeof(code));
+        _exit(127);
+    }
+    errorWrite.reset();
+    int code = 0;
+    ssize_t n;
+    while ((n = read(errorRead.value, &code, sizeof(code))) < 0 && errno == EINTR) {
+    }
+    if (n == sizeof(code)) {
+        int status;
+        while (waitpid(child, &status, 0) == -1 && errno == EINTR) {
+        }
+        fail("cannot start process '" + stage[0] + "': " + std::strerror(code), "ProcessError");
+    }
+    return child;
+}
+std::optional<int64_t> childStatus(int64_t pid, bool block) {
+    auto &children = startedChildren();
+    {
+        std::lock_guard<std::mutex> hold(children.lock);
+        if (auto it = children.exited.find(pid); it != children.exited.end())
+            return it->second;
+    }
+    int status = 0;
+    pid_t r;
+    while ((r = waitpid(static_cast<pid_t>(pid), &status, block ? 0 : WNOHANG)) == -1 && errno == EINTR) {
+    }
+    if (r == 0)
+        return std::nullopt;
+    if (r < 0) {
+        if (errno == ECHILD) {
+            std::lock_guard<std::mutex> hold(children.lock);
+            if (auto it = children.exited.find(pid); it != children.exited.end())
+                return it->second;
+        }
+        fail("process " + std::to_string(pid) + " is not a child of this program", "ProcessError");
+    }
+    int64_t code = WIFSIGNALED(status) ? -WTERMSIG(status) : WEXITSTATUS(status);
+    std::lock_guard<std::mutex> hold(children.lock);
+    children.exited[pid] = code;
+    return code;
+}
+bool signalChild(int64_t pid, int64_t signal) {
+    if (pid <= 0)
+        fail("os.kill needs a process ID above 0", "ProcessError");
+    // the process group it leads, if it made one (as shells and daemons do), else the process
+    return (pid != getpgrp() && kill(-static_cast<pid_t>(pid), static_cast<int>(signal)) == 0) ||
+           kill(static_cast<pid_t>(pid), static_cast<int>(signal)) == 0;
+}
+int64_t ownProcessId() { return getpid(); }
+#endif
+} // namespace
+extern "C" {
+int64_t fw_os_start(Object *process, Object *log) {
+    return nativeBoundary([&] { return startRequest(processRequest(process), requireString(log)->text); });
+}
+int64_t fw_os_start_command(Object *command, Object *log) {
+    return nativeBoundary([&] {
+        ProcessRequest request;
+        std::vector<std::string> stage;
+        for (auto &arg : itemsOf(command))
+            stage.push_back(arg.object ? arg.object->text : "");
+        if (stage.empty())
+            fail("os.start needs a nonempty command array", "ProcessError");
+        request.stages.push_back(std::move(stage));
+        return startRequest(request, requireString(log)->text);
+    });
+}
+int64_t fw_os_alive(int64_t pid) {
+    return nativeBoundary([&] { return int64_t{!childStatus(pid, false).has_value()}; });
+}
+int64_t fw_os_wait(int64_t pid) {
+    return nativeBoundary([&] { return *childStatus(pid, true); });
+}
+int64_t fw_os_kill(int64_t pid, int64_t signal) {
+    return nativeBoundary([&] { return int64_t{signalChild(pid, signal)}; });
+}
+int64_t fw_os_pid() { return ownProcessId(); }
+
 // net ------------------------------------------------------------------------------------------
 Object *fw_net_resolve(Frame *frame, Object *host) {
     return nativeBoundary([&] {

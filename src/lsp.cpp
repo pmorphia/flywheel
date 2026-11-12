@@ -720,7 +720,7 @@ class Navigator {
                       "exp", "log", "log10", "log2", "pow", "floor", "ceil", "round", "trunc",
                       "abs", "min", "max", "clamp", "random", "random_int", "seed", "is_nan",
                       "is_finite", "PI", "TAU", "E", "INF", "NAN"}},
-            {"os", {"env", "args", "exit", "run", "process", "pipeline", "shell", "command"}},
+            {"os", {"env", "args", "exit", "run", "process", "pipeline", "shell", "command", "start", "alive", "wait", "kill", "pid"}},
             {"io", {"write", "write_error", "read_line", "read_all", "open"}},
             {"net", {"resolve", "connect", "listen"}},
             {"thread", {"spawn", "channel", "mutex", "cores"}},

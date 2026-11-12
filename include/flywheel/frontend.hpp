@@ -27,6 +27,9 @@ struct Function;
 struct Expr {
     std::string kind, text;
     bool grouped = false, outer = false;
+    // element: written without its closing tag (`<conf key="a">`), closed by an enclosing
+    // element's closing tag. Only void tags and components may be; see hoistVoidChildren.
+    bool implicitClose = false;
     Location loc;
     std::vector<std::unique_ptr<Expr>> args;
     std::vector<std::string> names;

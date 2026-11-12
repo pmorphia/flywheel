@@ -73,6 +73,7 @@ struct HttpConnection {
     std::unique_ptr<TlsSession> session; // declared after socket: closed before it
     bool handshaken = false, closeAfterWrite = false, dead = false;
     bool busy = false; // a worker is handling this connection's current request
+    std::string remote; // the client's IP address, as req.remote
     std::chrono::steady_clock::time_point active = std::chrono::steady_clock::now();
     HttpConnection(SocketOwner &&socket, HttpServer *server)
         : socket(std::move(socket)), server(server) {}
@@ -413,7 +414,7 @@ std::string serializeResponse(const HttpResponse &r, bool head, bool keepAlive) 
     return out;
 }
 struct ParsedRequest {
-    std::string method, target, version, body;
+    std::string method, target, version, body, remote;
     std::vector<std::pair<std::string, std::string>> headers;
     bool keepAlive = true;
 };
@@ -513,7 +514,7 @@ int parseRequest(std::string &input, ParsedRequest &request) {
 }
 Object *nativeRequest(Frame *frame) {
     return nativeInstance(frame, "web.request",
-                          {"method", "path", "query", "headers", "body", "params", "form"});
+                          {"method", "path", "query", "headers", "body", "params", "form", "remote"});
 }
 // Runs the matching route. Returns false when a handler raised an error; it remains pending.
 bool handleRequest(HttpServer &server, ParsedRequest &request, HttpResponse &response) {
@@ -580,6 +581,7 @@ bool handleRequest(HttpServer &server, ParsedRequest &request, HttpResponse &res
         object->slots.push_back(text(&frame, request.body));
         for (auto map : {paramMap, form})
             object->slots.push_back(reference(map));
+        object->slots.push_back(text(&frame, request.remote));
         result = reinterpret_cast<Handler1>(selected->handler->code)(selected->handler, object);
     }
     struct ResultOwner {
@@ -643,6 +645,7 @@ bool processConnection(HttpConnection &c, HttpWorkers *workers) {
     while (!c.closeAfterWrite && !c.busy) {
         auto request = std::make_shared<ParsedRequest>();
         int status = parseRequest(c.input, *request);
+        request->remote = c.remote;
         if (status == 0)
             return true;
         HttpResponse response;
@@ -779,7 +782,10 @@ bool serveLoop(HttpRuntime &state) {
                 continue;
             auto &server = *state.servers[i];
             while (true) {
-                SocketOwner client(accept(server.socket.value, nullptr, nullptr));
+                sockaddr_storage peer{};
+                socklen_t peerLength = sizeof(peer);
+                SocketOwner client(
+                    accept(server.socket.value, reinterpret_cast<sockaddr *>(&peer), &peerLength));
                 if (client.value == invalidSocket)
                     break;
                 setNonBlocking(client.value);
@@ -788,6 +794,10 @@ bool serveLoop(HttpRuntime &state) {
                 setsockopt(client.value, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, sizeof(noSignal));
 #endif
                 auto connection = std::make_unique<HttpConnection>(std::move(client), &server);
+                char host[NI_MAXHOST] = {};
+                if (getnameinfo(reinterpret_cast<sockaddr *>(&peer), peerLength, host, sizeof(host),
+                                nullptr, 0, NI_NUMERICHOST) == 0)
+                    connection->remote = host;
                 if (!server.tls.empty()) {
                     connection->session =
                         tlsAccept(*server.tls.back(), connection->socket.value);

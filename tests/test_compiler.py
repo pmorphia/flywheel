@@ -4317,5 +4317,50 @@ print web.static("/assets", "public", {port})
         missing.exception.close()
 
 
+# Void tags and components without `attr inner` may leave out their closing tag.
+POSITIVE.update({
+    "markup_implicit_void_close": (
+        'elements kv\n    kv-list: *\n    kv-item void: key\nend\n'
+        'component Item = <kv-item key={attr key} />\n'
+        'component Box = <kv-list>{attr inner}</kv-list>\n'
+        'print <kv-list><kv-item key="a"><kv-item key="b"></kv-list>\n'
+        'print <Box>x<Item key="1"><Item key="2">y</Box>\n',
+        '<kv-list><kv-item key="a"></kv-item><kv-item key="b"></kv-item></kv-list>\n'
+        '<kv-list>x<kv-item key="1"></kv-item><kv-item key="2"></kv-item>y</kv-list>\n'),
+    "markup_component_nested_in_itself": (
+        'import html.*\ncomponent Box = <div class="box">{attr inner}</div>\n'
+        'print <Box><Box><Box>x</Box></Box></Box>\n',
+        '<div class="box"><div class="box"><div class="box">x</div></div></div>\n'),
+    "cogwheel_library": (
+        'import cogwheel\n'
+        'var doc = cogwheel.parse("Intro\\n\\n# Main\\n\\n## User\\n\\n> name = danny\\n> port = 80\\n\\n```\\n> no = entry\\n```\\n")\n'
+        'print doc["#Main"]["#User"][">name"], doc.getById("User").get_int("port") + 1, doc.selectorAll()[">port"]\n'
+        'print doc.has(">no"), doc.selectorAll().has(">no"), doc.to_map()\n'
+        'doc.getById("User").set("name", "  x ")\n'
+        'print doc.getById("User").entries()[0].source().trim()\n'
+        'var m = cogwheel.from_markup(<cogwheel.cw><cogwheel.heading name="A"><cogwheel.rawstr>Hi</cogwheel.rawstr><cogwheel.conf key="k" value="v"></cogwheel.heading></cogwheel.cw>)\n'
+        'print m["#A"].get("k"), m["#A"].text()\n',
+        'danny 81 80\nfalse false {"Main.User.name": "danny", "Main.User.port": "80"}\n> name = "  x "\nv Hi\n'),
+})
+if os.name != "nt":
+    POSITIVE.update({
+        "os_background_processes": (
+            'import os\n'
+            'var done = os.start(["sh", "-c", "exit 4"])\n'
+            'print os.wait(done), os.alive(done), os.wait(done)\n'
+            'var p = os.process(["sh", "-c", "sleep 5"])\n'
+            'var slow = p.start()\n'
+            'print os.alive(slow), os.kill(slow), os.wait(slow), os.pid() > 0\n'
+            'try\n    os.start(["/no/such/program"])\ncatch ProcessError e\n    print e.message\nend\n',
+            '4 false 4\ntrue true -15 true\n'
+            "cannot start process '/no/such/program': No such file or directory\n"),
+    })
+NEGATIVE.update({
+    "markup_implicit_close_not_void": (
+        'import html.*\nprint <div><p>text</div>\n',
+        "<p> needs a closing tag </p>"),
+})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

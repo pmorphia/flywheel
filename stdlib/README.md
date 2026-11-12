@@ -27,7 +27,7 @@ Libraries are compiler-resolved declarations backed by C++ runtime functions; no
 | `compress` | gzip, zlib, deflate, CRC-32, zip archives |
 | `sqlite` | SQLite 3 databases |
 | `toml`, `yaml` | configuration formats, parsed to `json.value` |
-| `csv`, `url`, `log`, `args`, `bigint`, `decimal`, `random`, `metric`, `imperial` | [library modules written in Flywheel](#library-modules) |
+| `csv`, `url`, `log`, `args`, `bigint`, `decimal`, `random`, `metric`, `imperial`, `cogwheel` | [library modules written in Flywheel](#library-modules) |
 
 ## Strings
 
@@ -193,7 +193,7 @@ Strings carry arbitrary bytes, so binary protocols work, but `length` counts UTF
 
 ## os
 
-`env(name)` reads an environment variable (empty when unset), `args()` returns program arguments, and `exit(code)` ends the program. `run`, `process`, `pipeline`, `shell`, and `command` are described in [input and processes](../docs/input-processes.md).
+`env(name)` reads an environment variable (empty when unset), `args()` returns program arguments, `exit(code)` ends the program, and `pid()` is this program's process ID. `run`, `process`, `pipeline`, `shell`, and `command`, and the background processes of `start`, `alive`, `wait`, and `kill`, are described in [input and processes](../docs/input-processes.md).
 
 ## testing
 
@@ -219,7 +219,7 @@ web.serve("/users/:id", user, 8000, "0.0.0.0")
 
 A handler takes no arguments or one `web.request`, and returns `element`, `fragment`, `string` (sent as `text/plain`), or `web.response`. Handlers can be named functions or lambdas. A pattern segment `:name` captures one path segment into `req.params["name"]`, and a trailing `*` captures the rest of the path. Unknown paths return 404; a known path with the wrong method returns 405 with an `Allow` header.
 
-`web.request` has `method`, `path` (percent-decoded), `query`, `headers` (lower-cased names; repeats joined with `, `), `body`, `params`, and `form` (parsed from `application/x-www-form-urlencoded` bodies). `web.response` has `status` (100..599), `body`, and `headers`. `web.text`, `web.html` (accepts markup), `web.json` (a string or `json.value`), and `web.redirect` (sets `location`, default status 302) build responses with an optional status.
+`web.request` has `method`, `path` (percent-decoded), `query`, `headers` (lower-cased names; repeats joined with `, `), `body`, `params`, `form` (parsed from `application/x-www-form-urlencoded` bodies), and `remote` (the client's IP address, such as `127.0.0.1` or `::1`). `web.response` has `status` (100..599), `body`, and `headers`. `web.text`, `web.html` (accepts markup), `web.json` (a string or `json.value`), and `web.redirect` (sets `location`, default status 302) build responses with an optional status.
 
 `web.tls(certificate_file, key_file, port, host)` serves that port over HTTPS using PEM files and returns its `https://` URL; register routes on the same port afterwards. TLS (1.2 and 1.3) uses the Mbed TLS library built into the runtime; RSA and EC keys are supported, and a key that does not match the certificate raises `FileError`.
 
@@ -320,6 +320,32 @@ YAML support covers block mappings and sequences, flow collections, plain, quote
 ## Library modules
 
 These modules are written in Flywheel and built into the compiler; import them like any module.
+
+### cogwheel
+
+[Cogwheel](https://github.com/pmorphia/cogwheel) configuration files (`.cw`): Markdown where
+headings are sections and quote lines with `=` are entries (`> name = danny`).
+
+```flywheel
+import cogwheel
+var conf = cogwheel.confile("main.cw")
+print conf["#Main"]["#User Section"][">name"]             # a section, then an entry
+print conf.getById("User Section").get("email")           # a section at any depth
+print conf.selectorAll()[">name"]                         # an entry at any depth
+conf.getById("User Section").set("name", "ann")
+conf.save()                                                # rewrites only the changed line
+```
+
+`cogwheel.parse(text)` and `cogwheel.confile(path)` return a `cogwheel.Node` (`kind`, `name`,
+`value`, `level`, `children`). `node["#Name"]` and `node[">key"]` (or `node["key"]`) search the
+direct children and raise `KeyError`; `find` returns `Node?`, `has` a bool, `find_all` every
+match. `get`, `get_or`, `get_int`, `get_float`, `get_bool`, and `get_list` read values
+(`ValueError` when they don't convert); `sections()`, `entries()`, `keys()`, `text()`, and
+`to_map()` list contents; `set`, `add_section`, `add_text`, and `remove` change it; `source()`,
+`string(node)`, and `save(path = "")` write `.cw` text (an entry formats as its value). Markup
+builds documents: `cogwheel.from_markup(<cogwheel.cw><cogwheel.heading name="Main"><cogwheel.conf
+key="name" value="danny"></cogwheel.heading></cogwheel.cw>)`, with `rawstr` for text, and
+`cogwheel.render(element)` writes one as `.cw` text.
 
 ### csv
 

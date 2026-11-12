@@ -178,8 +178,11 @@ size_t markupCommentEnd(const std::string &s, size_t p) {
     return end + 3;
 }
 size_t markupEnd(const std::string &s, size_t p) {
+    // Open tags, innermost last. A closing tag closes the innermost open element of its name,
+    // and with it the elements opened inside that were never closed (`<conf key="a">` inside
+    // `<heading>...</heading>`); the parser and checker decide whether that was allowed.
+    std::vector<std::string> open;
     int depth = 0;
-    std::vector<std::string> open; // unclosed tags, for the diagnostic
     for (; p < s.size(); ++p) {
         if (s[p] == '{' && p + 1 < s.size() && s[p + 1] == '{') {
             ++p;
@@ -205,17 +208,20 @@ size_t markupEnd(const std::string &s, size_t p) {
         }
         if (q == s.size())
             break;
-        size_t nameEnd = p + 1;
+        size_t nameEnd = closing ? p + 2 : p + 1;
         while (nameEnd < q && (part(s[nameEnd]) || s[nameEnd] == '-' || s[nameEnd] == ':' || s[nameEnd] == '.'))
             ++nameEnd;
-        auto tag = s.substr(p + 1, nameEnd - p - 1);
         if (closing) {
-            --depth;
-            if (!open.empty())
+            auto tag = s.substr(p + 2, nameEnd - p - 2);
+            auto it = std::find(open.rbegin(), open.rend(), tag);
+            if (it != open.rend() && !tag.empty())
+                open.erase(std::next(it).base(), open.end());
+            else if (!open.empty())
                 open.pop_back();
-        } else if ((q == 0 || s[q - 1] != '/') && !voidTag(tag)) {
+            depth = static_cast<int>(open.size());
+        } else if ((q == 0 || s[q - 1] != '/') && !voidTag(s.substr(p + 1, nameEnd - p - 1))) {
+            open.push_back(s.substr(p + 1, nameEnd - p - 1));
             ++depth;
-            open.push_back(tag);
         }
         if (depth == 0)
             return q;
@@ -988,6 +994,7 @@ EP Parser::markup() {
         p = end + 1;
         return value;
     };
+    std::vector<std::string> ancestors; // tags of the elements enclosing the one being read
     std::function<EP()> element = [&]() -> EP {
         if (p >= s.size() || s[p++] != '<')
             throw Error(token.loc, "expected opening tag");
@@ -1071,6 +1078,7 @@ EP Parser::markup() {
             }
             if (s.compare(p, 2, "</") == 0) {
                 flush();
+                size_t start = p;
                 p += 2;
                 std::string close;
                 if (p < s.size() && s[p] != '>')
@@ -1078,14 +1086,24 @@ EP Parser::markup() {
                 space();
                 if (p == s.size() || s[p++] != '>')
                     throw Error(token.loc, "expected closing '>'");
-                if (close != tag)
+                if (close != tag) {
+                    // The closing tag of an enclosing element ends this one too, as in HTML.
+                    if (!tag.empty() && !close.empty() &&
+                        std::find(ancestors.begin(), ancestors.end(), close) != ancestors.end()) {
+                        e->implicitClose = true;
+                        p = start;
+                        return e;
+                    }
                     throw Error(token.loc, "mismatched closing tag: expected </" + tag +
                                                ">, got </" + close + ">");
+                }
                 return e;
             }
             if (s[p] == '<') {
                 flush();
+                ancestors.push_back(tag);
                 e->args.push_back(element());
+                ancestors.pop_back();
             } else if ((s[p] == '{' || s[p] == '}') && p + 1 < s.size() && s[p + 1] == s[p]) {
                 text += s[p];
                 p += 2;
@@ -2784,6 +2802,7 @@ EP clone(const Expr &e) {
     out->text = e.text;
     out->grouped = e.grouped;
     out->outer = e.outer;
+    out->implicitClose = e.implicitClose;
     out->loc = e.loc;
     out->names = e.names;
     for (auto &a : e.args)

@@ -73,3 +73,33 @@ On POSIX all stages run at once. On Windows stages run one after another, each f
 Both wait for the child and inherit standard input, output, error, environment, and working directory, returning the exit status. Flywheel flushes pending output before launching any process.
 
 Every argument is passed separately: spaces, empty strings, quotes, Unicode, and shell punctuation remain part of that argument, and nothing is expanded or split. Only `os.shell` interprets shell syntax. Embedded NUL bytes are rejected. Invalid arguments and launch/wait failures raise `ProcessError`; a nonzero exit is returned normally.
+
+## Background processes
+
+`os.start(command, log = "")` starts a program and returns its process ID at once, while the
+program runs on. `command` is a `string[]` or an `os.process` (its `cwd`, `env`, and
+`inherit_env` apply; `p.start(log)` is the same). Standard input is empty, and standard output
+and error go to `log` (appended; created if missing) or, when it is `""`, to this program's own.
+
+```flywheel
+import os
+import time
+var server = os.start(["python3", "-m", "http.server", "8000"], "server.log")
+time.sleep 2
+print os.alive(server)           # true while it runs
+os.kill(server)                  # SIGTERM (15); os.kill(server, 9) is SIGKILL
+print os.wait(server)            # -15: its exit status, negative for a signal
+```
+
+| Function | Result |
+|---|---|
+| `os.alive(pid)` | whether it is still running; an ended child is reaped and its status kept |
+| `os.wait(pid)` | waits for it to end and returns its exit status (again on later calls) |
+| `os.kill(pid, signal = 15)` | sends a signal (to the process group it leads, if any); whether it was sent. On Windows any signal terminates it |
+| `os.pid()` | this program's own process ID |
+
+`alive` and `wait` accept the IDs of children this program started; others raise
+`ProcessError`, as does a program that cannot be started. Started programs stay in this
+program's process group, so a Ctrl-C in the terminal reaches them too, and they keep running
+if this program ends first.
+

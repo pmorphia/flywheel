@@ -1117,6 +1117,7 @@ end
     string body = ""
     map<string, string> params = {}
     map<string, string> form = {}
+    string remote = ""
 end
 class Response
     int status = 200
@@ -2089,8 +2090,48 @@ end
             child = stringify(child);
         call("fw_child", b.getVoidTy(), {parent.v, child.v});
     }
+    static bool usesInner(const Expr &e) {
+        if (e.kind == "attr" && e.text == "inner")
+            return true;
+        for (auto &a : e.args)
+            if (a && usesInner(*a))
+                return true;
+        return false;
+    }
+    // Void tags take no children, so they may be written without a closing tag. A component is
+    // void when its template never uses `attr inner`.
+    bool voidTag(const std::string &tag) {
+        if (auto it = p.components.find(tag); it != p.components.end())
+            return !usesInner(*it->second);
+        auto rules = tag.empty() ? nullptr : tagRules(tag);
+        return rules && rules->isVoid;
+    }
+    // An element written without its closing tag, `<conf key="a">`, read everything up to the
+    // enclosing closing tag as its children; for a void tag those are its following siblings.
+    void hoistVoidChildren(Expr &e) {
+        for (size_t i = e.names.size(); i < e.args.size(); ++i) {
+            auto &c = e.args[i];
+            if (!c || c->kind != "element" || !c->implicitClose)
+                continue;
+            if (!voidTag(c->text)) {
+                location = c->loc;
+                error("<" + c->text + "> needs a closing tag </" + c->text +
+                      ">; only void tags and components without `attr inner` may leave it out");
+            }
+            c->implicitClose = false;
+            std::vector<EP> moved;
+            for (size_t j = c->names.size(); j < c->args.size(); ++j)
+                moved.push_back(std::move(c->args[j]));
+            c->args.resize(c->names.size());
+            e.args.insert(e.args.begin() + static_cast<std::ptrdiff_t>(i) + 1,
+                          std::make_move_iterator(moved.begin()),
+                          std::make_move_iterator(moved.end()));
+        }
+    }
     void checkTemplate(Expr &e) {
         location = e.loc;
+        if (e.kind == "element")
+            hoistVoidChildren(e);
         if (e.kind == "element" && !p.components.count(e.text)) {
             auto rules = tagRules(e.text);
             if (!e.text.empty() && !rules)
@@ -3709,12 +3750,11 @@ Val Compiler::value(Expr &e, Ty expected) {
         return {phi, Ty{"bool"}};
     }
     if (e.kind == "element") {
+        hoistVoidChildren(e);
         if (p.components.count(e.text)) {
             if (p.voidComponents.count(e.text) && e.args.size() != e.names.size())
                 error("void component <" + displayName(e.text) + "> cannot have children");
             instantiatedComponents.insert(e.text);
-            if (!componentStack.insert(e.text).second)
-                error("recursive component expansion is not supported");
             std::map<std::string, Val> supplied;
             for (size_t i = 0; i < e.names.size(); ++i)
                 supplied[e.names[i]] = value(*e.args[i]);
@@ -3728,6 +3768,10 @@ Val Compiler::value(Expr &e, Ty expected) {
             supplied["inner"] = inner;
             if (!supplied.count("style"))
                 supplied["style"] = empty;
+            // Children and attributes are values of the caller, so a component may be nested
+            // in itself (<Item><Item /></Item>); only its own template may not use it.
+            if (!componentStack.insert(e.text).second)
+                error("recursive component expansion is not supported");
             attrs.push_back(std::move(supplied));
             componentNames.push_back(e.text);
             auto result = value(*p.components.at(e.text));
@@ -6230,6 +6274,37 @@ std::optional<Val> Compiler::stdlibCall(const std::string &name, std::vector<Val
             }
             return object("fw_os_run", {process.v}, Ty{"os.result"});
         }
+        if (function == "start") {
+            // os.start(command, log = ""): starts a program in the background and returns its
+            // process ID; output goes to the log file (appended) or this program's own.
+            arity(1, 2);
+            auto log = args.size() == 2 ? str(1) : literal("").v;
+            if (args[0].t.name == "os.process")
+                return Val{call("fw_os_start", b.getInt64Ty(), {args[0].v, log}), Ty{"i64"}};
+            if (args[0].t.name != "string[]")
+                error("os.start expects a command (string[]) or an os.process");
+            return Val{call("fw_os_start_command", b.getInt64Ty(), {args[0].v, log}), Ty{"i64"}};
+        }
+        if (function == "alive") {
+            arity(1, 1);
+            return Val{b.CreateICmpNE(call("fw_os_alive", b.getInt64Ty(), {integer(0)}), i64(0)),
+                       Ty{"bool"}};
+        }
+        if (function == "wait") {
+            arity(1, 1);
+            return Val{call("fw_os_wait", b.getInt64Ty(), {integer(0)}), Ty{"i64"}};
+        }
+        if (function == "kill") {
+            arity(1, 2);
+            return Val{b.CreateICmpNE(call("fw_os_kill", b.getInt64Ty(),
+                                           {integer(0), args.size() == 2 ? integer(1) : i64(15)}),
+                                      i64(0)),
+                       Ty{"bool"}};
+        }
+        if (function == "pid") {
+            arity(0, 0);
+            return Val{call("fw_os_pid", b.getInt64Ty(), {}), Ty{"i64"}};
+        }
         if (function == "pipeline") {
             arity(1, 2);
             if (args[0].t.name != "string[][]")
@@ -6394,6 +6469,11 @@ std::optional<Val> Compiler::resourceMethod(Val receiver, const std::string &met
         return Val{phi, optional};
     }
     if (t == "os.process") {
+        if (method == "start") {
+            arity(0, 1);
+            auto log = supplied == 1 ? argument(1, Ty{"string"}) : literal("").v;
+            return Val{call("fw_os_start", b.getInt64Ty(), {receiver.v, log}), Ty{"i64"}};
+        }
         if (method != "run")
             return std::nullopt;
         arity(0, 0);
