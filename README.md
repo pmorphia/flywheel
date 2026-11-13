@@ -15,13 +15,13 @@ ctest --test-dir build --output-on-failure
 
 ### Dependencies
 
-| | Linux | Windows |
-|---|---|---|
-| Build | CMake 3.24+, C++20 compiler, LLVM 21–23 dev libraries | Same, from an x64 Visual Studio developer shell with an MSVC build of LLVM |
-| `flywheel build` | System linker and C++ runtime (mold/lld used if found); `flywheel run` needs none | MSVC linker |
-| Desktop windows (optional) | GTK + WebKitGTK dev packages, e.g. `libgtk-3-dev libwebkit2gtk-4.1-dev` | Downloaded at build time; users need the WebView2 runtime |
+| | Linux | macOS | Windows |
+|---|---|---|---|
+| Build | CMake 3.24+, C++20 compiler, LLVM 21–23 dev libraries | Same, with the Xcode Command Line Tools and LLVM from Homebrew (`-DLLVM_DIR="$(brew --prefix llvm)/lib/cmake/llvm"`) | Same, from an x64 Visual Studio developer shell with an MSVC build of LLVM |
+| `flywheel build` | System linker and C++ runtime (mold/lld used if found); `flywheel run` needs none | System linker (Xcode Command Line Tools) | MSVC linker |
+| Desktop windows (optional) | GTK + WebKitGTK dev packages, e.g. `libgtk-3-dev libwebkit2gtk-4.1-dev` | Downloaded at build time; uses the system WKWebView | Downloaded at build time; users need the WebView2 runtime |
 
-SQLite 3.54.1 and Mbed TLS 4.1.1 (HTTPS) are compiled into the runtime, so programs need no system SQLite or OpenSSL. Configuring downloads them once from pinned, hash-checked releases; for an offline build, set `FETCHCONTENT_SOURCE_DIR_SQLITE` and `FETCHCONTENT_SOURCE_DIR_MBEDTLS` to extracted copies. The HTTPS client trusts the system's root certificates (the Windows store, or the distribution's CA bundle on Linux). Python 3 is optional and only runs the test suite. macOS is not supported. See [desktop windows](docs/desktop.md) for backend options.
+SQLite 3.54.1 and Mbed TLS 4.1.1 (HTTPS) are compiled into the runtime, so programs need no system SQLite or OpenSSL. Configuring downloads them once from pinned, hash-checked releases; for an offline build, set `FETCHCONTENT_SOURCE_DIR_SQLITE` and `FETCHCONTENT_SOURCE_DIR_MBEDTLS` to extracted copies. The HTTPS client trusts the system's root certificates (the Windows store, `/etc/ssl/cert.pem` on macOS, or the distribution's CA bundle on Linux). Python 3 is optional and only runs the test suite. See [desktop windows](docs/desktop.md) for backend options.
 
 ## Use
 

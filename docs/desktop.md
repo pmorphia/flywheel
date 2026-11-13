@@ -106,6 +106,7 @@ The `FLYWHEEL_DESKTOP` CMake setting accepts `AUTO` (default), `ON`, or `OFF`. `
 
 - **Linux:** install GTK and WebKitGTK development packages; the backend (`runtime/desktop_gtk.cpp`) uses them directly and the build downloads nothing. The first of `webkit2gtk-4.1` (GTK 3), `webkitgtk-6.0` (GTK 4), or `webkit2gtk-4.0` found by pkg-config is used. Debian/Ubuntu: `libgtk-3-dev libwebkit2gtk-4.1-dev`; Arch Linux: `gtk3 webkit2gtk-4.1`. Running a window needs a graphical session.
 - **Windows:** use the native C++ toolchain. The build downloads webview **0.12.0** from its official source archive, verifies its SHA-256, and its CMake obtains the WebView2 SDK; for an offline build, provide an existing checkout with `-DFETCHCONTENT_SOURCE_DIR_WEBVIEW=/path/to/webview`. End users need the WebView2 runtime installed. This path is untested.
+- **macOS:** the build downloads the same webview **0.12.0** archive, which uses the system's WKWebView, so end users need nothing extra.
 
 `cmake --install build --prefix /chosen/prefix` installs the backend beside the runtime archive in `lib`. The compiler records its path in generated applications; `FLYWHEEL_DESKTOP_BACKEND` overrides it. The backend exports the versioned entry point `fw_desktop_run_v2`, separate from the core runtime ABI.
 

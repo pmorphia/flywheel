@@ -58,6 +58,10 @@ To pass options, run it as a scriptblock:
 
 The script also adds `flywheel-shell`, which opens a prompt with the Visual Studio environment that `flywheel run` and `flywheel build` need. Run Flywheel programs from there.
 
+## macOS
+
+Build from source as described in the [README](README.md#build). Install the Xcode Command Line Tools (`xcode-select --install`) and the build tools with Homebrew (`brew install cmake ninja llvm`), then point CMake at Homebrew's LLVM with `-DLLVM_DIR="$(brew --prefix llvm)/lib/cmake/llvm"`. Desktop windows need no extra packages.
+
 ## Check it works
 
 Open a new terminal, then:

@@ -243,7 +243,7 @@ std::unique_ptr<TlsSession> tlsAccept(const TlsServerConfig &config, Socket sock
     return session;
 }
 // Trusted roots for the HTTP client: SSL_CERT_FILE / SSL_CERT_DIR when set, otherwise the
-// system store (Windows) or the distribution's CA bundle (Linux and BSDs).
+// system store (Windows) or the system CA bundle (macOS, Linux, and BSDs).
 void loadRoots(mbedtls_x509_crt &roots) {
     auto loaded = [&] { return roots.raw.len > 0; };
     if (auto file = std::getenv("SSL_CERT_FILE"); file && *file)
