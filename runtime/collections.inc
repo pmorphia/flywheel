@@ -170,7 +170,7 @@ std::string formatObject(Object *object, bool nested, std::set<Object *> &active
         {
             ObjectGuard guard(object);
             keys = object->keys;
-            slots = object->slots;
+            slots = object->slots();
         }
         out = "{";
         for (size_t i = 0; i < slots.size() && i < keys.size(); ++i) {
@@ -315,12 +315,12 @@ bool primitiveType(const CastType &type) {
 }
 Slot unboxed(const Slot &value) {
     if (value.kind == Slot::Reference && value.object && value.object->kind == Object::Box)
-        return value.object->slots.at(0);
+        return value.object->slots().at(0);
     return value;
 }
 Slot boxed(Frame *frame, const Slot &value) {
     auto box = managed(frame, Object::Box);
-    box->slots.push_back(value);
+    box->slots().push_back(value);
     return reference(box);
 }
 bool sequenceObject(Object *value) {
@@ -446,7 +446,7 @@ Slot castValue(Frame *frame, const Slot &value, const CastType &source, const Ca
     std::vector<Slot> slots, keys;
     if (value.kind == Slot::Reference && value.object && value.object->kind != Object::String) {
         ObjectGuard guard(value.object);
-        slots = value.object->slots;
+        slots = value.object->slots();
         keys = value.object->keys;
     }
     if (target.kind == CastType::Map) {
@@ -465,7 +465,7 @@ Slot castValue(Frame *frame, const Slot &value, const CastType &source, const Ca
             if (index < 0)
                 appendKey(output, convertedKey, convertedValue);
             else
-                output->slots[static_cast<size_t>(index)] = convertedValue;
+                output->slots()[static_cast<size_t>(index)] = convertedValue;
         };
         if (source.kind == CastType::Map) {
             for (size_t i = 0; i < slots.size(); ++i)
@@ -493,7 +493,7 @@ Slot castValue(Frame *frame, const Slot &value, const CastType &source, const Ca
         if (source.kind == CastType::Map) {
             for (size_t i = 0; i < slots.size(); ++i) {
                 auto pair = managed(frame, Object::Tuple);
-                pair->slots = {keys[i], slots[i]};
+                pair->slots() = {keys[i], slots[i]};
                 items.push_back(reference(pair));
                 types.push_back(
                     castType("[" + source.parts[0].text + "," + source.parts[1].text + "]"));
@@ -511,9 +511,9 @@ Slot castValue(Frame *frame, const Slot &value, const CastType &source, const Ca
             fail("tuple cast length mismatch", "CastError");
         auto output =
             managed(frame, target.kind == CastType::Array ? Object::Array : Object::Tuple);
-        output->slots.reserve(items.size());
+        output->slots().reserve(items.size());
         for (size_t i = 0; i < items.size(); ++i)
-            output->slots.push_back(
+            output->slots().push_back(
                 castValue(frame, items[i], types[i], itemType(target, i), false, depth + 1));
         return reference(output);
     }
@@ -555,8 +555,8 @@ Slot castValue(Frame *frame, const Slot &value, const CastType &source, const Ca
     if (target.kind == CastType::Result && source.kind == CastType::Result) {
         auto result = managed(frame, Object::Result);
         bool ok = slots[0].integer != 0;
-        result->slots.push_back(slots[0]);
-        result->slots.push_back(castValue(frame, slots[1], source.parts[ok ? 0 : 1],
+        result->slots().push_back(slots[0]);
+        result->slots().push_back(castValue(frame, slots[1], source.parts[ok ? 0 : 1],
                                           target.parts[ok ? 0 : 1], false, depth + 1));
         return reference(result);
     }
@@ -596,7 +596,7 @@ Object *fw_instance(Frame *frame, int64_t count, const char *type, const char *n
         result->classId = type;
         result->typeName = type;
         result->text = name;
-        result->slots.resize(static_cast<size_t>(count));
+        result->slots().resize(static_cast<size_t>(count));
         result->fieldList = internFields(fields);
         return result;
     });
@@ -651,7 +651,7 @@ Object *fw_collection_cast(Frame *frame, Object *box, const char *source, const 
     return nativeBoundary([&] {
         auto result = castValue(frame, itemsOf(box).at(0), castType(source), castType(target), true, 0);
         auto out = managed(frame, Object::Instance);
-        out->slots.push_back(result);
+        out->slots().push_back(result);
         return out;
     });
 }
@@ -677,11 +677,11 @@ Object *fw_repeat(Frame *frame, Object *source, int64_t count) {
         auto items = itemsOf(source);
         if (items.empty())
             return out;
-        if (count && items.size() > out->slots.max_size() / static_cast<uint64_t>(count))
+        if (count && items.size() > out->slots().max_size() / static_cast<uint64_t>(count))
             fail("collection repetition size overflow", "NumericError");
-        out->slots.reserve(items.size() * static_cast<size_t>(count));
+        out->slots().reserve(items.size() * static_cast<size_t>(count));
         for (int64_t i = 0; i < count; ++i)
-            out->slots.insert(out->slots.end(), items.begin(), items.end());
+            out->slots().insert(out->slots().end(), items.begin(), items.end());
         return out;
     });
 }
@@ -697,11 +697,11 @@ Object *fw_tuple_range(Frame *frame, int64_t begin, int64_t end, int64_t inclusi
             ++count;
         }
         if (count > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) ||
-            count > out->slots.max_size())
+            count > out->slots().max_size())
             fail("range size overflow", "NumericError");
-        out->slots.resize(static_cast<size_t>(count));
-        for (size_t i = 0; i < out->slots.size(); ++i)
-            out->slots[i].integer = begin + static_cast<int64_t>(i);
+        out->slots().resize(static_cast<size_t>(count));
+        for (size_t i = 0; i < out->slots().size(); ++i)
+            out->slots()[i].integer = begin + static_cast<int64_t>(i);
         return out;
     });
 }
@@ -746,7 +746,7 @@ Object *fw_closure_new(Frame *frame, void *code, int64_t captures) {
     return nativeBoundary([&] {
         auto closure = managed(frame, Object::Closure);
         closure->code = code;
-        closure->slots.resize(static_cast<size_t>(captures));
+        closure->slots().resize(static_cast<size_t>(captures));
         return closure;
     });
 }

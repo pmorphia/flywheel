@@ -250,7 +250,7 @@ void fw_check_length(Object *items, int64_t count) {
         if (!items)
             fail("cannot destructure null", "ValueError");
         ObjectGuard guard(items);
-        auto size = static_cast<int64_t>(items->slots.size());
+        auto size = static_cast<int64_t>(items->slots().size());
         if (size != count)
             fail("cannot destructure " + std::to_string(size) + " element(s) into " +
                      std::to_string(count) + " name(s)",
@@ -276,11 +276,11 @@ bool deepEqual(Object *a, Object *b) {
     std::vector<Slot> left, right;
     {
         ObjectGuard guard(a);
-        left = a->slots;
+        left = a->slots();
     }
     {
         ObjectGuard guard(b);
-        right = b->slots;
+        right = b->slots();
     }
     if (left.size() != right.size())
         return false;
@@ -1257,7 +1257,7 @@ Object *fw_zip(Frame *frame, Object *files) {
             ObjectGuard guard(files);
             for (size_t i = 0; i < files->keys.size(); ++i)
                 entries.emplace_back(requireString(files->keys[i].object)->text,
-                                     requireString(files->slots[i].object)->text);
+                                     requireString(files->slots()[i].object)->text);
         }
         return string(frame, zipArchive(entries));
     });
@@ -1545,7 +1545,7 @@ extern "C" void fw_http_fetch(Frame *frame, Object *method, Object *url, Object 
             ObjectGuard guard(headers);
             for (size_t i = 0; i < headers->keys.size(); ++i)
                 requestHeaders.emplace_back(requireString(headers->keys[i].object)->text,
-                                            requireString(headers->slots[i].object)->text);
+                                            requireString(headers->slots()[i].object)->text);
         }
         auto verb = requireString(method)->text;
         for (auto &c : verb)
@@ -1556,9 +1556,9 @@ extern "C" void fw_http_fetch(Frame *frame, Object *method, Object *url, Object 
         for (auto &[name, value] : result.headers)
             put(frame, map, name, value, true);
         ObjectGuard guard(response);
-        response->slots.at(0) = integerSlot(result.status);
-        response->slots.at(1) = text(frame, result.body);
-        response->slots.at(2) = reference(map);
+        response->slots().at(0) = integerSlot(result.status);
+        response->slots().at(1) = text(frame, result.body);
+        response->slots().at(2) = reference(map);
     });
 }
 
@@ -1690,7 +1690,7 @@ void runStatement(DatabaseResource &database, const std::string &sql, Object *pa
     std::vector<Slot> values;
     if (params) {
         ObjectGuard guard(params);
-        values = params->slots;
+        values = params->slots();
     }
     const char *tail = sql.c_str();
     const char *end = sql.c_str() + sql.size();
@@ -1716,7 +1716,7 @@ void runStatement(DatabaseResource &database, const std::string &sql, Object *pa
                 fail("the SQL has more ? parameters than values were given", "DatabaseError");
             Slot slot = values[used];
             if (slot.kind == Slot::Reference && slot.object && slot.object->kind == Object::Box) {
-                Slot inner = slot.object->slots.at(0);
+                Slot inner = slot.object->slots().at(0);
                 slot = inner;
             }
             int status;
@@ -1933,7 +1933,7 @@ class HtmlParser {
         if (structural.count(parent) && raw.find_first_not_of(" \t\r\n\f") == std::string::npos)
             return;
         // Merge with a preceding text node.
-        auto &children = stack.back()->slots;
+        auto &children = stack.back()->slots();
         if (!children.empty() && children.back().object &&
             children.back().object->kind == Object::String) {
             children.back().object->text += decodeEntities(raw);

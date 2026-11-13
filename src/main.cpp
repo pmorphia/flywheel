@@ -761,7 +761,31 @@ int main(int argc, char **argv) {
         args.insert(args.end(), argv + 2, argv + argc);
         return execute(*shell, args);
     }
-    if (command == "new" || command == "get" || command == "add" || command == "install") {
+    if (command == "new") {
+        // `flywheel new NAME` and `flywheel new game NAME` create a project through Pulley.
+        auto pulley = llvm::sys::findProgramByName("pulley");
+        if (!pulley)
+            pulley = llvm::sys::findProgramByName("ppm");
+        if (!pulley) {
+            std::cerr << "flywheel: new projects are created by Pulley, which is not installed "
+                         "(see https://flywheel.polymorphia.dev)\n";
+            return 2;
+        }
+        std::vector<std::string> args = {"new"};
+        int first = 2;
+        bool game = argc > 3 && std::string(argv[2]) == "game";
+        if (game)
+            first = 3;
+        args.insert(args.end(), argv + first, argv + argc);
+        if (game)
+            args.push_back("--game");
+        if (args.size() == 1) {
+            std::cerr << "usage: flywheel new [game] NAME\n";
+            return 2;
+        }
+        return execute(*pulley, args);
+    }
+    if (command == "get" || command == "add" || command == "install") {
         std::cerr << "flywheel: packages are managed by Pulley: use `pulley " << command
                   << "` (or `ppm " << command << "`)\n";
         return 2;

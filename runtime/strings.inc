@@ -108,7 +108,7 @@ Object *stringArray(Frame *frame, const std::vector<std::string> &items) {
         Slot slot;
         slot.kind = Slot::Reference;
         slot.object = text;
-        array->slots.push_back(std::move(slot));
+        array->slots().push_back(std::move(slot));
     }
     return array;
 }
@@ -163,7 +163,7 @@ uint64_t structuralHash(Object *object) {
     if (object->kind == Object::Tuple || object->kind == Object::Array ||
         object->kind == Object::Box) {
         uint64_t h = 1469598103934665603ULL + static_cast<uint64_t>(object->kind);
-        for (auto &item : object->slots)
+        for (auto &item : object->slots())
             h = mix(h, structuralHash(item));
         return h;
     }
@@ -185,10 +185,10 @@ bool structuralEqual(Object *a, Object *b) {
     if (a->kind == Object::String)
         return a->text == b->text;
     if (a->kind == Object::Tuple || a->kind == Object::Array || a->kind == Object::Box) {
-        if (a->slots.size() != b->slots.size())
+        if (a->slots().size() != b->slots().size())
             return false;
-        for (size_t i = 0; i < a->slots.size(); ++i)
-            if (!structuralEqual(a->slots[i], b->slots[i]))
+        for (size_t i = 0; i < a->slots().size(); ++i)
+            if (!structuralEqual(a->slots()[i], b->slots()[i]))
                 return false;
         return true;
     }
@@ -211,7 +211,7 @@ int64_t fw_box_equal(Object *a, Object *b) {
         return a == b;
     auto read = [](Object *box) {
         ObjectGuard guard(box);
-        return box->slots.at(0);
+        return box->slots().at(0);
     };
     return slotEqual(read(a), read(b));
 }
@@ -268,9 +268,9 @@ void fw_map_remove_at(Object *map, int64_t index) {
         if (index < 0 || i >= map->keys.size())
             fail("map index out of bounds", "IndexError");
         key = map->keys[i];
-        value = map->slots[i];
+        value = map->slots()[i];
         map->keys.erase(map->keys.begin() + index);
-        map->slots.erase(map->slots.begin() + index);
+        map->slots().erase(map->slots().begin() + index);
         if (map->extra && i < map->extra->keyHashes.size())
             map->extra->keyHashes.erase(map->extra->keyHashes.begin() + index);
         map->index.reset();
@@ -279,7 +279,7 @@ void fw_map_remove_at(Object *map, int64_t index) {
 Object *fw_map_values(Frame *frame, Object *map) {
     return nativeBoundary([&] {
         auto values = managed(frame, Object::Array);
-        values->slots = itemsOf(map);
+        values->slots() = itemsOf(map);
         return values;
     });
 }
@@ -352,7 +352,7 @@ Object *fw_string_chars(Frame *frame, Object *s) {
             Slot slot;
             slot.kind = Slot::Char;
             slot.integer = c;
-            array->slots.push_back(slot);
+            array->slots().push_back(slot);
         }
         return array;
     });
@@ -512,7 +512,7 @@ void fw_array_sort(Object *array) {
         return;
     nativeBoundary([&] {
         ObjectGuard guard(array);
-        std::stable_sort(array->slots.begin(), array->slots.end(),
+        std::stable_sort(array->slots().begin(), array->slots().end(),
                          [](const Slot &a, const Slot &b) { return compareSlots(a, b) < 0; });
     });
 }
@@ -535,11 +535,11 @@ void fw_array_sort_by(Object *array, Object *closure,
         std::vector<Slot> sorted;
         sorted.reserve(order.size());
         ObjectGuard guard(array);
-        if (array->slots.size() != order.size())
+        if (array->slots().size() != order.size())
             fail("array changed size while sorting");
         for (auto i : order)
-            sorted.push_back(array->slots[static_cast<size_t>(i)]);
-        array->slots.swap(sorted);
+            sorted.push_back(array->slots()[static_cast<size_t>(i)]);
+        array->slots().swap(sorted);
     } catch (const CallbackFailure &) {
     } catch (const NativeFailure &e) {
         recordFailure(e.type, e.message);
@@ -552,16 +552,16 @@ void fw_array_reverse(Object *array) {
         return;
     nativeBoundary([&] {
         ObjectGuard guard(array);
-        std::reverse(array->slots.begin(), array->slots.end());
+        std::reverse(array->slots().begin(), array->slots().end());
     });
 }
 Object *fw_array_slice(Frame *frame, Object *array, int64_t begin, int64_t end, int64_t mode) {
     return nativeBoundary([&] {
         auto out = managed(frame, array->kind);
         ObjectGuard guard(array);
-        auto [from, to] = sliceBounds(static_cast<int64_t>(array->slots.size()), begin, end, mode);
-        out->slots.assign(array->slots.begin() + static_cast<ptrdiff_t>(from),
-                          array->slots.begin() + static_cast<ptrdiff_t>(to));
+        auto [from, to] = sliceBounds(static_cast<int64_t>(array->slots().size()), begin, end, mode);
+        out->slots().assign(array->slots().begin() + static_cast<ptrdiff_t>(from),
+                          array->slots().begin() + static_cast<ptrdiff_t>(to));
         return out;
     });
 }
@@ -570,8 +570,8 @@ int64_t fw_array_index_of(Object *array, Object *box) {
     return nativeBoundary([&]() -> int64_t {
         auto item = itemsOf(box).at(0);
         ObjectGuard guard(array);
-        for (size_t i = 0; i < array->slots.size(); ++i)
-            if (slotEqual(array->slots[i], item))
+        for (size_t i = 0; i < array->slots().size(); ++i)
+            if (slotEqual(array->slots()[i], item))
                 return static_cast<int64_t>(i);
         return -1;
     });
@@ -582,9 +582,9 @@ int64_t fw_array_insert(Object *array, int64_t index) {
         return {};
     return nativeBoundary([&]() -> int64_t {
         ObjectGuard guard(array);
-        if (index < 0 || static_cast<size_t>(index) > array->slots.size())
+        if (index < 0 || static_cast<size_t>(index) > array->slots().size())
             fail("insert index out of bounds", "IndexError");
-        array->slots.insert(array->slots.begin() + index, Slot{});
+        array->slots().insert(array->slots().begin() + index, Slot{});
         return index;
     });
 }
@@ -594,16 +594,16 @@ void fw_array_remove_at(Object *array, int64_t index) {
     nativeBoundary([&] {
         Slot removed; // released after unlocking
         ObjectGuard guard(array);
-        if (index < 0 || static_cast<size_t>(index) >= array->slots.size())
+        if (index < 0 || static_cast<size_t>(index) >= array->slots().size())
             fail("remove_at index out of bounds", "IndexError");
-        removed = array->slots[static_cast<size_t>(index)];
-        array->slots.erase(array->slots.begin() + index);
+        removed = array->slots()[static_cast<size_t>(index)];
+        array->slots().erase(array->slots().begin() + index);
     });
 }
 Object *fw_array_copy(Frame *frame, Object *array) {
     return nativeBoundary([&] {
         auto out = managed(frame, array->kind);
-        out->slots = itemsOf(array);
+        out->slots() = itemsOf(array);
         return out;
     });
 }
@@ -613,7 +613,7 @@ void fw_array_extend(Object *array, Object *other) {
     nativeBoundary([&] {
         auto items = itemsOf(other);
         ObjectGuard guard(array);
-        array->slots.insert(array->slots.end(), items.begin(), items.end());
+        array->slots().insert(array->slots().end(), items.begin(), items.end());
     });
 }
 // 0 floor, 1 ceil, 2 round (half away from zero), 3 trunc, 4 log, 5 log10, 6 log2, 7 exp,

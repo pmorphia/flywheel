@@ -1,0 +1,73 @@
+# A game-shaped workload: N particles in an array of structs, moved for F frames with gravity,
+# bouncing off the walls of a 1280x720 box. Prints a checksum and the milliseconds per frame.
+#
+#     flywheel build benchmarks/particles/particles.fw -O3 -o particles && ./particles 50000 600
+import os
+import time
+
+struct Particle
+    double x
+    double y
+    double vx
+    double vy
+    double life
+end
+
+var count = 50000
+var frames = 600
+var given = os.args()
+if given.length > 0 do
+    count = int(given[0])
+end
+if given.length > 1 do
+    frames = int(given[1])
+end
+
+# A small deterministic generator, the same as in particles.cpp.
+var seed = 12345
+function next_random() returns double
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    return double(seed) / 2147483648.0
+end
+
+Particle[] particles = []
+for i in 0..<count do
+    particles.push(Particle(next_random() * 1280, next_random() * 720, next_random() * 200 - 100,
+        next_random() * 200 - 100, 1 + next_random() * 4))
+end
+
+var dt = 1.0 / 60.0
+var began = time.now()
+for frame in 0..<frames do
+    for i in 0..<particles.length do
+        var p = particles[i]
+        var vx = p.vx
+        var vy = p.vy + 300 * dt
+        var x = p.x + vx * dt
+        var y = p.y + vy * dt
+        if x < 0 do
+            x = -x
+            vx = -vx
+        else if x > 1280 do
+            x = 2560 - x
+            vx = -vx
+        end
+        if y > 720 do
+            y = 1440 - y
+            vy = -vy * 0.9
+        end
+        var life = p.life - dt
+        if life <= 0 do
+            life += 5
+        end
+        particles[i] = Particle(x, y, vx, vy, life)
+    end
+end
+var elapsed = time.now() - began
+
+var sum = 0.0
+for p in particles do
+    sum += p.x + p.y + p.life
+end
+print "checksum {sum:.3f}"
+print "{count} particles, {frames} frames: {elapsed * 1000 / double(frames):.3f} ms per frame"

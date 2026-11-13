@@ -205,7 +205,7 @@ end
 
 ## Packages
 
-Packages are managed by [Pulley](../../pulley/README.md) (`pulley`, also `ppm`), a separate tool; the `flywheel` command only compiles, runs, and tests. Pulley reads a project's `pulley.toml`, resolves versions from Distrobase registries (`wednesware.org` by default) through Hydrogen, records them in `pulley.lock`, and installs the packages where the compiler looks for them:
+Packages are managed by [Pulley](../../pulley/README.md) (`pulley`, also `ppm`), a separate tool; the `flywheel` command only compiles, runs, and tests. Pulley reads a project's `pulley.toml`, resolves versions from Distrobase registries (`wednesware.org` by default) through Hydrogen, records them in `pulley.lock`, and installs the packages where the compiler looks for them. It installs Flywheel packages only (those with a `pulley.toml`) and refuses other distributions on a registry:
 
 ```sh
 pulley new app && cd app
@@ -213,6 +213,8 @@ pulley add wednesware.shapes        # adds shapes = "wednesware.shapes=^1.2.0" a
 flywheel run app.fw                 # `import shapes` finds .flywheel-modules/shapes
 pulley install -g wednesware.shapes # for every program of this Flywheel installation
 ```
+
+`flywheel new NAME` runs `pulley new NAME`, and `flywheel new game NAME` runs `pulley new NAME --game`, which starts a game: [Aperture](https://github.com/pmorphia/aperture) as a dependency, a small playable game loop, an `assets/` directory, and a `start` script (`pulley install && pulley run start`).
 
 The compiler resolves `import name` (after local `.fw`/`.fly` files) in:
 

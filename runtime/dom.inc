@@ -344,7 +344,7 @@ bool simpleMatch(Object *node, const SelectorCompound &selector, Object *parent)
     for (auto &pseudo : selector.pseudos) {
         auto &name = pseudo.name;
         if (name == "empty") {
-            for (auto &child : node->slots)
+            for (auto &child : node->slots())
                 if (child.object &&
                     (child.object->kind != Object::String || !child.object->text.empty()))
                     return false;
@@ -429,7 +429,7 @@ template <class Visitor> void walkDom(Object *root, Visitor &&visitor) {
         bool named = !node->text.empty();
         if (named)
             ancestors.push_back(node);
-        for (auto &child : node->slots)
+        for (auto &child : node->slots())
             walk(child.object, depth + 1);
         if (named)
             ancestors.pop_back();
@@ -440,7 +440,7 @@ template <class Visitor> void walkDom(Object *root, Visitor &&visitor) {
 void childrenOf(Object *node, std::vector<Slot> &output, size_t depth = 0) {
     if (depth > 256)
         fail("DOM child nesting exceeds 256");
-    for (auto &child : node->slots)
+    for (auto &child : node->slots())
         if (child.object && child.object->kind == Object::Element) {
             if (child.object->text.empty())
                 childrenOf(child.object, output, depth + 1);
@@ -468,7 +468,7 @@ void textOf(Object *node, std::string &output, size_t depth = 0) {
     }
     if (node->kind != Object::Element)
         fail("invalid markup child");
-    for (auto &child : node->slots)
+    for (auto &child : node->slots())
         textOf(child.object, output, depth + 1);
 }
 void canHaveChildren(Object *node) {
@@ -485,7 +485,7 @@ bool containsNode(Object *node, Object *target, std::set<Object *> &visited, siz
         return false;
     if (depth > 256)
         fail("DOM nesting exceeds 256");
-    for (auto &child : node->slots)
+    for (auto &child : node->slots())
         if (containsNode(child.object, target, visited, depth + 1))
             return true;
     return false;
@@ -493,7 +493,7 @@ bool containsNode(Object *node, Object *target, std::set<Object *> &visited, siz
 bool removeChild(Object *root, Object *child, size_t depth = 0) {
     if (depth > 256)
         fail("DOM nesting exceeds 256");
-    auto &children = root->slots;
+    auto &children = root->slots();
     for (auto it = children.begin(); it != children.end(); ++it) {
         if (it->object == child) {
             if (child && child->parentElement == root)
@@ -522,7 +522,7 @@ Object *parentOf(Object *node) {
     if (!parent)
         return nullptr;
     // A stale link (the child was removed or moved elsewhere) is ignored.
-    for (auto &slot : parent->slots)
+    for (auto &slot : parent->slots())
         if (slot.object == node)
             return parent;
     return nullptr;
@@ -547,11 +547,11 @@ Object *cloneNode(Frame *frame, Object *node, bool deep, size_t depth = 0) {
     if (node->extra)
         out->more().events = node->extra->events;
     if (deep)
-        for (auto &child : node->slots) {
+        for (auto &child : node->slots()) {
             if (child.object && child.object->kind == Object::Element)
-                out->slots.push_back(reference(cloneNode(frame, child.object, true, depth + 1)));
+                out->slots().push_back(reference(cloneNode(frame, child.object, true, depth + 1)));
             else
-                out->slots.push_back(child);
+                out->slots().push_back(child);
         }
     return out;
 }
@@ -578,7 +578,7 @@ Object *fw_dom_query(Frame *frame, Object *root, Object *selector, int64_t all) 
         if (all) {
             auto out = managed(frame, Object::Array);
             for (auto node : matches)
-                out->slots.push_back(reference(node));
+                out->slots().push_back(reference(node));
             return out;
         }
         auto result = matches.empty() ? nullptr : matches[0];
@@ -613,7 +613,7 @@ int64_t fw_dom_matches(Object *root, Object *selector) {
 Object *fw_dom_children(Frame *frame, Object *root) {
     return nativeBoundary([&] {
         auto out = managed(frame, Object::Array);
-        childrenOf(element(root), out->slots);
+        childrenOf(element(root), out->slots());
         return out;
     });
 }
@@ -624,7 +624,7 @@ Object *fw_dom_text(Frame *frame, Object *root, int64_t mode) {
         if (mode == 0)
             textOf(root, out);
         else if (mode == 1)
-            for (auto &child : root->slots)
+            for (auto &child : root->slots())
                 render(child.object, out);
         else if (mode == 2)
             render(root, out);
@@ -671,7 +671,7 @@ void fw_dom_set_text(Object *root, Object *text) {
         canHaveChildren(root);
         std::vector<Slot> replacement;
         replacement.push_back(reference(text));
-        root->slots.swap(replacement);
+        root->slots().swap(replacement);
     });
 }
 void fw_dom_append(Object *root, Object *child, int64_t prepend) {
@@ -684,9 +684,9 @@ void fw_dom_append(Object *root, Object *child, int64_t prepend) {
             fail("markup insertion would create a cycle");
         auto value = reference(child);
         if (prepend)
-            root->slots.insert(root->slots.begin(), std::move(value));
+            root->slots().insert(root->slots().begin(), std::move(value));
         else
-            root->slots.push_back(std::move(value));
+            root->slots().push_back(std::move(value));
         linkParent(root, child);
     });
 }
@@ -706,7 +706,7 @@ Object *fw_dom_attributes(Frame *frame, Object *root) {
     });
 }
 void fw_dom_clear(Object *root) {
-    nativeBoundary([&] { element(root)->slots.clear(); });
+    nativeBoundary([&] { element(root)->slots().clear(); });
 }
 // 0 parent, 1 next element sibling, 2 previous element sibling (null when there is none).
 Object *fw_dom_relative(Frame *frame, Object *node, int64_t which) {

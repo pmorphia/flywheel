@@ -10,7 +10,7 @@ namespace {
 template <class F> void eachChild(Object *p, F &&visit) {
     if (p->leaf)
         return;
-    for (auto &slot : p->slots)
+    for (auto &slot : p->rawSlots)
         if (slot.kind == Slot::Reference && slot.object && !slot.object->leaf)
             visit(slot.object);
     for (auto &slot : p->keys)
@@ -140,7 +140,7 @@ int64_t collectCycles(size_t limit = std::numeric_limits<size_t>::max()) {
     // edges to live objects follows the ordinary path.
     std::unordered_set<Object *> dead(garbage.begin(), garbage.end());
     for (auto p : garbage) {
-        for (auto *slots : {&p->slots, &p->keys})
+        for (auto *slots : {&p->rawSlots, &p->keys})
             for (auto &slot : *slots)
                 if (slot.kind == Slot::Reference && dead.count(slot.object))
                     slot.object = nullptr;
@@ -268,7 +268,7 @@ Object *fw_thread_spawn(Frame *frame, Object *closure, TaskRunner runner) {
         retain(closure);
         state->closure = closure;
         state->result = new Object(Object::Box);
-        state->result->slots.resize(1);
+        state->result->slots().resize(1);
         auto object = resourceObject(frame, "thread.task", std::move(task));
         ++activeThreads;
         raceRelease(state->raceStart);
@@ -393,7 +393,7 @@ void fw_channel_send(Object *channelObject, Object *box) {
         });
         if (channel.closed)
             fail("send on a closed channel", "RuntimeError");
-        channel.items.push_back(box->slots.at(0));
+        channel.items.push_back(box->slots().at(0));
         raceRelease(channel.raceClock);
         channel.changed.notify_all();
     });
@@ -410,7 +410,7 @@ Object *fw_channel_receive(Frame *frame, Object *channelObject, int64_t wait) {
             return nullptr;
         raceAcquire(channel.raceClock);
         auto box = managed(frame, Object::Box);
-        box->slots.push_back(std::move(channel.items.front()));
+        box->slots().push_back(std::move(channel.items.front()));
         channel.items.pop_front();
         channel.changed.notify_all();
         return box;

@@ -235,6 +235,9 @@ struct Var {
     // (a one-slot Box) so every closure and the declaring scope see the same value.
     bool cell = false;
     Ty storage = Ty{};
+    // A local that nothing assigns after its declaration: its own root keeps the value alive
+    // for the whole scope, so reads borrow it instead of retaining it for the statement.
+    bool stable = false;
 };
 bool primitive(const Ty &t) {
     return t.numeric() || t.name == "bool" || t.name == "char" || t.enumeration();
@@ -721,6 +724,7 @@ class Compiler {
     std::vector<ProtectedValue> protectedValues;
     std::vector<LambdaContext *> lambdaStack;
     std::set<std::string> cells; // locals of the current function stored in shared cells
+    std::set<std::string> reassigned; // names some statement of the current function assigns
     std::map<std::string, llvm::Function *> trampolines;
     // -g: DWARF line tables for user functions, lambdas, and the program body.
     std::unique_ptr<llvm::DIBuilder> dib;
@@ -785,6 +789,7 @@ class Compiler {
         std::set<std::string> cells;
         llvm::DebugLoc debug;
         std::string method;
+        std::set<std::string> reassigned;
     };
     FunctionState saveFunction() {
         FunctionState s{b.saveIP(),
@@ -809,7 +814,8 @@ class Compiler {
                         std::move(lambdaStack),
                         std::move(cells),
                         b.getCurrentDebugLocation(),
-                        method};
+                        method,
+                        std::move(reassigned)};
         b.SetCurrentDebugLocation(llvm::DebugLoc());
         borrowed = false;
         attrs.clear();
@@ -823,6 +829,7 @@ class Compiler {
         returns.clear();
         lambdaStack.clear();
         cells.clear();
+        reassigned.clear();
         return s;
     }
     void restoreFunction(FunctionState &s) {
@@ -846,6 +853,7 @@ class Compiler {
         location = s.location;
         lambdaStack = std::move(s.lambdaStack);
         cells = std::move(s.cells);
+        reassigned = std::move(s.reassigned);
         method = s.method;
         b.restoreIP(s.ip);
         b.SetCurrentDebugLocation(s.debug);
@@ -1737,6 +1745,7 @@ end
                 statements(e.lambda->body, true);
         };
         statements(body, false);
+        reassigned = assigned;
         std::set<std::string> out;
         for (auto &name : assigned)
             if (captured.count(name))
@@ -1758,7 +1767,9 @@ end
         }
         auto a = allocate(v.t, name);
         store(a, v);
-        scopes.back()[name] = {a, v.t, constant};
+        Var var{a, v.t, constant};
+        var.stable = !reassigned.count(name);
+        scopes.back()[name] = var;
         debugVariable(name, v.t, a);
     }
     // -g: describes a local to debuggers. Numbers, bools, and chars show their values; other
@@ -1820,7 +1831,7 @@ end
             return unboxChecked(stored);
         }
         auto result = b.CreateLoad(ll(v.type), v.address);
-        if (v.type.object() && !borrowed)
+        if (v.type.object() && !borrowed && !v.stable)
             return {objectCall("fw_keep", {frame, result}), v.type};
         return {result, v.type};
     }
@@ -1870,7 +1881,196 @@ end
                                   slot);
         return slot;
     }
+    // --- Flat arrays ---------------------------------------------------------------------
+    // An array of structs is stored by the runtime as one contiguous block (runtime/flat.inc).
+    // The code below reads and writes it in place: a few loads and a bounds check, with a
+    // runtime call only when the array is not flat yet, other threads run, or the index is
+    // out of range. `boxed` is the older path through slots, used when the runtime says the
+    // array cannot be flat.
+    bool flatItem(Ty t) {
+        return t.structure();
+    }
+    bool flatArray(Ty t) {
+        return t.array() && flatItem(t.item());
+    }
+    std::map<std::string, llvm::Constant *> flatLayouts;
+    int64_t flatFieldKind(Ty t) {
+        int64_t bits = t.integer() ? t.bits() : t.name == "float" ? 32 : t.real() ? 64
+                       : t.name == "bool" ? 8 : t.name == "char" ? 32 : 64;
+        int64_t kind = t.real() ? 2 : t.name == "bool" ? 3 : t.name == "char" ? 5
+                       : t.enumeration() ? 6 : t.unsigned_() ? 1 : 0;
+        return kind | (bits << 8) | (t.enumeration() ? enumIds.at(t.name) << 16 : 0);
+    }
+    // The constant the runtime reads to box, unbox, and copy elements of type `t`.
+    llvm::Constant *flatLayout(Ty t) {
+        if (auto found = flatLayouts.find(t.name); found != flatLayouts.end())
+            return found->second;
+        auto &dl = module.getDataLayout();
+        auto i64t = b.getInt64Ty();
+        auto ptr = b.getPtrTy();
+        auto fieldTy = llvm::StructType::get(i64t, i64t, ptr);
+        std::vector<llvm::Constant *> fields;
+        auto null = llvm::ConstantPointerNull::get(ptr);
+        llvm::Constant *id = null, *name = null, *names = null;
+        if (t.structure()) {
+            auto &c = *classes.at(t.name);
+            auto layout = dl.getStructLayout(structType(t.name));
+            std::string joined;
+            for (size_t i = 0; i < c.fields.size(); ++i) {
+                auto ft = type(c.fields[i].type);
+                joined += (i ? "," : "") + c.fields[i].name;
+                auto offset = llvm::ConstantInt::get(
+                    i64t, layout->getElementOffset(static_cast<unsigned>(i)));
+                fields.push_back(ft.structure()
+                                     ? llvm::ConstantStruct::get(
+                                           fieldTy, {llvm::ConstantInt::get(i64t, 4), offset,
+                                                     flatLayout(ft)})
+                                     : llvm::ConstantStruct::get(
+                                           fieldTy, {llvm::ConstantInt::get(i64t, flatFieldKind(ft)),
+                                                     offset, null}));
+            }
+            id = classId(c.name);
+            name = b.CreateGlobalString(displayName(c.name), "", 0, &module);
+            names = b.CreateGlobalString(joined, "", 0, &module);
+        } else
+            fields.push_back(llvm::ConstantStruct::get(
+                fieldTy, {llvm::ConstantInt::get(i64t, flatFieldKind(t)),
+                          llvm::ConstantInt::get(i64t, 0), null}));
+        auto count = fields.size();
+        if (fields.empty()) // a struct without fields still has a fields array
+            fields.push_back(llvm::ConstantAggregateZero::get(fieldTy));
+        auto array = llvm::ConstantArray::get(llvm::ArrayType::get(fieldTy, fields.size()), fields);
+        auto size = std::max<uint64_t>(dl.getTypeAllocSize(ll(t)), 1);
+        auto value = llvm::ConstantStruct::getAnon(
+            {llvm::ConstantInt::get(i64t, size), llvm::ConstantInt::get(i64t, t.structure()),
+             llvm::ConstantInt::get(i64t, count), id, name, names, array});
+        auto global = new llvm::GlobalVariable(module, value->getType(), true,
+                                               llvm::GlobalValue::PrivateLinkage, value,
+                                               "flat." + displayName(t.name));
+        return flatLayouts[t.name] = global;
+    }
+    // A field of the runtime's Object at a fixed offset (asserted in runtime/flat.inc).
+    enum : unsigned { FlatFrozen = 12, FlatData = 16, FlatCount = 24, FlatCapacity = 32,
+                      FlatLayoutField = 40 };
+    llvm::Value *objectFieldAddress(llvm::Value *object, unsigned offset) {
+        return b.CreateConstInBoundsGEP1_64(b.getInt8Ty(), object, offset);
+    }
+    llvm::Value *objectField(llvm::Value *object, unsigned offset, llvm::Type *t) {
+        return b.CreateLoad(t, objectFieldAddress(object, offset));
+    }
+    llvm::Value *flatAddress(llvm::Value *array, llvm::Value *index, Ty t) {
+        auto size = std::max<uint64_t>(module.getDataLayout().getTypeAllocSize(ll(t)), 1);
+        auto data = objectField(array, FlatData, b.getPtrTy());
+        return b.CreateInBoundsGEP(b.getInt8Ty(), data, b.CreateMul(index, i64(static_cast<int64_t>(size))));
+    }
+    llvm::AllocaInst *flatTemporary(Ty t) {
+        llvm::IRBuilder<> entry(&current->getEntryBlock(), current->getEntryBlock().begin());
+        return entry.CreateAlloca(ll(t), nullptr, "flat.value");
+    }
+    // True when no other thread runs and `array` is not null: the block can be used without
+    // the runtime's lock.
+    llvm::Value *flatDirect(llvm::Value *array) {
+        auto threads = module.getOrInsertGlobal("fw_active_threads", b.getInt64Ty());
+        return b.CreateAnd(b.CreateICmpNE(array, llvm::ConstantPointerNull::get(b.getPtrTy())),
+                           b.CreateICmpEQ(b.CreateLoad(b.getInt64Ty(), threads), i64(0)));
+    }
+    // Runs `fast` when `direct` and `inRange(...)` hold, else the runtime call `slow`, and
+    // `boxed` when that reports that the array is not flat.
+    void flatPaths(llvm::Value *array, const std::function<llvm::Value *()> &condition,
+                   const std::function<void()> &fast, const std::function<llvm::Value *()> &slow,
+                   const std::function<void()> &boxed) {
+        auto check = llvm::BasicBlock::Create(ctx, "flat.check", current);
+        auto fastBlock = llvm::BasicBlock::Create(ctx, "flat.fast", current);
+        auto slowBlock = llvm::BasicBlock::Create(ctx, "flat.slow", current);
+        auto doneSlow = llvm::BasicBlock::Create(ctx, "flat.handled", current);
+        auto boxedBlock = llvm::BasicBlock::Create(ctx, "flat.boxed", current);
+        auto merge = llvm::BasicBlock::Create(ctx, "flat.done", current);
+        b.CreateCondBr(flatDirect(array), check, slowBlock);
+        b.SetInsertPoint(check);
+        b.CreateCondBr(condition(), fastBlock, slowBlock);
+        b.SetInsertPoint(fastBlock);
+        fast();
+        b.CreateBr(merge);
+        b.SetInsertPoint(slowBlock);
+        auto status = slow();
+        b.CreateCondBr(b.CreateICmpNE(status, i64(0)), doneSlow, boxedBlock);
+        b.SetInsertPoint(doneSlow);
+        b.CreateBr(merge);
+        b.SetInsertPoint(boxedBlock);
+        boxed();
+        if (!terminated())
+            b.CreateBr(merge);
+        b.SetInsertPoint(merge);
+    }
+    Val flatGet(Val array, llvm::Value *index, Ty t, const std::function<Val()> &boxed) {
+        auto out = flatTemporary(t);
+        flatPaths(
+            array.v,
+            [&] { return b.CreateICmpULT(index, objectField(array.v, FlatCount, b.getInt64Ty())); },
+            [&] { b.CreateStore(b.CreateLoad(ll(t), flatAddress(array.v, index, t)), out); },
+            [&] {
+                return call("fw_flat_read", b.getInt64Ty(), {array.v, index, flatLayout(t), out});
+            },
+            [&] { b.CreateStore(boxed().v, out); });
+        return {b.CreateLoad(ll(t), out), t};
+    }
+    llvm::Value *flatWritable(llvm::Value *array) {
+        return b.CreateICmpEQ(objectField(array, FlatFrozen, b.getInt8Ty()), b.getInt8(0));
+    }
+    void flatSet(Val array, llvm::Value *index, Val x, const std::function<void()> &boxed) {
+        auto in = flatTemporary(x.t);
+        b.CreateStore(x.v, in);
+        flatPaths(
+            array.v,
+            [&] {
+                return b.CreateAnd(
+                    b.CreateICmpULT(index, objectField(array.v, FlatCount, b.getInt64Ty())),
+                    flatWritable(array.v));
+            },
+            [&] { b.CreateStore(x.v, flatAddress(array.v, index, x.t)); },
+            [&] {
+                return call("fw_flat_write", b.getInt64Ty(),
+                            {array.v, index, flatLayout(x.t), in});
+            },
+            boxed);
+    }
+    void flatPush(Val array, Val x, const std::function<void()> &boxed) {
+        auto in = flatTemporary(x.t);
+        b.CreateStore(x.v, in);
+        auto layout = flatLayout(x.t);
+        llvm::Value *count = nullptr;
+        flatPaths(
+            array.v,
+            [&] {
+                count = objectField(array.v, FlatCount, b.getInt64Ty());
+                auto room = b.CreateICmpULT(count, objectField(array.v, FlatCapacity, b.getInt64Ty()));
+                auto same = b.CreateICmpEQ(objectField(array.v, FlatLayoutField, b.getPtrTy()), layout);
+                return b.CreateAnd(b.CreateAnd(room, same), flatWritable(array.v));
+            },
+            [&] {
+                b.CreateStore(x.v, flatAddress(array.v, count, x.t));
+                b.CreateStore(b.CreateAdd(count, i64(1)), objectFieldAddress(array.v, FlatCount));
+            },
+            [&] { return call("fw_flat_push", b.getInt64Ty(), {array.v, layout, in}); }, boxed);
+    }
+    Val flatPop(Val array, Ty t, const std::function<Val()> &boxed) {
+        auto out = flatTemporary(t);
+        auto status = call("fw_flat_pop", b.getInt64Ty(), {array.v, flatLayout(t), out});
+        auto boxedBlock = llvm::BasicBlock::Create(ctx, "flat.boxed", current);
+        auto merge = llvm::BasicBlock::Create(ctx, "flat.done", current);
+        b.CreateCondBr(b.CreateICmpNE(status, i64(0)), merge, boxedBlock);
+        b.SetInsertPoint(boxedBlock);
+        b.CreateStore(boxed().v, out);
+        b.CreateBr(merge);
+        b.SetInsertPoint(merge);
+        return {b.CreateLoad(ll(t), out), t};
+    }
     Val get(Val obj, llvm::Value *index, Ty t) {
+        if (flatArray(obj.t) && obj.t.item() == t)
+            return flatGet(obj, index, t, [&] { return getSlot(obj, index, t); });
+        return getSlot(obj, index, t);
+    }
+    Val getSlot(Val obj, llvm::Value *index, Ty t) {
         if (t.structure()) {
             auto boxed = objectCall("fw_get_object", {obj.v, index});
             guard(b.CreateICmpNE(boxed, llvm::ConstantPointerNull::get(b.getPtrTy())),
@@ -1902,6 +2102,13 @@ end
         return b.CreateIntCast(x.v, b.getInt64Ty(), x.t.name != "bool" && !x.t.unsigned_());
     }
     void set(Val obj, llvm::Value *index, Val x) {
+        if (flatArray(obj.t) && obj.t.item() == x.t) {
+            flatSet(obj, index, x, [&] { setSlot(obj, index, x); });
+            return;
+        }
+        setSlot(obj, index, x);
+    }
+    void setSlot(Val obj, llvm::Value *index, Val x) {
         if (x.t.classReference())
             x = convert(x, constructorType(x.t.name.substr(6)));
         if (x.t.structure())
@@ -1916,6 +2123,13 @@ end
     }
     // Appends in one runtime call, so a push is atomic for other threads.
     void push(Val array, Val x) {
+        if (flatArray(array.t) && array.t.item() == x.t) {
+            flatPush(array, x, [&] { pushSlot(array, x); });
+            return;
+        }
+        pushSlot(array, x);
+    }
+    void pushSlot(Val array, Val x) {
         if (x.t.classReference())
             x = convert(x, constructorType(x.t.name.substr(6)));
         if (x.t.structure())
@@ -2670,7 +2884,11 @@ end
         }
         if (e.kind == "call") {
             auto name = callable(*e.args[0]);
-            if (functions.count(name) || classes.count(name) || lookup(name))
+            // Building a struct from all its fields runs no other code.
+            bool plainStruct = classes.count(name) && classes.at(name)->isStruct &&
+                               e.args.size() == classes.at(name)->fields.size() + 1 &&
+                               !lookup(name);
+            if (!plainStruct && (functions.count(name) || classes.count(name) || lookup(name)))
                 return false;
             static const std::set<std::string> pure = {"print",    "len",
                                                        "typeof",   "string",
@@ -2683,7 +2901,7 @@ end
                                                        "render",   "math.sqrt",
                                                        "math.sin", "math.cos",
                                                        "math.pow", "testing.live_objects"};
-            if (!pure.count(name)) {
+            if (!plainStruct && !pure.count(name)) {
                 auto &callee = *e.args[0];
                 bool markupRender = false;
                 if (callee.kind == "member" && callee.text == "render") {
@@ -4819,7 +5037,9 @@ Val Compiler::invoke(Expr &e, Ty expected) {
                 error("pop expects no arguments");
             auto t = obj.t.item();
             if (t.structure())
-                return {unboxStruct(b, objectCall("fw_array_pop_object", {frame, obj.v}), t), t};
+                return flatPop(obj, t, [&]() -> Val {
+                    return {unboxStruct(b, objectCall("fw_array_pop_object", {frame, obj.v}), t), t};
+                });
             if (t.object())
                 return {objectCall("fw_array_pop_object", {frame, obj.v}), t};
             if (t.real())
@@ -5844,6 +6064,55 @@ void Compiler::statement(Stmt &s) {
         if (!terminated())
             b.CreateBr(cond);
         b.SetInsertPoint(end);
+        return;
+    }
+    if (s.kind == "for" && s.op.empty() && s.expr->kind == "binary" &&
+        (s.expr->text == ".." || s.expr->text == "..<")) {
+        // `for i in a..b` counts in a register; no list of numbers is built.
+        auto from = value(*s.expr->args[0]);
+        auto to = value(*s.expr->args[1]);
+        if (!from.t.integer() || !to.t.integer())
+            error("range endpoints must be integers");
+        from = convert(from, Ty{"i64"});
+        to = convert(to, Ty{"i64"});
+        bool inclusive = s.expr->text == "..";
+        auto span = b.CreateSub(to.v, from.v);
+        auto some = inclusive ? b.CreateICmpSGE(to.v, from.v) : b.CreateICmpSGT(to.v, from.v);
+        auto count = b.CreateSelect(some, inclusive ? b.CreateAdd(span, i64(1)) : span, i64(0));
+        if (inclusive)
+            guard(b.CreateOr(b.CreateNot(some), b.CreateICmpNE(count, i64(0))),
+                  "range size overflow");
+        scopes.emplace_back();
+        auto index = allocate(Ty{"i64"}, "iterator");
+        b.CreateStore(i64(0), index);
+        auto cond = llvm::BasicBlock::Create(ctx, "for.condition", current);
+        auto body = llvm::BasicBlock::Create(ctx, "for.body", current);
+        auto next = llvm::BasicBlock::Create(ctx, "for.next", current);
+        auto end = llvm::BasicBlock::Create(ctx, "for.end", current);
+        b.CreateBr(cond);
+        b.SetInsertPoint(cond);
+        auto i = b.CreateLoad(b.getInt64Ty(), index);
+        b.CreateCondBr(b.CreateICmpULT(i, count), body, end);
+        b.SetInsertPoint(body);
+        auto loopDepth = scopes.size();
+        scopes.emplace_back();
+        bind(s.name, {b.CreateAdd(from.v, i), Ty{"i64"}});
+        loops.emplace_back(end, next);
+        loopScopes.push_back(loopDepth);
+        block(s.body, false);
+        loops.pop_back();
+        loopScopes.pop_back();
+        if (!terminated())
+            releaseScopes(loopDepth);
+        scopes.pop_back();
+        if (!terminated())
+            b.CreateBr(next);
+        b.SetInsertPoint(next);
+        b.CreateStore(b.CreateAdd(b.CreateLoad(b.getInt64Ty(), index), i64(1)), index);
+        b.CreateBr(cond);
+        b.SetInsertPoint(end);
+        releaseScopes(scopes.size() - 1);
+        scopes.pop_back();
         return;
     }
     if (s.kind == "for") {

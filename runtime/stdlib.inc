@@ -28,7 +28,7 @@ Slot textSlot(Frame *frame, const std::string &value) {
 }
 const std::string &instanceText(Object *instance, size_t field) {
     static const std::string empty;
-    auto &slot = instance->slots.at(field);
+    auto &slot = instance->slots().at(field);
     return slot.object ? slot.object->text : empty;
 }
 
@@ -211,7 +211,7 @@ void encodeObject(Object *object, std::string &out, int indent, int depth,
     std::vector<Slot> slots, keys;
     {
         ObjectGuard guard(object);
-        slots = object->slots;
+        slots = object->slots();
         keys = object->keys;
     }
     switch (object->kind) {
@@ -647,7 +647,7 @@ ProcessOutcome runRequest(const ProcessRequest &request) {
 ProcessRequest processRequest(Object *process) {
     // os.process fields: command, cwd, env, inherit_env, input, timeout, capture
     ProcessRequest request;
-    auto command = process->slots.at(0).object;
+    auto command = process->slots().at(0).object;
     auto arguments = command ? itemsOf(command) : std::vector<Slot>{};
     if (arguments.empty())
         fail("os.process requires a nonempty command array", "ProcessError");
@@ -656,21 +656,21 @@ ProcessRequest processRequest(Object *process) {
         stage.push_back(slot.object ? slot.object->text : "");
     request.stages.push_back(std::move(stage));
     request.cwd = instanceText(process, 1);
-    if (auto env = process->slots.at(2).object) {
+    if (auto env = process->slots().at(2).object) {
         ObjectGuard guard(env);
         for (size_t i = 0; i < env->keys.size(); ++i)
             request.env.emplace_back(env->keys[i].object->text,
-                                     env->slots[i].object ? env->slots[i].object->text : "");
+                                     env->slots()[i].object ? env->slots()[i].object->text : "");
     }
-    request.inheritEnv = process->slots.at(3).integer != 0;
+    request.inheritEnv = process->slots().at(3).integer != 0;
     request.input = instanceText(process, 4);
-    request.timeout = process->slots.at(5).real;
-    request.capture = process->slots.at(6).integer != 0;
+    request.timeout = process->slots().at(5).real;
+    request.capture = process->slots().at(6).integer != 0;
     return request;
 }
 Object *processResult(Frame *frame, const ProcessOutcome &outcome) {
     auto result = nativeInstance(frame, "os.result", {"status", "stdout", "stderr", "timed_out"});
-    result->slots = {integerSlot(outcome.status), textSlot(frame, outcome.out),
+    result->slots() = {integerSlot(outcome.status), textSlot(frame, outcome.out),
                      textSlot(frame, outcome.err), boolSlot(outcome.timedOut)};
     return result;
 }
@@ -943,7 +943,7 @@ Object *fw_time_date(Frame *frame, double seconds, int64_t local) {
         auto date = nativeInstance(frame, "time.datetime",
                                    {"year", "month", "day", "hour", "minute", "second", "weekday",
                                     "yearday"});
-        date->slots = {integerSlot(parts.tm_year + 1900), integerSlot(parts.tm_mon + 1),
+        date->slots() = {integerSlot(parts.tm_year + 1900), integerSlot(parts.tm_mon + 1),
                        integerSlot(parts.tm_mday),        integerSlot(parts.tm_hour),
                        integerSlot(parts.tm_min),         integerSlot(parts.tm_sec),
                        integerSlot(parts.tm_wday),        integerSlot(parts.tm_yday + 1)};
@@ -1159,7 +1159,7 @@ Object *fw_json_list(Frame *frame, Object *value, int64_t keys) {
             Slot slot;
             slot.kind = Slot::Reference;
             slot.object = element;
-            out->slots.push_back(std::move(slot));
+            out->slots().push_back(std::move(slot));
         }
         return out;
     });

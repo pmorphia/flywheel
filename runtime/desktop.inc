@@ -212,7 +212,7 @@ void renderDesktop(Object *p, std::string &out, DesktopState &state) {
         }
         out += '>';
     }
-    for (auto &c : p->slots)
+    for (auto &c : p->slots())
         renderDesktop(c.object, out, state);
     static const std::string voids =
         " area base br col embed hr img input link meta param source track wbr ";
@@ -224,7 +224,7 @@ Object *findBody(Object *p) {
         return nullptr;
     if (p->text == "body")
         return p;
-    for (auto &c : p->slots)
+    for (auto &c : p->slots())
         if (auto found = findBody(c.object))
             return found;
     return nullptr;
@@ -237,7 +237,7 @@ void renderDocument(Object *p, std::string &out, const std::string &body) {
         return;
     }
     if (p->text.empty()) {
-        for (auto &c : p->slots)
+        for (auto &c : p->slots())
             renderDocument(c.object, out, body);
         return;
     }
@@ -252,7 +252,7 @@ void renderDocument(Object *p, std::string &out, const std::string &body) {
     if (p->text == "body")
         out += body;
     else
-        for (auto &c : p->slots)
+        for (auto &c : p->slots())
             renderDocument(c.object, out, body);
     out += "</" + p->text + '>';
 }
@@ -264,7 +264,7 @@ std::string renderBody(DesktopState &state) {
     std::string out;
     auto body = findBody(state.tree);
     if (body)
-        for (auto &c : body->slots)
+        for (auto &c : body->slots())
             renderDesktop(c.object, out, state);
     else
         renderDesktop(state.tree, out, state);
@@ -574,7 +574,7 @@ extern "C" void fw_desktop_page(Frame *frame, Object *tree, const char *backendP
 extern "C" void fw_desktop_run_all(Object *windows, const char *backendPath) {
     nativeBoundary([&] {
         std::vector<Object *> list;
-        for (auto &slot : windows->slots)
+        for (auto &slot : windows->slots())
             list.push_back(slot.object);
         runWindows(list, backendPath);
     });

@@ -192,7 +192,7 @@ void put(Frame *frame, Object *map, const std::string &key, const std::string &v
         appendKey(map, text(frame, key), text(frame, value));
         return;
     }
-    auto &slot = map->slots[static_cast<size_t>(i)];
+    auto &slot = map->slots()[static_cast<size_t>(i)];
     auto previous = slot.object ? slot.object->text : "";
     slot = text(frame, join ? previous + ", " + value : value);
 }
@@ -337,17 +337,17 @@ HttpResponse responseFrom(Object *result) {
         return r;
     }
     if (result->kind != Object::Instance || result->typeName != "web.response" ||
-        result->slots.size() != 3)
+        result->slots().size() != 3)
         fail("HTTP handler returned an unsupported value");
-    auto status = result->slots[0].integer;
+    auto status = result->slots()[0].integer;
     if (status < 100 || status > 599)
         fail("HTTP status " + std::to_string(status) + " is outside 100..599");
     r.status = static_cast<int>(status);
-    r.body = result->slots[1].object ? result->slots[1].object->text : "";
-    if (auto headers = result->slots[2].object) {
+    r.body = result->slots()[1].object ? result->slots()[1].object->text : "";
+    if (auto headers = result->slots()[2].object) {
         for (size_t i = 0; i < headers->keys.size(); ++i) {
             auto name = headers->keys[i].object ? headers->keys[i].object->text : "";
-            auto value = headers->slots[i].object ? headers->slots[i].object->text : "";
+            auto value = headers->slots()[i].object ? headers->slots()[i].object->text : "";
             if (name.empty() || !validHeader(name) || !validHeader(value) ||
                 name.find(':') != std::string::npos)
                 fail("invalid HTTP response header '" + name + "'");
@@ -571,17 +571,17 @@ bool handleRequest(HttpServer &server, ParsedRequest &request, HttpResponse &res
             put(&frame, paramMap, name, value);
         auto type = findKey(headers, 0, string(&frame, "content-type"));
         if (type >= 0 &&
-            lower(headers->slots[static_cast<size_t>(type)].object->text)
+            lower(headers->slots()[static_cast<size_t>(type)].object->text)
                     .rfind("application/x-www-form-urlencoded", 0) == 0)
             parseForm(&frame, form, request.body);
-        object->slots.push_back(text(&frame, request.method));
-        object->slots.push_back(text(&frame, percentDecode(target, false)));
+        object->slots().push_back(text(&frame, request.method));
+        object->slots().push_back(text(&frame, percentDecode(target, false)));
         for (auto map : {queryMap, headers})
-            object->slots.push_back(reference(map));
-        object->slots.push_back(text(&frame, request.body));
+            object->slots().push_back(reference(map));
+        object->slots().push_back(text(&frame, request.body));
         for (auto map : {paramMap, form})
-            object->slots.push_back(reference(map));
-        object->slots.push_back(text(&frame, request.remote));
+            object->slots().push_back(reference(map));
+        object->slots().push_back(text(&frame, request.remote));
         result = reinterpret_cast<Handler1>(selected->handler->code)(selected->handler, object);
     }
     struct ResultOwner {
