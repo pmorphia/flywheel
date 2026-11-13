@@ -1,6 +1,6 @@
 # Runtime and ownership
 
-LLVM values hold primitive numbers, booleans, chars, and enum values directly. Immutable UTF-8 strings, dynamic arrays, tuples, maps, sets, class instances, Results, boxed optional primitives, JSON documents, errors, closures, markup nodes, and native resources (files, sockets, threads) are heap objects with atomic reference counts. Object slots, map keys, and element children retain references. Assigning a collection or instance aliases it; mutations are visible through both bindings.
+LLVM values hold primitive numbers, booleans, chars, and enum values directly. Immutable UTF-8 strings, dynamic arrays, tuples, maps, sets, class instances, Results, boxed optional primitives, JSON documents, errors, closures, markup nodes, and native resources (files, sockets, threads) are heap objects with reference counts (updated with atomic instructions only while other threads run). Object slots, map keys, and element children retain references. Assigning a collection or instance aliases it; mutations are visible through both bindings.
 
 Generated functions establish an ownership frame. Reference locals and parameters have initialized owning roots. Stores retain the new reference before releasing the previous value. Lexical scope exit clears local roots, including exits through exceptions, break, and continue. Temporary references remain alive through their statement and are drained at safe boundaries. A conservative analysis skips temporary retains for reads in expressions containing only known non-mutating operations.
 

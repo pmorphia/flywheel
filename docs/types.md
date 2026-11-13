@@ -181,7 +181,7 @@ print (a + b * 2).x, a == Vec2(3, 4), a
 - Structs print like classes (`Vec2(x=3, y=4)`, or their `to_string`), encode to JSON objects, and decode with `json.decode<Vec2>`.
 - `Vec2?` is a nullable struct, and structs work as elements of arrays, tuples, and map values, as class fields, in closures, with generics, in `Result`, and across threads. They cannot be map keys or set elements, cannot be generic, and cannot extend or implement anything. `struct` is a soft keyword: it starts a declaration only as `struct Name` on its own line.
 
-Stored inside a collection, a class field, or a closure, a struct is kept in a small heap object and copied out when read; local variables, parameters, and results never touch the heap.
+An array of structs (like an array of numbers) keeps its elements in one contiguous block: `particles[i]` and `particles[i] = p` read and write that block in place, with no allocation, so a loop over tens of thousands of structs runs at close to the speed of the same loop in C. The block is also what a [native function](modules.md#structs-arrays-and-callbacks) receives for a pointer parameter. Stored anywhere else (a map value, a class field, a closure), a struct is kept in a small heap object and copied out when read; local variables, parameters, and results never touch the heap.
 
 ## Inheritance
 

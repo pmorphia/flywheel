@@ -753,6 +753,7 @@ bool serveLoop(HttpRuntime &state) {
                 guardStack();
                 raceAcquire(start);
                 workerLoop(workers);
+                borrowedValues().clear();
                 --activeThreads;
             });
         }

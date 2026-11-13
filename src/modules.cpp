@@ -125,12 +125,30 @@ class Loader {
     std::map<std::string, std::unique_ptr<Unit>> units;
     std::vector<std::string> stack;
     Program merged;
+    // The public names of a module with the qualified names they stand for, including those of
+    // modules it re-exports (`public import name.*`).
+    std::map<std::string, std::string> visibleNames(Unit &u) {
+        std::map<std::string, std::string> out;
+        for (auto &alias : u.program.reexports)
+            if (auto m = u.modules.find(alias); m != u.modules.end())
+                for (auto &[name, qualified] : visibleNames(*m->second))
+                    out[name] = qualified;
+        for (auto &[name, qualified] : u.own)
+            if (!u.program.privateNames.count(name))
+                out[name] = qualified;
+        return out;
+    }
     std::string exported(Unit &u, const std::string &name, Location loc) {
         if (u.program.privateNames.count(name))
             throw Error(loc, "'" + name + "' is private in module '" + u.path + "'");
         auto it = u.own.find(name);
-        if (it == u.own.end())
+        if (it == u.own.end()) {
+            for (auto &alias : u.program.reexports)
+                if (auto m = u.modules.find(alias); m != u.modules.end() && m->second->own.count(name) &&
+                                                    !m->second->program.privateNames.count(name))
+                    return exported(*m->second, name, loc);
             throw Error(loc, "module '" + u.path + "' has no exported name '" + name + "'");
+        }
         return it->second;
     }
     std::string resolve(Unit &u, std::string name, Location loc) {
@@ -435,19 +453,44 @@ class Loader {
         u.path = canonical;
         u.prefix = "$m" + std::to_string(units.size()) + "$";
         units[key] = std::move(owned);
+        // C structs become Flywheel structs of the module (`native.Vec2(1, 2)`).
+        auto flyType = [&](const std::string &t) {
+            return t.rfind("struct:", 0) == 0 ? u.prefix + t.substr(7) : t;
+        };
+        for (auto &st : module.structs) {
+            if (u.own.count(st.name))
+                continue;
+            u.own[st.name] = u.prefix + st.name;
+            Class c;
+            c.name = u.prefix + st.name;
+            c.isStruct = true;
+            c.loc = {1, 1, canonical};
+            for (auto &[name, type] : st.fields) {
+                Param field;
+                field.name = name;
+                field.type = flyType(type);
+                field.loc = c.loc;
+                c.fields.push_back(std::move(field));
+            }
+            merged.classes.push_back(std::move(c));
+        }
         for (auto &f : module.functions) {
             if (u.own.count(f.name))
                 continue; // overloads: the first definition wins
             u.own[f.name] = u.prefix + f.name;
             Function fn;
             fn.name = u.prefix + f.name;
-            fn.result = f.result;
+            fn.result = flyType(f.result);
             fn.loc = {1, 1, canonical};
             fn.foreign = f.symbol;
             for (size_t i = 0; i < f.params.size(); ++i) {
                 Param param;
                 param.name = "arg" + std::to_string(i);
-                param.type = f.params[i];
+                param.type = flyType(f.params[i]);
+                if (i < f.pointees.size())
+                    param.pointee = flyType(f.pointees[i]);
+                if (i < f.callbacks.size())
+                    param.callback = f.callbacks[i];
                 param.loc = fn.loc;
                 fn.params.push_back(std::move(param));
             }
@@ -808,9 +851,7 @@ class Loader {
                     for (auto &[tag, info] : family.tags)
                         u.familyTags.insert(tag);
                 if (u.program.wildcards.count(alias))
-                    for (auto &[publicName, qualified] : dependency.own) {
-                        if (dependency.program.privateNames.count(publicName))
-                            continue;
+                    for (auto &[publicName, qualified] : visibleNames(dependency)) {
                         if (u.names.count(publicName) || u.program.imports.count(publicName))
                             throw Error(importLoc,
                                         "wildcard import collision for '" + publicName + "'");

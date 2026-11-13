@@ -202,11 +202,13 @@ end
 ap.close()
 ```
 
+Game math is built in: `import vecmath.*` gives `Vec2`, `Vec3`, `Vec4`, `Mat4`, and `Quat` structs with operators, which Aperture shares. Arrays of structs and numbers are stored as one contiguous block, so updating tens of thousands of particles a frame allocates nothing, and C libraries take those arrays, structs by value, and Flywheel functions as callbacks directly (see [native imports](docs/modules.md#structs-arrays-and-callbacks)). `flywheel new game NAME` starts a game project.
+
 For animated pages rather than games, desktop windows call `window.on_frame(function(double elapsed) ...)` once per display frame and change the page in place; see [desktop windows](docs/desktop.md#animation).
 
 ## Memory
 
-Values are reference counted with atomic counts and freed deterministically; a synchronous cycle collector reclaims unreachable cycles, and `weak<T>` is available for back links. `gc.step(seconds)`, `gc.pause()`, and `gc.resume()` let games and other real-time programs decide when collection happens. See [runtime ownership](docs/runtime.md).
+Values are reference counted (atomically only while other threads run) and freed deterministically; a synchronous cycle collector reclaims unreachable cycles, and `weak<T>` is available for back links. `gc.step(seconds)`, `gc.pause()`, and `gc.resume()` let games and other real-time programs decide when collection happens. See [runtime ownership](docs/runtime.md).
 
 ## Modules and errors
 
@@ -233,4 +235,4 @@ The installed compiler locates its runtime archive in `../lib`; the C++ linker t
 
 ## VS Code
 
-The [Flywheel VS Code extension](https://github.com/fwlang/vscode-flywheel) supplies syntax highlighting and snippets for `.fw` / `.fly` files, and starts `flywheel lsp` for diagnostics, hover, go to definition, references, rename, completion, document symbols, and formatting (set `flywheel.path` if the compiler is not on `PATH`). Other editors can use `flywheel lsp` through a generic LSP client.
+The [Flywheel VS Code extension](https://github.com/pmorphia/vscode-flywheel) supplies syntax highlighting and snippets for `.fw` / `.fly` files, and starts `flywheel lsp` for diagnostics, hover, go to definition, references, rename, completion, document symbols, and formatting (set `flywheel.path` if the compiler is not on `PATH`). Other editors can use `flywheel lsp` through a generic LSP client.

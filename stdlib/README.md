@@ -27,7 +27,7 @@ Libraries are compiler-resolved declarations backed by C++ runtime functions; no
 | `compress` | gzip, zlib, deflate, CRC-32, zip archives |
 | `sqlite` | SQLite 3 databases |
 | `toml`, `yaml` | configuration formats, parsed to `json.value` |
-| `csv`, `url`, `log`, `args`, `bigint`, `decimal`, `random`, `metric`, `imperial`, `cogwheel` | [library modules written in Flywheel](#library-modules) |
+| `csv`, `url`, `log`, `args`, `bigint`, `decimal`, `random`, `metric`, `imperial`, `cogwheel`, `vecmath` | [library modules written in Flywheel](#library-modules) |
 
 ## Strings
 
@@ -402,6 +402,28 @@ print random.weighted(["common", "rare"], [9.0, 1.0])
 ```
 
 Invalid ranges, probabilities, weights, and sample counts raise `ValueError`.
+
+### vecmath
+
+Vectors, matrices, and quaternions for games and graphics, all [structs](../docs/types.md#structs): they are copied like numbers, cost nothing to create, and are stored contiguously in arrays. Angles are in degrees. `Vec2` follows screen conventions (y down, angles clockwise from +x); `Vec3` has y up. Matrices are column-major, as shaders read them, and multiply column vectors: `a * b` applies `b` first.
+
+| Type | Operations |
+|---|---|
+| `Vec2(x, y)` | `+ - * /`, unary `-`, `==`, `length`, `length_squared`, `normalized`, `dot`, `cross` (a number), `distance`, `angle`, `rotated(degrees)`, `perpendicular`, `reflected(normal)`, `scaled`, `lerp`, `toward(to, step)`, `limited(length)`, `extend(z)`, `Vec2.from_angle(degrees)` |
+| `Vec3(x, y, z)` | `+ - * /`, unary `-`, `==`, `length`, `length_squared`, `normalized`, `dot`, `cross`, `distance`, `reflected`, `scaled`, `lerp`, `toward`, `limited`, `angle_to`, `xy`, `extend(w)` |
+| `Vec4(x, y, z, w)` | `+ - * /`, unary `-`, `==`, `dot`, `length`, `normalized`, `lerp`, `xyz`, `projected` (divided by w) |
+| `Mat4()` (identity; fields `m0` … `m15`) | `*`, `transform(Vec4)`, `transform_point`, `transform_direction`, `transposed`, `determinant`, `inverted` (`ValueError` when singular), `translated`, `rotated`, `scaled`, `at(row, column)`, `row`, `column`, `values()` (16 doubles); `Mat4.identity`, `translation`, `scaling`, `rotation(axis, degrees)`, `perspective(fov, aspect, near, far)`, `orthographic`, `look_at(eye, target, up)` |
+| `Quat()` (no rotation) | `*`, unary `-`, `rotate(Vec3)`, `conjugate`, `inverted`, `normalized`, `dot`, `length`, `slerp(to, t)`, `to_matrix`, `axis`, `angle`; `Quat.identity`, `from_axis_angle(axis, degrees)`, `from_euler(pitch, yaw, roll)`, `between(from, to)` |
+
+```flywheel
+import vecmath.*
+var turn = Quat.from_axis_angle(Vec3(0, 1, 0), 90)
+var model = Mat4.translation(Vec3(10, 0, 0)) * turn.to_matrix()
+print model.transform_point(Vec3(1, 0, 0))     # Vec3(x=10, y=0, z=-1)
+var view = Mat4.perspective(60, 16 / 9.0, 0.1, 100) * Mat4.look_at(Vec3(0, 2, 5), Vec3(), Vec3(0, 1, 0))
+```
+
+Libraries that use these types make their values interchangeable: [Aperture](../aperture/README.md)'s `ap.Vec2` is `vecmath.Vec2` (through `public import vecmath.*`).
 
 ### metric and imperial
 

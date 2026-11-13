@@ -1,6 +1,6 @@
 # Concurrency
 
-The `thread` module runs Flywheel code in parallel on native threads. Each thread has its own ownership frames and error channel; reference counting is atomic and the runtime's own tables are synchronized.
+The `thread` module runs Flywheel code in parallel on native threads. Each thread has its own ownership frames and error channel; reference counting is atomic while more than one thread runs, and the runtime's own tables are synchronized.
 
 ```flywheel
 import thread

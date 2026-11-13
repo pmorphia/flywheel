@@ -2267,7 +2267,10 @@ Program Parser::parse() {
             (void)e;
             components.insert(name);
         }
-        if ((hidden || visible) && peek().text == "import")
+        // `public import name.*` re-exports the module's public names: importers of this
+        // module see them as its own (`ap.Vec2` for vecmath's Vec2).
+        bool reexport = visible && peek().text == "import";
+        if (hidden && peek().text == "import")
             throw Error(peek().loc, "visibility applies to declarations, not imports");
         if (accept("import")) {
             // Native sources: `import cxx name` (also `import++ name`), `import c name`,
@@ -2351,6 +2354,12 @@ Program Parser::parse() {
                 p.importKinds[alias] = kind;
             if (wildcard)
                 p.wildcards.insert(alias);
+            if (reexport) {
+                if (!wildcard || !kind.empty())
+                    throw Error(nameLoc, "`public import` re-exports a whole module: write "
+                                         "`public import " + name + ".*`");
+                p.reexports.insert(alias);
+            }
             if (wildcard && name == "html")
                 p.html = true;
             if (wildcard && name == "svg")
@@ -2812,7 +2821,7 @@ Program Parser::parse() {
             for (auto &[name, e] : p.components)
                 if (!components.count(name))
                     declared = name;
-        if ((hidden || visible) && declared.empty())
+        if ((hidden || visible) && declared.empty() && !reexport)
             throw Error(peek().loc, "visibility requires a declaration");
         if (hidden)
             p.privateNames.insert(declared);

@@ -1,4 +1,43 @@
-# Benchmark checkpoint
+# Benchmark checkpoints
+
+## 2.21 (beta-21), LLVM 23
+
+```sh
+python3 benchmarks/run.py --compiler build-cli/flywheel --iterations 7 \
+  --output benchmarks/linux-llvm23.json
+```
+
+Same machine and method as below (Release runtime; medians in milliseconds, process launch included). Full data: [linux-llvm23.json](linux-llvm23.json).
+
+| Workload | Flywheel O0 | Flywheel O3 | C++ O0 | C++ O3 | CPython | 2.20 Flywheel O3 |
+|---|---:|---:|---:|---:|---:|---:|
+| startup | 0.814 | 0.870 | 0.795 | 0.831 | 7.646 | 0.856 |
+| numeric | 1.302 | 1.135 | 1.065 | 1.118 | 27.154 | 0.947 |
+| array | 1.928 | 1.245 | 1.148 | 0.945 | 25.575 | 5.389 |
+| strings | 2.561 | 2.634 | 4.554 | 2.436 | 9.170 | 4.079 |
+| markup | 29.501 | 28.563 | 80.801 | 4.569 | 32.667 | 27.714 |
+| allocations | 3.926 | 3.710 | 7.170 | 1.134 | 12.429 | 5.182 |
+
+What changed: arrays of numbers and structs are stored as one contiguous block that generated code reads and writes in place (a bounds check and a load, with the runtime called only when other threads run or the array is not flat); `for i in a..b` counts in a register instead of building a list; locals that are never reassigned, and the arrays in loop conditions, are borrowed instead of retained; array lengths are read in place; string interpolation fills one buffer instead of creating a string per part; and reference counts use plain instead of atomic updates while only one thread runs. The 2.20 column was measured the same day with the installed 2.20 compiler (5 iterations); startup, numeric, and markup differ by no more than run-to-run noise (a few tenths of a millisecond for the short workloads, a millisecond for markup).
+
+### Particles: a game-shaped workload
+
+[particles/](particles/) moves 50,000 particles (an array of a five-field struct) with gravity and wall bounces, the same code in Flywheel and C++:
+
+```sh
+flywheel build benchmarks/particles/particles.fw -O3 -o particles && ./particles 50000 600
+c++ -O3 -o particles-cpp benchmarks/particles/particles.cpp && ./particles-cpp 50000 600
+```
+
+| | ms per frame (50,000 particles) |
+|---|---:|
+| Flywheel 2.20 | 5.9 |
+| Flywheel 2.21 | 0.39 |
+| C++ (GCC 16, -O3) | 0.07 |
+
+At 60 frames per second a frame has 16.7 ms, so 2.21 moves 50,000 particles in about 2% of one. The remaining gap to C++ is the per-access check that no other thread runs and the index is in range, and LLVM not yet vectorizing the loop through those checks.
+
+## Earlier checkpoint (LLVM 21)
 
 Reproduce with a **Release** compiler/runtime build:
 

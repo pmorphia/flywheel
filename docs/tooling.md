@@ -237,4 +237,4 @@ and then library and native modules. In a modules directory, a package is a dire
 
 Navigation uses a syntactic index of each file, so it works while a file has type errors; `obj.member` resolves through the classes that declare a member of that name. The compiler reports the first error it finds, so the server publishes one diagnostic at a time.
 
-The [VS Code extension](https://github.com/fwlang/vscode-flywheel) starts the server for `.fw` and `.fly` files; its `flywheel.path` setting names the compiler. Other editors can start `flywheel lsp` from a generic LSP client.
+The [VS Code extension](https://github.com/pmorphia/vscode-flywheel) starts the server for `.fw` and `.fly` files; its `flywheel.path` setting names the compiler. Other editors can start `flywheel lsp` from a generic LSP client.

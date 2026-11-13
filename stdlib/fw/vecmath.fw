@@ -1,0 +1,562 @@
+# Vectors, matrices, and quaternions for games and graphics.
+#
+#     import vecmath.*
+#     var p = Vec3(1, 2, 3) + Vec3(0, 1, 0) * 2
+#     var turn = Quat.from_axis_angle(Vec3(0, 1, 0), 90)
+#     var model = Mat4.translation(p) * turn.to_matrix()
+#
+# Every type is a struct: values are copied like numbers and cost nothing to create, so a loop
+# over thousands of positions allocates nothing. Angles are in degrees. Matrices are column-major
+# (the layout OpenGL, Vulkan, and Metal shaders read) and multiply column vectors: `a * b`
+# applies b first, then a. Vec2 uses screen conventions (y down, angles clockwise from +x);
+# Vec3 has y up.
+import math
+
+private const double EPSILON = 0.000000001
+private const double DEGREES = math.PI / 180
+
+# A point or direction in 2D.
+struct Vec2
+    double x = 0
+    double y = 0
+
+    function operator +(Vec2 other) returns Vec2
+        return Vec2(this.x + other.x, this.y + other.y)
+    end
+    function operator -(Vec2 other) returns Vec2
+        return Vec2(this.x - other.x, this.y - other.y)
+    end
+    function operator *(double k) returns Vec2
+        return Vec2(this.x * k, this.y * k)
+    end
+    function operator /(double k) returns Vec2
+        return Vec2(this.x / k, this.y / k)
+    end
+    function operator -() returns Vec2
+        return Vec2(-this.x, -this.y)
+    end
+    function length() returns double
+        return math.sqrt(this.x * this.x + this.y * this.y)
+    end
+    function length_squared() returns double
+        return this.x * this.x + this.y * this.y
+    end
+    # The same direction with length 1 (a zero vector stays zero).
+    function normalized() returns Vec2
+        var size = this.length()
+        if size < EPSILON do
+            return Vec2(0, 0)
+        end
+        return Vec2(this.x / size, this.y / size)
+    end
+    function dot(Vec2 other) returns double
+        return this.x * other.x + this.y * other.y
+    end
+    # The z of the 3D cross product: positive when `other` is clockwise from this (y down).
+    function cross(Vec2 other) returns double
+        return this.x * other.y - this.y * other.x
+    end
+    function distance(Vec2 other) returns double
+        return (this - other).length()
+    end
+    # The angle of the vector in degrees, clockwise from +x (y points down).
+    function angle() returns double
+        return math.atan2(this.y, this.x) / DEGREES
+    end
+    function rotated(double degrees) returns Vec2
+        var a = degrees * DEGREES
+        var c = math.cos(a)
+        var s = math.sin(a)
+        return Vec2(this.x * c - this.y * s, this.x * s + this.y * c)
+    end
+    # The vector turned a quarter clockwise.
+    function perpendicular() returns Vec2
+        return Vec2(-this.y, this.x)
+    end
+    # Bounced off a surface with this unit normal.
+    function reflected(Vec2 normal) returns Vec2
+        return this - normal * (2 * this.dot(normal))
+    end
+    # Each component multiplied by the other's.
+    function scaled(Vec2 other) returns Vec2
+        return Vec2(this.x * other.x, this.y * other.y)
+    end
+    function lerp(Vec2 to, double t) returns Vec2
+        return Vec2(this.x + (to.x - this.x) * t, this.y + (to.y - this.y) * t)
+    end
+    # At most `step` closer to `to`.
+    function toward(Vec2 to, double step) returns Vec2
+        var delta = to - this
+        var distance = delta.length()
+        if distance <= step or distance < EPSILON do
+            return to
+        end
+        return this + delta * (step / distance)
+    end
+    # The vector cut down to at most `limit` long.
+    function limited(double limit) returns Vec2
+        var size = this.length()
+        if size <= limit or size < EPSILON do
+            return this
+        end
+        return this * (limit / size)
+    end
+    function extend(double z) returns Vec3
+        return Vec3(this.x, this.y, z)
+    end
+    # The unit vector at an angle in degrees.
+    static function from_angle(double degrees) returns Vec2
+        var a = degrees * DEGREES
+        return Vec2(math.cos(a), math.sin(a))
+    end
+end
+
+# A point or direction in 3D (y is up).
+struct Vec3
+    double x = 0
+    double y = 0
+    double z = 0
+
+    function operator +(Vec3 other) returns Vec3
+        return Vec3(this.x + other.x, this.y + other.y, this.z + other.z)
+    end
+    function operator -(Vec3 other) returns Vec3
+        return Vec3(this.x - other.x, this.y - other.y, this.z - other.z)
+    end
+    function operator *(double k) returns Vec3
+        return Vec3(this.x * k, this.y * k, this.z * k)
+    end
+    function operator /(double k) returns Vec3
+        return Vec3(this.x / k, this.y / k, this.z / k)
+    end
+    function operator -() returns Vec3
+        return Vec3(-this.x, -this.y, -this.z)
+    end
+    function length() returns double
+        return math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z)
+    end
+    function length_squared() returns double
+        return this.x * this.x + this.y * this.y + this.z * this.z
+    end
+    function normalized() returns Vec3
+        var size = this.length()
+        if size < EPSILON do
+            return Vec3(0, 0, 0)
+        end
+        return Vec3(this.x / size, this.y / size, this.z / size)
+    end
+    function dot(Vec3 other) returns double
+        return this.x * other.x + this.y * other.y + this.z * other.z
+    end
+    function cross(Vec3 other) returns Vec3
+        return Vec3(this.y * other.z - this.z * other.y, this.z * other.x - this.x * other.z,
+            this.x * other.y - this.y * other.x)
+    end
+    function distance(Vec3 other) returns double
+        return (this - other).length()
+    end
+    function reflected(Vec3 normal) returns Vec3
+        return this - normal * (2 * this.dot(normal))
+    end
+    function scaled(Vec3 other) returns Vec3
+        return Vec3(this.x * other.x, this.y * other.y, this.z * other.z)
+    end
+    function lerp(Vec3 to, double t) returns Vec3
+        return Vec3(this.x + (to.x - this.x) * t, this.y + (to.y - this.y) * t,
+            this.z + (to.z - this.z) * t)
+    end
+    function toward(Vec3 to, double step) returns Vec3
+        var delta = to - this
+        var distance = delta.length()
+        if distance <= step or distance < EPSILON do
+            return to
+        end
+        return this + delta * (step / distance)
+    end
+    function limited(double limit) returns Vec3
+        var size = this.length()
+        if size <= limit or size < EPSILON do
+            return this
+        end
+        return this * (limit / size)
+    end
+    # The angle between two directions, in degrees.
+    function angle_to(Vec3 other) returns double
+        var sizes = this.length() * other.length()
+        if sizes < EPSILON do
+            return 0
+        end
+        return math.acos(math.clamp(this.dot(other) / sizes, -1.0, 1.0)) / DEGREES
+    end
+    function xy() returns Vec2
+        return Vec2(this.x, this.y)
+    end
+    function extend(double w) returns Vec4
+        return Vec4(this.x, this.y, this.z, w)
+    end
+end
+
+# Four components: a point (w = 1) or direction (w = 0) for a Mat4, or a color.
+struct Vec4
+    double x = 0
+    double y = 0
+    double z = 0
+    double w = 0
+
+    function operator +(Vec4 other) returns Vec4
+        return Vec4(this.x + other.x, this.y + other.y, this.z + other.z, this.w + other.w)
+    end
+    function operator -(Vec4 other) returns Vec4
+        return Vec4(this.x - other.x, this.y - other.y, this.z - other.z, this.w - other.w)
+    end
+    function operator *(double k) returns Vec4
+        return Vec4(this.x * k, this.y * k, this.z * k, this.w * k)
+    end
+    function operator /(double k) returns Vec4
+        return Vec4(this.x / k, this.y / k, this.z / k, this.w / k)
+    end
+    function operator -() returns Vec4
+        return Vec4(-this.x, -this.y, -this.z, -this.w)
+    end
+    function dot(Vec4 other) returns double
+        return this.x * other.x + this.y * other.y + this.z * other.z + this.w * other.w
+    end
+    function length() returns double
+        return math.sqrt(this.dot(this))
+    end
+    function normalized() returns Vec4
+        var size = this.length()
+        if size < EPSILON do
+            return Vec4(0, 0, 0, 0)
+        end
+        return this / size
+    end
+    function lerp(Vec4 to, double t) returns Vec4
+        return this + (to - this) * t
+    end
+    function xyz() returns Vec3
+        return Vec3(this.x, this.y, this.z)
+    end
+    # x, y, z divided by w: a projected point.
+    function projected() returns Vec3
+        if math.abs(this.w) < EPSILON do
+            return Vec3(this.x, this.y, this.z)
+        end
+        return Vec3(this.x / this.w, this.y / this.w, this.z / this.w)
+    end
+end
+
+# A 4x4 matrix in column-major order: m0..m3 is the first column, m12..m14 the translation.
+# `Mat4()` is the identity.
+struct Mat4
+    double m0 = 1
+    double m1 = 0
+    double m2 = 0
+    double m3 = 0
+    double m4 = 0
+    double m5 = 1
+    double m6 = 0
+    double m7 = 0
+    double m8 = 0
+    double m9 = 0
+    double m10 = 1
+    double m11 = 0
+    double m12 = 0
+    double m13 = 0
+    double m14 = 0
+    double m15 = 1
+
+    # The element at a row and column (0 to 3).
+    function at(int row, int column) returns double
+        var i = column * 4 + row
+        return [this.m0, this.m1, this.m2, this.m3, this.m4, this.m5, this.m6, this.m7, this.m8,
+            this.m9, this.m10, this.m11, this.m12, this.m13, this.m14, this.m15][i]
+    end
+    function row(int r) returns Vec4
+        return Vec4(this.at(r, 0), this.at(r, 1), this.at(r, 2), this.at(r, 3))
+    end
+    function column(int c) returns Vec4
+        return Vec4(this.at(0, c), this.at(1, c), this.at(2, c), this.at(3, c))
+    end
+    # `a * b` applies b, then a.
+    function operator *(Mat4 b) returns Mat4
+        var a = this
+        return Mat4(
+            a.m0 * b.m0 + a.m4 * b.m1 + a.m8 * b.m2 + a.m12 * b.m3,
+            a.m1 * b.m0 + a.m5 * b.m1 + a.m9 * b.m2 + a.m13 * b.m3,
+            a.m2 * b.m0 + a.m6 * b.m1 + a.m10 * b.m2 + a.m14 * b.m3,
+            a.m3 * b.m0 + a.m7 * b.m1 + a.m11 * b.m2 + a.m15 * b.m3,
+            a.m0 * b.m4 + a.m4 * b.m5 + a.m8 * b.m6 + a.m12 * b.m7,
+            a.m1 * b.m4 + a.m5 * b.m5 + a.m9 * b.m6 + a.m13 * b.m7,
+            a.m2 * b.m4 + a.m6 * b.m5 + a.m10 * b.m6 + a.m14 * b.m7,
+            a.m3 * b.m4 + a.m7 * b.m5 + a.m11 * b.m6 + a.m15 * b.m7,
+            a.m0 * b.m8 + a.m4 * b.m9 + a.m8 * b.m10 + a.m12 * b.m11,
+            a.m1 * b.m8 + a.m5 * b.m9 + a.m9 * b.m10 + a.m13 * b.m11,
+            a.m2 * b.m8 + a.m6 * b.m9 + a.m10 * b.m10 + a.m14 * b.m11,
+            a.m3 * b.m8 + a.m7 * b.m9 + a.m11 * b.m10 + a.m15 * b.m11,
+            a.m0 * b.m12 + a.m4 * b.m13 + a.m8 * b.m14 + a.m12 * b.m15,
+            a.m1 * b.m12 + a.m5 * b.m13 + a.m9 * b.m14 + a.m13 * b.m15,
+            a.m2 * b.m12 + a.m6 * b.m13 + a.m10 * b.m14 + a.m14 * b.m15,
+            a.m3 * b.m12 + a.m7 * b.m13 + a.m11 * b.m14 + a.m15 * b.m15)
+    end
+    function transform(Vec4 v) returns Vec4
+        return Vec4(this.m0 * v.x + this.m4 * v.y + this.m8 * v.z + this.m12 * v.w,
+            this.m1 * v.x + this.m5 * v.y + this.m9 * v.z + this.m13 * v.w,
+            this.m2 * v.x + this.m6 * v.y + this.m10 * v.z + this.m14 * v.w,
+            this.m3 * v.x + this.m7 * v.y + this.m11 * v.z + this.m15 * v.w)
+    end
+    # A point (w = 1), divided by the resulting w for projections.
+    function transform_point(Vec3 p) returns Vec3
+        return this.transform(Vec4(p.x, p.y, p.z, 1)).projected()
+    end
+    # A direction (w = 0): rotation and scale, no translation.
+    function transform_direction(Vec3 d) returns Vec3
+        return this.transform(Vec4(d.x, d.y, d.z, 0)).xyz()
+    end
+    function transposed() returns Mat4
+        return Mat4(this.m0, this.m4, this.m8, this.m12, this.m1, this.m5, this.m9, this.m13,
+            this.m2, this.m6, this.m10, this.m14, this.m3, this.m7, this.m11, this.m15)
+    end
+    function determinant() returns double
+        var a = this
+        var s0 = a.m0 * a.m5 - a.m4 * a.m1
+        var s1 = a.m0 * a.m9 - a.m8 * a.m1
+        var s2 = a.m0 * a.m13 - a.m12 * a.m1
+        var s3 = a.m4 * a.m9 - a.m8 * a.m5
+        var s4 = a.m4 * a.m13 - a.m12 * a.m5
+        var s5 = a.m8 * a.m13 - a.m12 * a.m9
+        var c5 = a.m10 * a.m15 - a.m14 * a.m11
+        var c4 = a.m6 * a.m15 - a.m14 * a.m7
+        var c3 = a.m6 * a.m11 - a.m10 * a.m7
+        var c2 = a.m2 * a.m15 - a.m14 * a.m3
+        var c1 = a.m2 * a.m11 - a.m10 * a.m3
+        var c0 = a.m2 * a.m7 - a.m6 * a.m3
+        return s0 * c5 - s1 * c4 + s2 * c3 + s3 * c2 - s4 * c1 + s5 * c0
+    end
+    # The inverse; a matrix that cannot be inverted (determinant 0) raises ValueError.
+    function inverted() returns Mat4
+        var a = this
+        var s0 = a.m0 * a.m5 - a.m4 * a.m1
+        var s1 = a.m0 * a.m9 - a.m8 * a.m1
+        var s2 = a.m0 * a.m13 - a.m12 * a.m1
+        var s3 = a.m4 * a.m9 - a.m8 * a.m5
+        var s4 = a.m4 * a.m13 - a.m12 * a.m5
+        var s5 = a.m8 * a.m13 - a.m12 * a.m9
+        var c5 = a.m10 * a.m15 - a.m14 * a.m11
+        var c4 = a.m6 * a.m15 - a.m14 * a.m7
+        var c3 = a.m6 * a.m11 - a.m10 * a.m7
+        var c2 = a.m2 * a.m15 - a.m14 * a.m3
+        var c1 = a.m2 * a.m11 - a.m10 * a.m3
+        var c0 = a.m2 * a.m7 - a.m6 * a.m3
+        var det = s0 * c5 - s1 * c4 + s2 * c3 + s3 * c2 - s4 * c1 + s5 * c0
+        if math.abs(det) < EPSILON * EPSILON do
+            throw ValueError("Mat4.inverted: the matrix cannot be inverted")
+        end
+        var k = 1 / det
+        return Mat4(
+            (a.m5 * c5 - a.m9 * c4 + a.m13 * c3) * k,
+            (-a.m1 * c5 + a.m9 * c2 - a.m13 * c1) * k,
+            (a.m1 * c4 - a.m5 * c2 + a.m13 * c0) * k,
+            (-a.m1 * c3 + a.m5 * c1 - a.m9 * c0) * k,
+            (-a.m4 * c5 + a.m8 * c4 - a.m12 * c3) * k,
+            (a.m0 * c5 - a.m8 * c2 + a.m12 * c1) * k,
+            (-a.m0 * c4 + a.m4 * c2 - a.m12 * c0) * k,
+            (a.m0 * c3 - a.m4 * c1 + a.m8 * c0) * k,
+            (a.m7 * s5 - a.m11 * s4 + a.m15 * s3) * k,
+            (-a.m3 * s5 + a.m11 * s2 - a.m15 * s1) * k,
+            (a.m3 * s4 - a.m7 * s2 + a.m15 * s0) * k,
+            (-a.m3 * s3 + a.m7 * s1 - a.m11 * s0) * k,
+            (-a.m6 * s5 + a.m10 * s4 - a.m14 * s3) * k,
+            (a.m2 * s5 - a.m10 * s2 + a.m14 * s1) * k,
+            (-a.m2 * s4 + a.m6 * s2 - a.m14 * s0) * k,
+            (a.m2 * s3 - a.m6 * s1 + a.m10 * s0) * k)
+    end
+    function translated(Vec3 by) returns Mat4
+        return Mat4.translation(by) * this
+    end
+    function rotated(Vec3 axis, double degrees) returns Mat4
+        return Mat4.rotation(axis, degrees) * this
+    end
+    function scaled(Vec3 by) returns Mat4
+        return Mat4.scaling(by) * this
+    end
+    # The 16 numbers in column-major order, for uniforms and native code.
+    function values() returns double[]
+        return [this.m0, this.m1, this.m2, this.m3, this.m4, this.m5, this.m6, this.m7, this.m8,
+            this.m9, this.m10, this.m11, this.m12, this.m13, this.m14, this.m15]
+    end
+
+    static function identity() returns Mat4
+        return Mat4()
+    end
+    static function translation(Vec3 by) returns Mat4
+        return Mat4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, by.x, by.y, by.z, 1)
+    end
+    static function scaling(Vec3 by) returns Mat4
+        return Mat4(by.x, 0, 0, 0, 0, by.y, 0, 0, 0, 0, by.z, 0, 0, 0, 0, 1)
+    end
+    # A rotation by `degrees` around `axis` (counterclockwise looking down the axis).
+    static function rotation(Vec3 axis, double degrees) returns Mat4
+        var n = axis.normalized()
+        var a = degrees * DEGREES
+        var c = math.cos(a)
+        var s = math.sin(a)
+        var t = 1 - c
+        return Mat4(
+            t * n.x * n.x + c, t * n.x * n.y + s * n.z, t * n.x * n.z - s * n.y, 0,
+            t * n.x * n.y - s * n.z, t * n.y * n.y + c, t * n.y * n.z + s * n.x, 0,
+            t * n.x * n.z + s * n.y, t * n.y * n.z - s * n.x, t * n.z * n.z + c, 0,
+            0, 0, 0, 1)
+    end
+    # A perspective projection with a vertical field of view in degrees; depth maps to -1..1.
+    static function perspective(double fov, double aspect, double near, double far) returns Mat4
+        var f = 1 / math.tan(fov * DEGREES / 2)
+        var depth = near - far
+        return Mat4(f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) / depth, -1, 0, 0,
+            2 * far * near / depth, 0)
+    end
+    static function orthographic(double left, double right, double bottom, double top,
+            double near, double far) returns Mat4
+        var w = right - left
+        var h = top - bottom
+        var d = far - near
+        return Mat4(2 / w, 0, 0, 0, 0, 2 / h, 0, 0, 0, 0, -2 / d, 0, -(right + left) / w,
+            -(top + bottom) / h, -(far + near) / d, 1)
+    end
+    # A view matrix for a camera at `eye` looking at `target`.
+    static function look_at(Vec3 eye, Vec3 target, Vec3 up) returns Mat4
+        var f = (target - eye).normalized()
+        var s = f.cross(up).normalized()
+        var u = s.cross(f)
+        return Mat4(s.x, u.x, -f.x, 0, s.y, u.y, -f.y, 0, s.z, u.z, -f.z, 0, -s.dot(eye),
+            -u.dot(eye), f.dot(eye), 1)
+    end
+end
+
+# A rotation in 3D. `Quat()` is no rotation.
+struct Quat
+    double x = 0
+    double y = 0
+    double z = 0
+    double w = 1
+
+    # `a * b` rotates by b, then by a.
+    function operator *(Quat b) returns Quat
+        var a = this
+        return Quat(a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+            a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+            a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+            a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z)
+    end
+    function operator -() returns Quat
+        return Quat(-this.x, -this.y, -this.z, -this.w)
+    end
+    function dot(Quat other) returns double
+        return this.x * other.x + this.y * other.y + this.z * other.z + this.w * other.w
+    end
+    function length() returns double
+        return math.sqrt(this.dot(this))
+    end
+    function normalized() returns Quat
+        var size = this.length()
+        if size < EPSILON do
+            return Quat()
+        end
+        return Quat(this.x / size, this.y / size, this.z / size, this.w / size)
+    end
+    # The opposite rotation (for a unit quaternion).
+    function conjugate() returns Quat
+        return Quat(-this.x, -this.y, -this.z, this.w)
+    end
+    function inverted() returns Quat
+        var d = this.dot(this)
+        if d < EPSILON do
+            return Quat()
+        end
+        return Quat(-this.x / d, -this.y / d, -this.z / d, this.w / d)
+    end
+    # A vector turned by this rotation.
+    function rotate(Vec3 v) returns Vec3
+        var q = Vec3(this.x, this.y, this.z)
+        var t = q.cross(v) * 2
+        return v + t * this.w + q.cross(t)
+    end
+    # The shortest-path interpolation from this rotation to `to`.
+    function slerp(Quat to, double t) returns Quat
+        var target = to
+        var cosine = this.dot(to)
+        if cosine < 0 do
+            target = -to
+            cosine = -cosine
+        end
+        if cosine > 0.9995 do
+            return Quat(this.x + (target.x - this.x) * t, this.y + (target.y - this.y) * t,
+                this.z + (target.z - this.z) * t, this.w + (target.w - this.w) * t).normalized()
+        end
+        var angle = math.acos(cosine)
+        var s = math.sin(angle)
+        var a = math.sin((1 - t) * angle) / s
+        var b = math.sin(t * angle) / s
+        return Quat(this.x * a + target.x * b, this.y * a + target.y * b,
+            this.z * a + target.z * b, this.w * a + target.w * b)
+    end
+    function to_matrix() returns Mat4
+        var q = this.normalized()
+        var xx = q.x * q.x
+        var yy = q.y * q.y
+        var zz = q.z * q.z
+        var xy = q.x * q.y
+        var xz = q.x * q.z
+        var yz = q.y * q.z
+        var wx = q.w * q.x
+        var wy = q.w * q.y
+        var wz = q.w * q.z
+        return Mat4(1 - 2 * (yy + zz), 2 * (xy + wz), 2 * (xz - wy), 0,
+            2 * (xy - wz), 1 - 2 * (xx + zz), 2 * (yz + wx), 0,
+            2 * (xz + wy), 2 * (yz - wx), 1 - 2 * (xx + yy), 0,
+            0, 0, 0, 1)
+    end
+    # The axis (unit length) and angle in degrees.
+    function axis() returns Vec3
+        var q = this.normalized()
+        var s = math.sqrt(math.max(1 - q.w * q.w, 0.0))
+        if s < EPSILON do
+            return Vec3(1, 0, 0)
+        end
+        return Vec3(q.x / s, q.y / s, q.z / s)
+    end
+    function angle() returns double
+        return 2 * math.acos(math.clamp(this.normalized().w, -1.0, 1.0)) / DEGREES
+    end
+
+    static function identity() returns Quat
+        return Quat()
+    end
+    static function from_axis_angle(Vec3 axis, double degrees) returns Quat
+        var n = axis.normalized()
+        var half = degrees * DEGREES / 2
+        var s = math.sin(half)
+        return Quat(n.x * s, n.y * s, n.z * s, math.cos(half))
+    end
+    # Turns around x (pitch), then y (yaw), then z (roll), in degrees: the rotation applied
+    # last is listed last.
+    static function from_euler(double pitch, double yaw, double roll) returns Quat
+        return Quat.from_axis_angle(Vec3(0, 0, 1), roll) * Quat.from_axis_angle(Vec3(0, 1, 0), yaw) *
+            Quat.from_axis_angle(Vec3(1, 0, 0), pitch)
+    end
+    # The rotation that turns direction `from` onto direction `to`.
+    static function between(Vec3 from, Vec3 to) returns Quat
+        var a = from.normalized()
+        var b = to.normalized()
+        var d = a.dot(b)
+        if d < -0.999999 do
+            var axis = Vec3(1, 0, 0).cross(a)
+            if axis.length() < 0.000001 do
+                axis = Vec3(0, 1, 0).cross(a)
+            end
+            return Quat.from_axis_angle(axis, 180)
+        end
+        var c = a.cross(b)
+        return Quat(c.x, c.y, c.z, 1 + d).normalized()
+    end
+end

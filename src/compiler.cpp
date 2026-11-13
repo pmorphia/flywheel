@@ -1265,7 +1265,8 @@ end
             "fw_gc_collect",    "fw_gc_pending",    "fw_error_matches_name", "fw_foreign_cstr",
             "fw_gc_pause",      "fw_gc_resume",     "fw_gc_paused",     "fw_gc_threshold",
             "fw_quantity_register", "fw_register_destructor", "fw_thread_wait_all",
-            "fw_thread_detach"};
+            "fw_thread_detach", "fw_build_begin", "fw_build_text", "fw_build_int",
+            "fw_build_real",    "fw_build_string"};
         if (!safe.count(name))
             checkError();
         return resultValue;
@@ -1888,7 +1889,7 @@ end
     // out of range. `boxed` is the older path through slots, used when the runtime says the
     // array cannot be flat.
     bool flatItem(Ty t) {
-        return t.structure();
+        return t.structure() || primitive(t);
     }
     bool flatArray(Ty t) {
         return t.array() && flatItem(t.item());
@@ -2001,6 +2002,33 @@ end
         if (!terminated())
             b.CreateBr(merge);
         b.SetInsertPoint(merge);
+    }
+    // The length of a collection; a flat array's is read in place.
+    llvm::Value *lengthOf(Val x) {
+        if (!x.t.array())
+            return call("fw_length", b.getInt64Ty(), {x.v});
+        auto fast = llvm::BasicBlock::Create(ctx, "length.flat", current);
+        auto slow = llvm::BasicBlock::Create(ctx, "length.slots", current);
+        auto merge = llvm::BasicBlock::Create(ctx, "length.done", current);
+        auto direct = flatDirect(x.v);
+        auto check = llvm::BasicBlock::Create(ctx, "length.check", current);
+        b.CreateCondBr(direct, check, slow);
+        b.SetInsertPoint(check);
+        auto layout = objectField(x.v, FlatLayoutField, b.getPtrTy());
+        b.CreateCondBr(b.CreateICmpNE(layout, llvm::ConstantPointerNull::get(b.getPtrTy())), fast,
+                       slow);
+        b.SetInsertPoint(fast);
+        auto count = objectField(x.v, FlatCount, b.getInt64Ty());
+        b.CreateBr(merge);
+        b.SetInsertPoint(slow);
+        auto counted = call("fw_length", b.getInt64Ty(), {x.v});
+        auto from = b.GetInsertBlock();
+        b.CreateBr(merge);
+        b.SetInsertPoint(merge);
+        auto phi = b.CreatePHI(b.getInt64Ty(), 2);
+        phi->addIncoming(count, fast);
+        phi->addIncoming(counted, from);
+        return phi;
     }
     Val flatGet(Val array, llvm::Value *index, Ty t, const std::function<Val()> &boxed) {
         auto out = flatTemporary(t);
@@ -3075,6 +3103,9 @@ end
     std::optional<Val> mathCall(const std::string &name, std::vector<Val> &args);
     std::optional<Val> stdlibCall(const std::string &name, std::vector<Val> &args, Ty expected);
     void foreignBody(Signature &sig);
+    bool sameLayout(Ty a, Ty b);
+    llvm::Value *relabel(llvm::Value *v, Ty from, Ty to);
+    Val foreignArgument(Expr &arg, Param &param, Ty t);
     void assignStructField(Stmt &s, Val object);
     // Expressions that can be evaluated twice with the same result and no effects: the base
     // of `a.b[i].x = v` is read, changed, and stored back.
@@ -3767,12 +3798,42 @@ Val Compiler::value(Expr &e, Ty expected) {
         return {objectCall("fw_format_text", {frame, stringify(x).v, spec.v}), Ty{"string"}};
     }
     if (e.kind == "interpolate") {
-        Val out = literal("");
+        // Parts are evaluated first (they may run code that interpolates too), then appended to
+        // one buffer: literal text and numbers without a string object each.
+        struct Part {
+            std::string text;
+            Val v;
+            int kind; // 0 text, 1 signed integer, 2 real, 3 string
+        };
+        std::vector<Part> parts;
         for (auto &x : e.args) {
-            auto str = stringify(value(*x));
-            out = {objectCall("fw_concat", {frame, out.v, str.v}), Ty{"string"}};
+            if (x->kind == "string") {
+                parts.push_back({x->text, {}, 0});
+                continue;
+            }
+            auto v = value(*x);
+            if (v.t.integer() && !v.t.unsigned_())
+                parts.push_back({"", convert(v, Ty{"i64"}), 1});
+            else if (v.t.real())
+                parts.push_back({"", {b.CreateFPCast(v.v, b.getDoubleTy()), Ty{"double"}}, 2});
+            else
+                parts.push_back({"", stringify(v), 3});
         }
-        return out;
+        call("fw_build_begin", b.getVoidTy(), {});
+        for (auto &part : parts) {
+            if (part.kind == 0) {
+                if (!part.text.empty())
+                    call("fw_build_text", b.getVoidTy(),
+                         {b.CreateGlobalString(llvm::StringRef(part.text.data(), part.text.size())),
+                          i64(static_cast<int64_t>(part.text.size()))});
+            } else if (part.kind == 1)
+                call("fw_build_int", b.getVoidTy(), {part.v.v});
+            else if (part.kind == 2)
+                call("fw_build_real", b.getVoidTy(), {part.v.v});
+            else
+                call("fw_build_string", b.getVoidTy(), {part.v.v});
+        }
+        return {objectCall("fw_build_end", {frame}), Ty{"string"}};
     }
     if (e.kind == "name") {
         if (auto v = lookup(e.text))
@@ -3863,7 +3924,7 @@ Val Compiler::value(Expr &e, Ty expected) {
         if ((obj.t.name == "string" || obj.t.sequence() || obj.t.map() || obj.t.set() ||
              obj.t.tuple()) &&
             e.text == "length")
-            return {call("fw_length", b.getInt64Ty(), {obj.v}), Ty{"i64"}};
+            return {lengthOf(obj), Ty{"i64"}};
         if (obj.t.name == "element" || obj.t.name == "fragment") {
             if (e.text == "tag")
                 return {objectCall("fw_tag", {frame, obj.v}), Ty{"string"}};
@@ -3989,7 +4050,8 @@ Val Compiler::value(Expr &e, Ty expected) {
             auto target = tuple ? t.parts()[i] : item;
             if (target.name == "void" || target.name == "null")
                 error("collection item needs a concrete type");
-            set(out, i64(i), convert(items[i], target));
+            // A new literal is filled through its slots; it becomes flat when first used.
+            setSlot(out, i64(i), convert(items[i], target));
         }
         return out;
     }
@@ -5167,7 +5229,7 @@ Val Compiler::invoke(Expr &e, Ty expected) {
         auto a = value(*e.args[1]);
         if (a.t.name != "string" && !a.t.sequence() && !a.t.map() && !a.t.set() && !a.t.tuple())
             error("len expects a string or collection");
-        return {call("fw_length", b.getInt64Ty(), {a.v}), Ty{"i64"}};
+        return {lengthOf(a), Ty{"i64"}};
     }
     if (name == "weak") {
         if (e.args.size() != 2)
@@ -5263,7 +5325,8 @@ Val Compiler::invoke(Expr &e, Ty expected) {
             Ty t = type(param.type);
             Val v;
             if (i < supplied)
-                v = value(*e.args[i + 1], t);
+                v = sig.ast->foreign.empty() ? value(*e.args[i + 1], t)
+                                             : foreignArgument(*e.args[i + 1], param, t);
             else if (param.value) {
                 v = defaultValue(*param.value, t);
             } else
@@ -6043,7 +6106,10 @@ void Compiler::statement(Stmt &s) {
         b.CreateBr(cond);
         b.SetInsertPoint(cond);
         auto before = tempGeneration;
+        auto savedBorrowed = borrowed;
+        borrowed = borrowable(*s.expr); // as for a statement: nothing runs that could free it
         auto c = value(*s.expr);
+        borrowed = savedBorrowed;
         if (c.t.name != "bool")
             error("while condition must be bool");
         if (before != tempGeneration)
@@ -6238,18 +6304,32 @@ void Compiler::assignStructField(Stmt &s, Val object) {
 // (int64_t, double, const char *), calls it, and converts the result back.
 void Compiler::foreignBody(Signature &sig) {
     std::vector<llvm::Value *> values;
+    auto result = sig.result;
+    llvm::Value *out = nullptr;
+    if (result.structure()) {
+        // A struct result is written to memory passed first; struct arguments go by address.
+        out = flatTemporary(result);
+        values.push_back(out);
+    }
     for (size_t i = 0; i < sig.ast->params.size(); ++i) {
-        Val v{current->getArg(static_cast<unsigned>(i)), type(sig.ast->params[i].type)};
+        auto &param = sig.ast->params[i];
+        Val v{current->getArg(static_cast<unsigned>(i)), type(param.type)};
         if (v.t.name == "string")
             values.push_back(call("fw_foreign_cstr", b.getPtrTy(), {v.v}));
         else if (v.t.name == "bool")
             values.push_back(b.CreateZExt(v.v, b.getInt64Ty()));
-        else
+        else if (v.t.structure()) {
+            auto slot = flatTemporary(v.t);
+            b.CreateStore(v.v, slot);
+            values.push_back(slot);
+        } else if (!param.callback.empty()) {
+            auto code = call("fw_closure_code", b.getPtrTy(), {v.v});
+            values.push_back(call(param.callback, b.getInt64Ty(), {code, v.v}));
+        } else
             values.push_back(v.v);
     }
-    auto result = sig.result;
     llvm::Type *abi = result.name == "double"   ? b.getDoubleTy()
-                      : result.name == "void"   ? b.getVoidTy()
+                      : result.name == "void" || out ? b.getVoidTy()
                       : result.name == "string" ? static_cast<llvm::Type *>(b.getPtrTy())
                                                 : b.getInt64Ty();
     auto r = call(sig.ast->foreign, abi, values);
@@ -6258,15 +6338,80 @@ void Compiler::foreignBody(Signature &sig) {
         b.CreateRetVoid();
         return;
     }
-    llvm::Value *out = r;
-    if (result.name == "bool")
-        out = b.CreateICmpNE(r, i64(0));
+    llvm::Value *value = r;
+    if (out)
+        value = b.CreateLoad(ll(result), out);
+    else if (result.name == "bool")
+        value = b.CreateICmpNE(r, i64(0));
     else if (result.name == "string") {
-        out = objectCall("fw_foreign_string", {frame, r});
-        call("fw_retain", b.getVoidTy(), {out});
+        value = objectCall("fw_foreign_string", {frame, r});
+        call("fw_retain", b.getVoidTy(), {value});
     }
     call("fw_drop", b.getVoidTy(), {frame});
-    b.CreateRet(out);
+    b.CreateRet(value);
+}
+// Whether two struct types have the same fields in the same order (names aside), so a value of
+// one can stand for the other at a native call.
+bool Compiler::sameLayout(Ty a, Ty b) {
+    if (a == b)
+        return true;
+    if (!a.structure() || !b.structure())
+        return false;
+    auto &x = classes.at(a.name)->fields;
+    auto &y = classes.at(b.name)->fields;
+    if (x.size() != y.size())
+        return false;
+    for (size_t i = 0; i < x.size(); ++i)
+        if (!sameLayout(type(x[i].type), type(y[i].type)))
+            return false;
+    return true;
+}
+llvm::Value *Compiler::relabel(llvm::Value *v, Ty from, Ty to) {
+    if (from == to)
+        return v;
+    auto &fields = classes.at(to.name)->fields;
+    auto &source = classes.at(from.name)->fields;
+    llvm::Value *out = llvm::PoisonValue::get(ll(to));
+    for (size_t i = 0; i < fields.size(); ++i) {
+        auto part = b.CreateExtractValue(v, static_cast<unsigned>(i));
+        out = b.CreateInsertValue(
+            out, relabel(part, type(source[i].type), type(fields[i].type)), static_cast<unsigned>(i));
+    }
+    return out;
+}
+// An argument of a natively imported function: a struct of the same layout stands for the C
+// struct, and an array of the pointer's element type passes the address of its elements.
+Val Compiler::foreignArgument(Expr &arg, Param &param, Ty t) {
+    if (t.structure()) {
+        auto v = value(arg, t);
+        if (v.t.structure() && v.t != t) {
+            if (!sameLayout(v.t, t))
+                error("struct " + displayName(v.t.name) + " does not have the layout of " +
+                      displayName(t.name) + " (the same field types in the same order)");
+            return {relabel(v.v, v.t, t), t};
+        }
+        return v;
+    }
+    if (param.pointee.empty())
+        return value(arg, t);
+    auto v = value(arg);
+    if (!v.t.array())
+        return v;
+    auto item = v.t.item();
+    auto pointee = type(param.pointee == "void" ? "void" : param.pointee);
+    bool fits = param.pointee == "void" ? flatItem(item)
+                : pointee.structure()   ? item.structure() && sameLayout(item, pointee)
+                                        : item == pointee;
+    if (!fits)
+        error("this parameter points to " +
+              (param.pointee == "void" ? std::string("memory") : displayName(pointee.name) + " values") +
+              "; " + displayName(v.t.name) + " has the wrong element type" +
+              (pointee.numeric() ? " (pass a " + displayName(pointee.name) + "[])" : ""));
+    auto count = flatTemporary(Ty{"i64"});
+    auto data = call("fw_flat_data", b.getPtrTy(), {v.v, flatLayout(item), count});
+    guard(b.CreateICmpNE(data, llvm::ConstantPointerNull::get(b.getPtrTy())),
+          "this array cannot be passed to native code without copying", "NativeError");
+    return {b.CreatePtrToInt(data, b.getInt64Ty()), Ty{"i64"}};
 }
 void Compiler::buildFunction(Signature &sig, bool inference) {
     if (sig.building)

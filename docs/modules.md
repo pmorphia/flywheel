@@ -65,6 +65,8 @@ Functions are exposed when their parameters and result use these types:
 | `bool` | `bool`, `_Bool` | `bool` | `bool` |
 | `string` | `const char *`, `char *`; C++: `std::string`, `const std::string &`, `std::string_view` | `&str`, `String`, `&String` | `[]const u8`, `[:0]const u8`, `[*:0]const u8` |
 | `int` (a handle) | any other pointer: `void *`, `Texture *`, `const float *`, `struct node **` | | |
+| a struct (by value) | a struct defined in the source, as parameter or result (see below) | | |
+| a function value | a function pointer: `void (*on_hit)(int, double)` or a `typedef` of one | | |
 | result only: nothing | `void` | `()` | `void` |
 
 In C and C++, a pointer crosses as an `int` holding its address (0 is the null pointer). Flywheel never looks behind it: a handle is something to keep and pass back, which is how native resources (windows, buffers, database connections) are used. Wrap it in a class to give it a type and a destructor:
@@ -97,6 +99,44 @@ class Player
 end
 ```
 
+### Structs, arrays, and callbacks
+
+A struct defined in the C or C++ source (`typedef struct { ... } Name;` or `struct Name { ... };`) whose fields are numbers, `bool`, pointers, fixed arrays of those, and other such structs becomes a Flywheel [struct](types.md#structs) of the module with the same memory layout: field types keep their size (`int` is `i32`, `float` is `float`, `uint8_t` is `u8`, a pointer is an `int` handle), and a fixed array `float m[16]` becomes the fields `m0` … `m15`. Functions take and return such structs by value:
+
+```c
+// phys.c
+typedef struct { double x, y; } Vec2;
+typedef struct { Vec2 position; Vec2 velocity; float mass; int32_t id; } Body;
+typedef void (*HitFn)(int64_t body, double impulse);
+
+Vec2 vec_add(Vec2 a, Vec2 b) { Vec2 r = {a.x + b.x, a.y + b.y}; return r; }
+double sum(const double *values, size_t count) { ... }
+void step(Body *bodies, int64_t count, double dt, HitFn hit) { ... hit(bodies[i].id, 1.5); ... }
+```
+
+```flywheel
+import c phys
+
+struct Point
+    double x
+    double y
+end
+
+var a = phys.vec_add(phys.Vec2(1, 2), Point(3, 4))   # a struct of the same layout also fits
+double[] values = [1.5, 2.5, 3]
+print phys.sum(values, values.length)                 # passes the address of the elements
+phys.Body[] bodies = [phys.Body(phys.Vec2(0, 1), phys.Vec2(1, -2), float(1.5), i32(0))]
+phys.step(bodies, bodies.length, 1.0 / 60, function(int body, double impulse)
+    print "hit {body}"
+end)
+```
+
+- **Structs of the same layout.** A Flywheel struct whose fields have the same types in the same order (names aside) can be passed where the module's struct is expected, so a game's own `Vec2` goes straight to a C function taking the C `Vec2`. Results are the module's struct type.
+- **Arrays without copying.** A pointer parameter to numbers or structs (`const float *`, `Body *`, `void *`) also takes an array whose element type matches: `float[]` for `float *`, `i32[]` for `int *`, an array of a same-layout struct for `Body *`, any array of numbers or structs for `void *`. The function receives the address of the array's elements (arrays of numbers and structs are stored as one contiguous block) and may read and write them in place; pass the length separately. The address is valid during the call; C code must not keep it, because the array can move when it grows. An integer handle still works for these parameters.
+- **Callbacks.** A function pointer parameter takes a Flywheel function value whose parameters are `int` (for C integers and pointers), `double`, or `bool`, and whose result is `int`, `double`, or nothing. Each distinct function value occupies one of 64 trampolines per function pointer type for the rest of the program, so pass a named function or a stored function value rather than a new lambda on every call (functions without captured variables share a trampoline whenever their code is the same). An error raised in the callback is reported when the C function returns. Callbacks must be called on the thread that called the C function, while that call is running: C libraries that call back from their own threads (audio callbacks, for example) are not supported yet.
+
+Only types defined in the imported file itself are known (not those from its `#include`s): declare the structs and callback types a wrapper needs in the file, or write a small wrapper source that includes the library's header.
+
 Comments in a C or C++ source name what it needs, so a native module (or a package that contains one) builds without any setup by its user:
 
 | Directive | Effect |
@@ -108,7 +148,7 @@ Comments in a C or C++ source name what it needs, so a native module (or a packa
 
 `// flywheel(linux): ...`, `(windows)`, `(macos)`, and `(unix)` apply on that platform only. With `flywheel run` the libraries are linked into the module's shared library; `flywheel build` links them into the executable.
 
-Functions with other types (structs by value, function pointers, classes, templates, generics), `main`, functions inside C++ namespaces and classes, and functions named like Flywheel keywords are not exposed; only the first of overloaded C++ functions is. Rust functions must be `pub` (or `pub(crate)`) and Zig functions `pub` or `export`; C `static` functions are exposed, since the module is compiled together with its source. Integers are converted from Flywheel's 64-bit `int` with the language's usual casts. Strings are UTF-8; string results are copied.
+Functions with other types (unions, bit fields, structs from included headers, classes, templates, generics), `main`, functions inside C++ namespaces and classes, and functions named like Flywheel keywords are not exposed; only the first of overloaded C++ functions is. Rust functions must be `pub` (or `pub(crate)`) and Zig functions `pub` or `export`; C `static` functions are exposed, since the module is compiled together with its source. Integers are converted from Flywheel's 64-bit `int` with the language's usual casts. Strings are UTF-8; string results are copied.
 
 Failures become catchable `NativeError`s: C++ exceptions (with their `what()` message), Rust panics (with the panic message), and Zig error-union results (`!T`, with the error name). Crashes in native code (null pointers, aborts) end the program.
 
@@ -132,9 +172,9 @@ end
 
 These modifiers apply to top-level functions, classes, interfaces, enums, components, and variable/constant declarations. Inside a class, `private` marks a member visible only to that class's methods; see [member visibility](types.md#member-visibility-and-readonly-fields). Private names are available throughout their own module, including its exported functions and templates. Accessing a private name through an imported namespace is a compile error. Returning a value of a private class does not make the class name public or hide the value's existing fields.
 
-`import helpers.*` imports that module's own public declarations. Private declarations and imported namespaces are not re-exported. Collisions with another wildcard export, an import alias, or a local top-level declaration are compile errors. Exported `const` bindings remain immutable through qualified access. Mutable module globals retain shared identity across aliases.
+`import helpers.*` imports that module's own public declarations. Private declarations and imported namespaces are not re-exported, unless a module re-exports one explicitly with `public import name.*`: its public names then also belong to the re-exporting module, through qualified access (`ap.Vec2`) and wildcard imports alike, and they are the same declarations (Aperture's `ap.Vec2` is `vecmath.Vec2`). Collisions with another wildcard export, an import alias, or a local top-level declaration are compile errors. Exported `const` bindings remain immutable through qualified access. Mutable module globals retain shared identity across aliases.
 
-Native libraries (`core`, `collections`, `compress`, `crypto`, `desktop`, `encoding`, `flywheel`, `fs`, `gc`, `html`, `io`, `json`, `math`, `net`, `os`, `regex`, `sqlite`, `svg`, `testing`, `thread`, `time`, `toml`, `uuid`, `web`, and `yaml`) and library modules written in Flywheel (`args`, `bigint`, `cogwheel`, `csv`, `decimal`, `log`, and `url`) support qualified imports and aliases; see the [library reference](../stdlib/README.md). Native wildcard imports apply to the tag sets `html.*` and `svg.*`; local modules support wildcard imports for all their public declarations. [Element families](html-dom.md#element-families) declared in a module are visible in that module and in modules that import it. Generic classes and functions can be used across modules with type arguments, such as `shapes.Box<int>`. Packages are installed by [Pulley](tooling.md#packages); explicit re-export syntax is future work.
+Native libraries (`core`, `collections`, `compress`, `crypto`, `desktop`, `encoding`, `flywheel`, `fs`, `gc`, `html`, `io`, `json`, `math`, `net`, `os`, `regex`, `sqlite`, `svg`, `testing`, `thread`, `time`, `toml`, `uuid`, `web`, and `yaml`) and library modules written in Flywheel (`args`, `bigint`, `cogwheel`, `csv`, `decimal`, `log`, `url`, and `vecmath`) support qualified imports and aliases; see the [library reference](../stdlib/README.md). Native wildcard imports apply to the tag sets `html.*` and `svg.*`; local modules support wildcard imports for all their public declarations. [Element families](html-dom.md#element-families) declared in a module are visible in that module and in modules that import it. Generic classes and functions can be used across modules with type arguments, such as `shapes.Box<int>`. Packages are installed by [Pulley](tooling.md#packages).
 
 A local module named like a native library takes precedence, so a file `gc.fw` next to the entry file replaces `import gc`.
 

@@ -261,8 +261,325 @@ std::string cType(std::vector<std::string> words, bool cxx, bool parameter, std:
     }
     return "";
 }
+// --- C structs, pointers to elements, and callbacks ------------------------------------------
+// Words of a C type without qualifiers and the `struct` keyword.
+std::vector<std::string> bareWords(const std::vector<std::string> &words) {
+    static const std::set<std::string> dropped = {"const",    "volatile", "struct",  "restrict",
+                                                  "__restrict", "__restrict__", "register",
+                                                  "static", "extern", "inline", "typename"};
+    std::vector<std::string> kept;
+    for (auto &w : words)
+        if (!dropped.count(w))
+            kept.push_back(w);
+    return kept;
+}
+// The Flywheel type of a C scalar held in memory (a struct field or a pointer's element), with
+// its exact size: "i32" for int, "float" for float. "" when it is not a scalar.
+std::string scalarType(const std::string &text) {
+    static const std::map<std::string, std::string> types = {
+        {"float", "float"},          {"double", "double"},        {"bool", "bool"},
+        {"_Bool", "bool"},           {"char", "i8"},              {"signed char", "i8"},
+        {"int8_t", "i8"},            {"unsigned char", "u8"},     {"uint8_t", "u8"},
+        {"short", "i16"},            {"short int", "i16"},        {"signed short", "i16"},
+        {"int16_t", "i16"},          {"unsigned short", "u16"},   {"unsigned short int", "u16"},
+        {"uint16_t", "u16"},         {"int", "i32"},              {"signed", "i32"},
+        {"signed int", "i32"},       {"int32_t", "i32"},          {"unsigned", "u32"},
+        {"unsigned int", "u32"},     {"uint32_t", "u32"},         {"long long", "i64"},
+        {"long long int", "i64"},    {"int64_t", "i64"},          {"ssize_t", "i64"},
+        {"ptrdiff_t", "i64"},        {"intptr_t", "i64"},         {"intmax_t", "i64"},
+        {"unsigned long long", "u64"}, {"unsigned long long int", "u64"}, {"uint64_t", "u64"},
+        {"size_t", "u64"},           {"uintptr_t", "u64"},        {"uintmax_t", "u64"},
+#ifdef _WIN32
+        {"long", "i32"},             {"long int", "i32"},         {"signed long", "i32"},
+        {"unsigned long", "u32"},    {"unsigned long int", "u32"}, {"long unsigned", "u32"},
+#else
+        {"long", "i64"},             {"long int", "i64"},         {"signed long", "i64"},
+        {"unsigned long", "u64"},    {"unsigned long int", "u64"}, {"long unsigned", "u64"},
+#endif
+    };
+    auto found = types.find(text);
+    return found == types.end() ? "" : found->second;
+}
+const ForeignStruct *findStruct(const ForeignModule &m, const std::string &name) {
+    for (auto &s : m.structs)
+        if (s.name == name)
+            return &s;
+    return nullptr;
+}
+bool reservedName(const std::string &name);
+// The fields of a struct body (the tokens between its braces); false when a member is not
+// something a Flywheel struct can hold.
+bool structFields(const std::vector<std::string> &t, size_t from, size_t to, const ForeignModule &m,
+                  const std::map<std::string, std::string> &tags,
+                  std::vector<std::pair<std::string, std::string>> &fields) {
+    size_t start = from;
+    for (size_t i = from; i <= to; ++i) {
+        if (i < to && t[i] != ";")
+            continue;
+        std::vector<std::string> member(t.begin() + static_cast<ptrdiff_t>(start),
+                                        t.begin() + static_cast<ptrdiff_t>(i));
+        start = i + 1;
+        if (member.empty())
+            continue;
+        for (auto &w : member)
+            if (w == "(" || w == ":" || w == "{" || w == "union" || w == "=")
+                return false;
+        auto pieces = commaSplit(member, 0, member.size());
+        std::vector<std::string> base;
+        for (size_t p = 0; p < pieces.size(); ++p) {
+            std::vector<std::string> d(member.begin() + static_cast<ptrdiff_t>(pieces[p].first),
+                                       member.begin() + static_cast<ptrdiff_t>(pieces[p].second));
+            size_t count = 1;
+            while (d.size() >= 3 && d.back() == "]") {
+                auto &n = d[d.size() - 2];
+                if (d[d.size() - 3] != "[" || n.empty() ||
+                    !std::all_of(n.begin(), n.end(), [](char c) { return std::isdigit(static_cast<unsigned char>(c)); }))
+                    return false;
+                count *= static_cast<size_t>(std::stoul(n));
+                d.resize(d.size() - 3);
+            }
+            if (d.empty() || !(std::isalpha(static_cast<unsigned char>(d.back()[0])) || d.back()[0] == '_'))
+                return false;
+            auto name = d.back();
+            d.pop_back();
+            size_t stars = 0;
+            while (!d.empty() && d.back() == "*") {
+                ++stars;
+                d.pop_back();
+            }
+            if (p == 0)
+                base = d;
+            auto words = bareWords(base);
+            std::string type;
+            if (stars)
+                type = "i64"; // a pointer: an int handle
+            else if (words.size() == 1 && findStruct(m, words[0]))
+                type = "struct:" + words[0];
+            else if (words.size() == 1 && tags.count(words[0]))
+                type = "struct:" + tags.at(words[0]);
+            else
+                type = scalarType(join(words, 0, words.size()));
+            if (type.empty() || reservedName(name) || count == 0 || count > 4096)
+                return false;
+            if (count == 1)
+                fields.push_back({name, type});
+            else
+                for (size_t k = 0; k < count; ++k)
+                    fields.push_back({name + std::to_string(k), type});
+        }
+    }
+    return !fields.empty();
+}
+// A function pointer type `R (*)(params)`: the closure types it can take, or false.
+bool makeCallback(const std::vector<std::string> &resultWords, const std::vector<std::string> &t,
+                  size_t from, size_t to, bool cxx, ForeignCallback &out) {
+    std::string kind;
+    auto result = cType(resultWords, cxx, false, kind);
+    if (kind == "void")
+        out.result = "void";
+    else if (kind == "int" || kind == "pointer")
+        out.result = "i64";
+    else if (kind == "real")
+        out.result = "double";
+    else
+        return false; // bool, string, or unsupported results
+    {
+        std::vector<std::string> kept;
+        for (auto &w : resultWords)
+            if (w != "static" && w != "extern" && w != "inline")
+                kept.push_back(w);
+        out.cResult = join(kept, 0, kept.size());
+    }
+    auto params = commaSplit(t, from, to);
+    if (params.size() == 1 && params[0].second - params[0].first == 1 && t[params[0].first] == "void")
+        params.clear();
+    for (auto [a, z] : params) {
+        std::vector<std::string> words(t.begin() + static_cast<ptrdiff_t>(a),
+                                       t.begin() + static_cast<ptrdiff_t>(z));
+        std::string k;
+        auto type = cType(words, cxx, true, k);
+        if (type.empty() && words.size() > 1) {
+            words.pop_back();
+            type = cType(words, cxx, true, k);
+        }
+        if (k == "int" || k == "pointer")
+            out.params.push_back("i64");
+        else if (k == "real")
+            out.params.push_back("double");
+        else if (k == "bool")
+            out.params.push_back("bool");
+        else
+            return false;
+        out.cParams.push_back(join(words, 0, words.size()));
+    }
+    return true;
+}
+std::string callbackType(const ForeignCallback &c) {
+    std::string type = "function<" + c.result;
+    for (auto &p : c.params)
+        type += "," + p;
+    return type + ">";
+}
+// The index of an equal callback in the module, adding it if new.
+size_t addCallback(ForeignModule &m, ForeignCallback c) {
+    for (size_t i = 0; i < m.callbacks.size(); ++i)
+        if (m.callbacks[i].cType == c.cType && m.callbacks[i].params == c.params &&
+            m.callbacks[i].result == c.result)
+            return i;
+    c.symbol = "fw_" + m.language + "_" + m.key + "_callback" + std::to_string(m.callbacks.size());
+    m.callbacks.push_back(std::move(c));
+    return m.callbacks.size() - 1;
+}
+// Struct definitions and function pointer typedefs at the top level of a C or C++ source.
+struct CTypes {
+    std::map<std::string, std::string> tags;            // struct Tag -> its typedef name
+    std::map<std::string, ForeignCallback> callbacks;   // typedef name -> callback
+};
+CTypes scanTypes(const std::vector<std::string> &t, bool cxx, ForeignModule &m) {
+    CTypes types;
+    auto addStruct = [&](const std::string &name, size_t open, size_t close) {
+        ForeignStruct s;
+        s.name = name;
+        if (!findStruct(m, name) && !reservedName(name) &&
+            structFields(t, open + 1, close, m, types.tags, s.fields))
+            m.structs.push_back(std::move(s));
+    };
+    for (size_t i = 0; i < t.size();) {
+        if (t[i] == "typedef") {
+            size_t end = i + 1;
+            while (end < t.size() && t[end] != ";")
+                end = t[end] == "{" ? matching(t, end) + 1 : end + 1;
+            if (end >= t.size())
+                break;
+            if (t[i + 1] == "struct") {
+                size_t open = i + 2;
+                std::string tag;
+                if (open < end && t[open] != "{")
+                    tag = t[open++];
+                if (open < end && t[open] == "{") {
+                    auto close = matching(t, open);
+                    if (close + 2 == end) {
+                        addStruct(t[close + 1], open, close);
+                        if (!tag.empty() && findStruct(m, t[close + 1]))
+                            types.tags[tag] = t[close + 1];
+                    }
+                } else if (!tag.empty() && open + 1 == end) {
+                    // typedef struct Tag Name;
+                    if (auto known = findStruct(m, tag)) {
+                        ForeignStruct alias = *known;
+                        alias.name = t[open];
+                        if (!findStruct(m, alias.name))
+                            m.structs.push_back(alias);
+                    } else if (types.tags.count(tag))
+                        types.tags[t[open]] = types.tags.at(tag);
+                }
+            } else {
+                // typedef R (*Name)(params);
+                size_t k = i + 1;
+                while (k < end && t[k] != "(")
+                    ++k;
+                if (k + 4 < end && t[k + 1] == "*" && t[k + 3] == ")" && t[k + 4] == "(") {
+                    auto close = matching(t, k + 4);
+                    std::vector<std::string> resultWords(t.begin() + static_cast<ptrdiff_t>(i + 1),
+                                                         t.begin() + static_cast<ptrdiff_t>(k));
+                    ForeignCallback c;
+                    c.cType = t[k + 2];
+                    if (close + 1 == end && makeCallback(resultWords, t, k + 5, close, cxx, c))
+                        types.callbacks[t[k + 2]] = c;
+                }
+            }
+            i = end + 1;
+            continue;
+        }
+        if (t[i] == "struct" && i + 2 < t.size() && t[i + 2] == "{") {
+            auto close = matching(t, i + 2);
+            if (close + 1 < t.size() && t[close + 1] == ";") {
+                addStruct(t[i + 1], i + 2, close);
+                if (findStruct(m, t[i + 1]))
+                    types.tags[t[i + 1]] = t[i + 1];
+            }
+            i = close + 1;
+            continue;
+        }
+        if (t[i] == "{") {
+            i = matching(t, i) + 1;
+            continue;
+        }
+        ++i;
+    }
+    return types;
+}
+// The Flywheel type of a parameter that is a struct, a function pointer, or a pointer to
+// elements, beyond what cType knows. Sets `kind` ("struct", "callback", or as cType),
+// `spelled` (the C type without the parameter's name), `pointee`, and `callback`.
+std::string paramType(std::vector<std::string> words, bool cxx, ForeignModule &m,
+                      const CTypes &types, std::string &kind, std::string &spelled,
+                      std::string &pointee, std::string &callback) {
+    // An inline function pointer: R (*name)(params)
+    for (size_t k = 0; k + 2 < words.size(); ++k)
+        if (words[k] == "(" && words[k + 1] == "*") {
+            auto close = matching(words, k);
+            if (close + 1 >= words.size() || words[close + 1] != "(")
+                return "";
+            auto end = matching(words, close + 1);
+            std::vector<std::string> resultWords(words.begin(), words.begin() + static_cast<ptrdiff_t>(k));
+            ForeignCallback c;
+            if (!makeCallback(resultWords, words, close + 2, end, cxx, c))
+                return "";
+            std::vector<std::string> params(words.begin() + static_cast<ptrdiff_t>(close + 2),
+                                            words.begin() + static_cast<ptrdiff_t>(end));
+            c.cType = join(resultWords, 0, resultWords.size()) + " (*)(" + join(params, 0, params.size()) + ")";
+            auto index = addCallback(m, c);
+            kind = "callback";
+            spelled = m.callbacks[index].cType;
+            callback = m.callbacks[index].symbol;
+            return callbackType(m.callbacks[index]);
+        }
+    for (int drop = 0; drop < 2 && !words.empty(); ++drop) {
+        if (drop)
+            words.pop_back(); // the parameter's name
+        auto bare = bareWords(words);
+        std::vector<std::string> noConst;
+        for (auto &w : words)
+            if (w != "const" && w != "volatile")
+                noConst.push_back(w);
+        if (bare.size() == 1) {
+            auto name = types.tags.count(bare[0]) ? types.tags.at(bare[0]) : bare[0];
+            if (findStruct(m, name) && (name == bare[0] || types.tags.count(bare[0]))) {
+                kind = "struct";
+                spelled = join(noConst, 0, noConst.size());
+                return "struct:" + name;
+            }
+            if (auto found = types.callbacks.find(bare[0]); found != types.callbacks.end()) {
+                auto index = addCallback(m, found->second);
+                kind = "callback";
+                spelled = bare[0];
+                callback = m.callbacks[index].symbol;
+                return callbackType(m.callbacks[index]);
+            }
+        }
+        auto type = cType(words, cxx, true, kind);
+        if (type.empty())
+            continue;
+        spelled = join(words, 0, words.size());
+        if (kind == "pointer" && bare.size() >= 2 && bare.back() == "*" &&
+            std::count(bare.begin(), bare.end(), "*") == 1) {
+            auto element = join(bare, 0, bare.size() - 1);
+            auto tagged = types.tags.count(element) ? types.tags.at(element) : element;
+            if (element == "void")
+                pointee = "void";
+            else if (findStruct(m, tagged))
+                pointee = "struct:" + tagged;
+            else
+                pointee = scalarType(element);
+        }
+        return type;
+    }
+    return "";
+}
 void scanC(const std::string &source, bool cxx, ForeignModule &m) {
     auto t = tokenize(source, cxx ? "cxx" : "c");
+    auto types = scanTypes(t, cxx, m);
     size_t start = 0; // first token of the current top-level declaration
     std::function<void(size_t, size_t)> scope = [&](size_t from, size_t to) {
         start = from;
@@ -302,10 +619,23 @@ void scanC(const std::string &source, bool cxx, ForeignModule &m) {
                     std::string kind;
                     ForeignFunction f;
                     f.name = name;
-                    f.result =
-                        word && !qualified && !templated && name != "main" && name != "operator"
-                            ? cType(returnWords, cxx, false, kind)
-                            : "";
+                    bool candidate =
+                        word && !qualified && !templated && name != "main" && name != "operator";
+                    f.result = candidate ? cType(returnWords, cxx, false, kind) : "";
+                    if (candidate && f.result.empty()) {
+                        auto bare = bareWords(returnWords);
+                        if (bare.size() == 1) {
+                            auto structName = types.tags.count(bare[0]) ? types.tags.at(bare[0]) : bare[0];
+                            if (findStruct(m, structName)) {
+                                std::vector<std::string> spelled;
+                                for (auto &w : returnWords)
+                                    if (w != "const" && w != "static" && w != "inline" && w != "extern")
+                                        spelled.push_back(w);
+                                f.result = "struct:" + structName;
+                                kind = "struct:" + join(spelled, 0, spelled.size());
+                            }
+                        }
+                    }
                     f.nativeResult = kind;
                     bool ok = !f.result.empty();
                     auto params = commaSplit(t, i + 1, close);
@@ -322,16 +652,15 @@ void scanC(const std::string &source, bool cxx, ForeignModule &m) {
                             }
                         std::vector<std::string> words(t.begin() + static_cast<ptrdiff_t>(a),
                                                        t.begin() + static_cast<ptrdiff_t>(z));
-                        std::string paramKind;
-                        auto type = cType(words, cxx, true, paramKind);
-                        if (type.empty() && words.size() > 1) {
-                            words.pop_back(); // the parameter name
-                            type = cType(words, cxx, true, paramKind);
-                        }
+                        std::string paramKind, spelled, pointee, callback;
+                        auto type = paramType(words, cxx, m, types, paramKind, spelled, pointee,
+                                              callback);
                         if (type.empty())
                             ok = false;
                         f.params.push_back(type);
-                        f.nativeParams.push_back(paramKind + "|" + join(words, 0, words.size()));
+                        f.nativeParams.push_back(paramKind + "|" + spelled);
+                        f.pointees.push_back(pointee);
+                        f.callbacks.push_back(callback);
                     }
                     if (ok)
                         m.functions.push_back(std::move(f));
@@ -383,6 +712,67 @@ std::string cShim(const ForeignModule &m, const std::string &path, bool cxx) {
     else
         s += "static char *fw_shim_out(const char *text) { return text ? fw_shim_copy(text, "
              "strlen(text)) : fw_shim_copy(\"\", 0); }\n";
+    // Callbacks: a fixed table of trampolines per function pointer type. A closure bound to one
+    // stays alive for the rest of the program; closures without captured values are the same
+    // callback whenever their code is, so a named function passed again reuses its slot.
+    if (!m.callbacks.empty())
+        s += linkage + "void fw_retain(void *object);\n" + linkage +
+             "int64_t fw_length(void *object);\n"
+             "typedef struct { void *code; void *closure; } fw_callback_slot;\n";
+    const int slots = 64;
+    for (auto &c : m.callbacks) {
+        auto table = c.symbol + "_slots";
+        s += "static fw_callback_slot " + table + "[" + std::to_string(slots) + "];\n";
+        auto flyResult = c.result == "void" ? "void" : c.result == "double" ? "double" : "int64_t";
+        std::string codeType = std::string(flyResult) + " (*)(void *";
+        for (auto &p : c.params)
+            codeType += p == "double" ? ", double" : p == "bool" ? ", bool" : ", int64_t";
+        codeType += ")";
+        for (int k = 0; k < slots; ++k) {
+            std::string params, args;
+            for (size_t i = 0; i < c.params.size(); ++i) {
+                auto a = "p" + std::to_string(i);
+                params += (i ? ", " : "") + c.cParams[i] + " " + a;
+                auto &p = c.params[i];
+                bool pointer = c.cParams[i].find('*') != std::string::npos;
+                args += ", " + (p == "double" ? "(double)" + a
+                                : p == "bool" ? "(bool)" + a
+                                : pointer     ? "(int64_t)(intptr_t)" + a
+                                              : "(int64_t)" + a);
+            }
+            auto name = c.symbol + "_" + std::to_string(k);
+            auto slot = table + "[" + std::to_string(k) + "]";
+            auto invocation = "((" + codeType + ")" + slot + ".code)(" + slot + ".closure" + args + ")";
+            bool pointerResult = c.cResult.find('*') != std::string::npos;
+            s += "static " + c.cResult + " " + name + "(" + (params.empty() ? "void" : params) +
+                 ") {\n    " +
+                 (c.result == "void" ? invocation + ";"
+                  : pointerResult    ? "return (" + c.cResult + ")(intptr_t)" + invocation + ";"
+                                     : "return (" + c.cResult + ")" + invocation + ";") +
+                 "\n}\n";
+        }
+        s += "static void *" + table + "_code[" + std::to_string(slots) + "] = {";
+        for (int k = 0; k < slots; ++k)
+            s += std::string(k ? ", " : "") + "(void *)" + c.symbol + "_" + std::to_string(k);
+        s += "};\n";
+        s += linkage + "int64_t " + c.symbol + "(void *code, void *closure) {\n"
+             "    int shared = fw_length(closure) == 0;\n"
+             "    for (int i = 0; i < " + std::to_string(slots) + "; i++)\n"
+             "        if (" + table + "[i].closure == closure || (shared && " + table +
+             "[i].code == code && fw_length(" + table + "[i].closure) == 0))\n"
+             "            return (int64_t)(intptr_t)" + table + "_code[i];\n"
+             "    for (int i = 0; i < " + std::to_string(slots) + "; i++)\n"
+             "        if (!" + table + "[i].closure) {\n"
+             "            fw_retain(closure);\n"
+             "            " + table + "[i].code = code;\n"
+             "            " + table + "[i].closure = closure;\n"
+             "            return (int64_t)(intptr_t)" + table + "_code[i];\n"
+             "        }\n"
+             "    fw_foreign_fail(\"more than " + std::to_string(slots) +
+             " different functions passed as one callback type; pass the same function value "
+             "again instead of a new lambda\");\n"
+             "    return 0;\n}\n";
+    }
     auto abi = [](const std::string &type) {
         return type == "int" || type == "bool" ? "int64_t"
                : type == "double"              ? "double"
@@ -405,10 +795,17 @@ std::string cShim(const ForeignModule &m, const std::string &path, bool cxx) {
                         kept.push_back(w);
                 unconst = join(kept, 0, kept.size());
             }
-            params += std::string(params.empty() ? "" : ", ") +
-                      (f.params[i] == "string" ? "const char *" : abi(f.params[i])) + " " + a;
+            std::string paramType = f.params[i] == "string" ? "const char *"
+                                    : kind == "struct"     ? "const " + spelled + " *"
+                                    : kind == "callback"   ? "int64_t"
+                                                           : abi(f.params[i]);
+            params += std::string(params.empty() ? "" : ", ") + paramType + " " + a;
             std::string arg;
-            if (kind == "bool")
+            if (kind == "struct")
+                arg = "*" + a;
+            else if (kind == "callback")
+                arg = "(" + spelled + ")(intptr_t)" + a;
+            else if (kind == "bool")
                 arg = a + " != 0";
             else if (kind == "int" || kind == "real")
                 arg = "(" + unconst + ")" + a;
@@ -426,7 +823,12 @@ std::string cShim(const ForeignModule &m, const std::string &path, bool cxx) {
         }
         auto invocation = f.name + "(" + args + ")";
         std::string body;
-        if (f.result == "void")
+        bool structResult = f.nativeResult.rfind("struct:", 0) == 0;
+        if (structResult) {
+            // The result goes to memory the caller provides.
+            params = f.nativeResult.substr(7) + " *out" + (params.empty() ? "" : ", " + params);
+            body = "*out = " + invocation + ";";
+        } else if (f.result == "void")
             body = invocation + ";";
         else if (f.result == "bool")
             body = "return (" + invocation + ") ? 1 : 0;";
@@ -436,14 +838,14 @@ std::string cShim(const ForeignModule &m, const std::string &path, bool cxx) {
             body = "return (int64_t)(intptr_t)(" + invocation + ");";
         else
             body = std::string("return (") + abi(f.result) + ")(" + invocation + ");";
-        s += linkage + abi(f.result) + " " + f.symbol + "(" +
+        s += linkage + (structResult ? "void" : abi(f.result)) + " " + f.symbol + "(" +
              (params.empty() && !cxx ? "void" : params) + ") {\n";
         if (cxx) {
             s += "    try {\n        " + body +
                  "\n    } catch (const std::exception &e) {\n"
                  "        fw_foreign_fail(e.what());\n    } catch (...) {\n"
                  "        fw_foreign_fail(\"C++ exception\");\n    }\n";
-            if (f.result != "void")
+            if (f.result != "void" && !structResult)
                 s += std::string("    return ") + (f.result == "string" ? "nullptr" : "0") + ";\n";
         } else
             s += "    " + body + "\n";
@@ -888,6 +1290,17 @@ void compileTool(const std::string &program, const std::vector<std::string> &arg
         throw std::runtime_error("cannot compile " + language + " source " + source + ":\n" +
                                  output);
 }
+bool reservedName(const std::string &name) {
+    // Flywheel keywords: a function or field named like one could not be called or read.
+    static const std::set<std::string> reserved = {
+        "import", "as",    "var",      "const",    "class",     "function", "component",  "returns",
+        "return", "if",    "else",     "while",     "do",       "for",        "in",
+        "end",    "break", "continue", "try",      "catch",     "finally",  "throw",      "inst",
+        "attr",   "true",  "false",    "null",     "public",    "private",  "void",       "weak",
+        "and",    "or",    "not",      "enum",     "interface", "extends",  "implements", "match",
+        "case",   "super", "is",       "elements", "defer"};
+    return reserved.count(name) > 0;
+}
 } // namespace
 ForeignModule scanForeign(const std::string &language, const std::string &path) {
     ForeignModule m;
@@ -903,17 +1316,10 @@ ForeignModule scanForeign(const std::string &language, const std::string &path) 
         scanRust(text, m);
     else
         scanZig(text, m);
-    static const std::set<std::string> reserved = {
-        "import", "as",    "var",      "const",    "class",     "function", "component",  "returns",
-        "return", "if",    "else",     "while",     "do",       "for",        "in",
-        "end",    "break", "continue", "try",      "catch",     "finally",  "throw",      "inst",
-        "attr",   "true",  "false",    "null",     "public",    "private",  "void",       "weak",
-        "and",    "or",    "not",      "enum",     "interface", "extends",  "implements", "match",
-        "case",   "super", "is",       "elements", "defer"};
     std::set<std::string> seen;
     std::vector<ForeignFunction> kept;
     for (auto &f : m.functions)
-        if (!reserved.count(f.name) && seen.insert(f.name).second) {
+        if (!reservedName(f.name) && seen.insert(f.name).second) {
             f.symbol = "fw_" + language + "_" + m.key + "_" + f.name;
             kept.push_back(std::move(f));
         }
@@ -933,7 +1339,7 @@ ForeignModule scanForeign(const std::string &language, const std::string &path) 
         m.shim = rustShim(m, path);
     else
         m.shim = zigShim(m);
-    m.key = contentHash(text + m.shim).substr(0, 16);
+    m.key = contentHash("2|" + text + m.shim).substr(0, 16); // "2": shared libraries use -Bsymbolic
     return m;
 }
 ForeignBuild buildForeign(const std::vector<ForeignModule> &modules, bool shared) {
@@ -1011,6 +1417,11 @@ ForeignBuild buildForeign(const std::vector<ForeignModule> &modules, bool shared
             args.push_back(shim.string());
             if (shared) {
                 args.insert(args.end(), {"-shared", "-o", partial});
+#ifndef __APPLE__
+                // The module's own functions win over same-named ones already loaded (a C
+                // function `step` or `index` would otherwise call the C library's).
+                args.push_back("-Wl,-Bsymbolic");
+#endif
                 // After the source, so the linker resolves its references to them.
                 args.insert(args.end(), linkFlags.begin(), linkFlags.end());
             } else

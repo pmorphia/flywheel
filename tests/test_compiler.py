@@ -4415,11 +4415,64 @@ print web.static("/assets", "public", {port})
         self.assertEqual(result.stdout, "side effect\n30 null\n5\nfailed\nstill running\n", result.stderr)
         self.assertEqual(json.loads((self.root / "out.json").read_text()), {"sum": 5, "count": 1})
 
+    def test_vecmath_and_reexports(self):
+        self.source.write_text('import vecmath.*\nimport math\nvar a = Vec3(1, 2, 3)\nprint a + Vec3(1, 1, 1) * 2, 2 * a, a.cross(Vec3(0, 1, 0)), a.dot(a)\nvar m = Mat4.translation(Vec3(10, 0, 0)) * Mat4.rotation(Vec3(0, 1, 0), 90)\nprint m.transform_point(Vec3(1, 0, 0))\nvar inv = m.inverted()\nprint inv.transform_point(m.transform_point(a))\nprint (m * inv) == Mat4()\nvar q = Quat.from_axis_angle(Vec3(0, 1, 0), 90)\nprint q.rotate(Vec3(1, 0, 0)), q.to_matrix().transform_direction(Vec3(1, 0, 0))\nprint q.slerp(Quat(), 0.5).angle(), q.angle(), q.axis()\nprint Quat.between(Vec3(1, 0, 0), Vec3(0, 0, 1)).rotate(Vec3(1, 0, 0))\nvar p = Mat4.perspective(60, 16 / 9.0, 0.1, 100) * Mat4.look_at(Vec3(0, 0, 5), Vec3(0, 0, 0), Vec3(0, 1, 0))\nprint p.transform_point(Vec3(0, 0, 0)).z\nprint Vec2(3, 4).length(), Vec2.from_angle(90), m.at(0, 3), m.values().length\nprint Mat4().determinant(), Mat4.scaling(Vec3(2, 3, 4)).determinant()\n', encoding="utf-8")
+        result = subprocess.run([COMPILER, "run", self.source], capture_output=True, text=True, timeout=180)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, 'Vec3(x=3, y=4, z=5) Vec3(x=2, y=4, z=6) Vec3(x=-3, y=0, z=1) 14\nVec3(x=10, y=0, z=-1)\nVec3(x=1, y=2, z=3)\ntrue\nVec3(x=2.22044604925031e-16, y=0, z=-1) Vec3(x=2.22044604925031e-16, y=0, z=-1)\n45 90 Vec3(x=0, y=1, z=0)\nVec3(x=2.22044604925031e-16, y=0, z=1)\n0.961961961961962\n5 Vec2(x=6.12323399573677e-17, y=1) 10 16\n1 24\n', ""))
+        # `public import name.*` makes a module's names part of the importing module's.
+        (self.root / "shapes.fw").write_text("public import vecmath.*\nfunction origin() returns Vec2\n"
+                                            "    return Vec2(0, 0)\nend\n", encoding="utf-8")
+        self.source.write_text("import shapes\nimport vecmath\nvecmath.Vec2 p = shapes.Vec2(1, 2) + "
+                               "shapes.origin()\nprint p, shapes.Mat4().m0\n", encoding="utf-8")
+        result = subprocess.run([COMPILER, "run", self.source], capture_output=True, text=True, timeout=180)
+        self.assertEqual((result.returncode, result.stdout), (0, "Vec2(x=1, y=2) 1\n"), result.stderr)
+        (self.root / "shapes.fw").write_text("public import vecmath\n", encoding="utf-8")
+        result = subprocess.run([COMPILER, "check", self.source], capture_output=True, text=True, timeout=180)
+        self.assertIn("write `public import vecmath.*`", result.stderr)
+
+    def test_flat_arrays(self):
+        # Arrays of structs and numbers are stored as one block and read in place; every other
+        # operation (formatting, sorting, slicing, freezing, threads) still sees ordinary items.
+        self.source.write_text("import thread\nenum Suit\n    Hearts\n    Spades\nend\nstruct V\n    double x\n    i32 n\n    bool on\nend\nV[] vs = []\nfor i in 0..<5 do\n    vs.push(V(double(i), i32(i * 2), i % 2 == 0))\nend\nvs[1].x = 9\nprint vs[1], vs.length, vs.pop(), vs.length\nprint V(0, 0, true) in vs, vs.index_of(V(9, 2, false))\nvar copy = vs[1..<3]\ncopy[0] = V(7, 7, true)\nprint copy, vs[1]\nvs.sort(function(V a, V b) returns bool\n    return a.x < b.x\nend)\nprint vs\ntry\n    print vs[10]\ncatch e\n    print e.name, e.message\nend\nvar frozen = [V(1, 1, true)].freeze()\ntry\n    frozen[0] = V(2, 2, false)\ncatch e\n    print e.name\nend\ntry\n    frozen.push(V(2, 2, false))\ncatch e\n    print e.name\nend\nprint frozen\nint[] ns = [3, 1, 2]\nns.sort()\nns.push(10)\nns[0] += 100\nprint ns, ns.pop(), 2 in ns\nbool[] bs = [true, false]\nbs[1] = true\nprint bs\nSuit[] suits = [Suit.Hearts, Suit.Spades]\nsuits[0] = Suit.Spades\nprint suits\nchar[] cs = ['a', 'é']\ncs.push('z')\nprint cs\nu8[] bytes = [255, 1]\nbytes[1] = 200\nprint bytes\nfloat[] fs = [float(1.5), float(2.25)]\nfs[0] = float(fs[0] * 2)\nprint fs\n# Threads: other threads read and write while the main thread does too.\nint[] shared = []\nfor i in 0..<1000 do\n    shared.push(i)\nend\nvar tasks = [thread.spawn(function() returns int\n    var t = 0\n    for i in 0..<1000 do\n        t += shared[i]\n        shared[i] = shared[i] + 1\n    end\n    return t\nend), thread.spawn(function() returns int\n    for i in 0..<100 do\n        shared.push(i)\n    end\n    return 0\nend)]\nfor t in tasks do\n    t.join()\nend\nprint shared.length, shared[0], shared[999]\nV[][] grid = [[V(1, 1, true)], []]\ngrid[1].push(V(2, 2, false))\nprint grid\n", encoding="utf-8")
+        for level in ("-O0", "-O3"):
+            result = subprocess.run([COMPILER, "run", self.source, level], capture_output=True, text=True,
+                                    timeout=180)
+            self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "V(x=9, n=2, on=false) 5 V(x=4, n=8, on=true) 4\ntrue 1\n[V(x=7, n=7, on=true), V(x=2, n=4, on=true)] V(x=9, n=2, on=false)\n[V(x=0, n=0, on=true), V(x=2, n=4, on=true), V(x=3, n=6, on=false), V(x=9, n=2, on=false)]\nIndexError index out of bounds\nValueError\nValueError\n[V(x=1, n=1, on=true)]\n[101, 2, 3] 10 true\n[true, true]\n[Spades, Spades]\n['a', 'é', 'z']\n[255, 200]\n[3, 2.25]\n1100 1 1000\n[[V(x=1, n=1, on=true)], [V(x=2, n=2, on=false)]]\n", ""))
+
+    def test_native_structs_buffers_callbacks(self):
+        # C structs by value (and Flywheel structs of the same layout), arrays passed by address
+        # without copying (C writes into them), and closures as C function pointers. `step`
+        # also names a C library function, which the module's own definition must win over.
+        (self.root / "phys.c").write_text('#include <stddef.h>\n#include <stdint.h>\ntypedef struct { double x, y; } Vec2;\ntypedef struct { Vec2 position; Vec2 velocity; float mass; int32_t id; } Body;\nstruct Box { float m[4]; };\ntypedef void (*HitFn)(int64_t a, int64_t b, double impulse);\ntypedef double (*Field)(double x);\n\nVec2 vec_add(Vec2 a, Vec2 b) { Vec2 r = {a.x + b.x, a.y + b.y}; return r; }\ndouble vec_len2(const Vec2 v) { return v.x * v.x + v.y * v.y; }\nstruct Box box_scale(struct Box b, float k) { for (int i = 0; i < 4; i++) b.m[i] *= k; return b; }\ndouble sum(const double *values, size_t count) { double t = 0; for (size_t i = 0; i < count; i++) t += values[i]; return t; }\nvoid scale(float *values, int64_t count, double k) { for (int64_t i = 0; i < count; i++) values[i] *= (float)k; }\nvoid step(Body *bodies, int64_t count, double dt, HitFn hit) {\n    for (int64_t i = 0; i < count; i++) {\n        bodies[i].position.x += bodies[i].velocity.x * dt;\n        bodies[i].position.y += bodies[i].velocity.y * dt;\n        if (bodies[i].position.y < 0) { bodies[i].velocity.y = -bodies[i].velocity.y; hit(bodies[i].id, -1, bodies[i].mass); }\n    }\n}\ndouble integrate(Field f, double from, double to, int steps) {\n    double h = (to - from) / steps, t = 0;\n    for (int i = 0; i < steps; i++) t += f(from + (i + 0.5) * h) * h;\n    return t;\n}\nint apply(int (*op)(int, int), int a, int b) { return op(a, b); }\n', encoding="utf-8")
+        self.source.write_text('import c phys\n\nstruct Point\n    double x\n    double y\nend\n\nvar a = phys.vec_add(phys.Vec2(1, 2), phys.Vec2(3, 4))\nprint a.x, a.y\nprint phys.vec_len2(Point(3, 4))           # a Flywheel struct of the same layout\nvar box = phys.box_scale(phys.Box(1, 2, 3, 4), 2)\nprint box.m0, box.m3\ndouble[] values = [1.5, 2.5, 3]\nprint phys.sum(values, values.length)\nfloat[] small = [1, 2, 3]\nphys.scale(small, small.length, 10)\nprint small\nphys.Body[] bodies = []\nfor i in 0..<3 do\n    bodies.push(phys.Body(phys.Vec2(0, 1), phys.Vec2(1, -2 * double(i + 1)), float(1.5), i32(i)))\nend\nvar hits = 0\nvar total = 0.0\nphys.step(bodies, bodies.length, 1, function(int x, int y, double impulse)\n    hits += 1\n    total += impulse\n    print "hit {x} {y}"\nend)\nprint hits, total, bodies[2].position.y, bodies[2].velocity.y\nfunction square(double x) returns double\n    return x * x\nend\nprint phys.integrate(square, 0, 3, 1000)\nprint phys.integrate(square, 0, 1, 1000)\nprint phys.apply(function(int p, int q) returns int\n    return p * 10 + q\nend, 4, 2)\n', encoding="utf-8")
+        expected = ("4 6\n25\n2 8\n7\n[10, 20, 30]\nhit 0 -1\nhit 1 -1\nhit 2 -1\n3 4.5 -5 6\n"
+                    "8.99999774999999\n0.33333325\n42\n")
+        env = {**os.environ, "XDG_CACHE_HOME": str(self.root / "cache")}
+        run = lambda *args: subprocess.run([COMPILER, *map(str, args)], cwd=self.root, capture_output=True,
+                                           text=True, timeout=180, env=env)
+        result = run("run", self.source)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, expected, ""))
+        exe = self.root / ("phys.exe" if os.name == "nt" else "phys")
+        result = run("build", self.source, "-O3", "-o", exe)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
+        self.assertEqual((result.returncode, result.stdout), (0, expected))
+        wrong = self.root / "wrong.fw"
+        wrong.write_text("import c phys\nint[] xs = [1, 2]\nprint phys.sum(xs, 2)\n", encoding="utf-8")
+        result = run("check", wrong)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("points to double values", result.stderr)
+        self.assertIn("pass a double[]", result.stderr)
+        wrong.write_text("import c phys\nstruct Three\n    double a\n    double b\n    double c\nend\n"
+                         "print phys.vec_len2(Three(1, 2, 3))\n", encoding="utf-8")
+        result = run("check", wrong)
+        self.assertIn("does not have the layout of", result.stderr)
+
     def test_beta8_native_imports(self):
         (self.root / "cmath.c").write_text(
             '#include <stdio.h>\nint add(int a, int b) { return a + b; }\nstatic double half(double x) { return x / 2; }\n'
             'const char *greet(const char *n) { static char b[64]; snprintf(b, sizeof b, "hi %s", n); return b; }\n'
-            '_Bool even(long n) { return n % 2 == 0; }\nstruct p { int x; };\nint skipped(struct p q) { return q.x; }\nint main(void) { return 0; }\n',
+            '_Bool even(long n) { return n % 2 == 0; }\nstruct p { int x; union { int a; float b; } u; };\nint skipped(struct p q) { return q.x; }\nint main(void) { return 0; }\n',
             encoding="utf-8",
         )
         (self.root / "text.cpp").write_text(

@@ -284,6 +284,7 @@ Object *fw_thread_spawn(Frame *frame, Object *closure, TaskRunner runner) {
                     retain(state->error);
                     pendingError.clear();
                 }
+                borrowedValues().clear();
                 state->done = true;
                 --activeThreads;
             });

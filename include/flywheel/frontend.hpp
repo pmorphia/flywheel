@@ -58,6 +58,10 @@ struct Param {
     Location loc;
     bool isPrivate = false, readonly = false; // class fields only
     bool isProtected = false; // class fields only: visible in the class and its subclasses
+    // Parameters of natively imported functions: `pointee` is the element type of a C pointer
+    // parameter (a Flywheel type, or "void"), so an array of that type can be passed by address;
+    // `callback` is the shim function that turns a closure into a C function pointer.
+    std::string pointee, callback;
 };
 // Function and Class declare noexcept moves because MSVC's std::map move constructor is not
 // noexcept. Without these, std::vector<Function> would copy on reallocation, and copying fails
@@ -123,14 +127,34 @@ struct ElementFamily {
 // A C, C++, Rust, or Zig source imported with `import c/cxx/rust/zig name`: the functions found in
 // it and the generated shim that exposes them to Flywheel through C symbols.
 struct ForeignFunction {
-    std::string name, result;                // Flywheel types: int, double, bool, string, void
+    std::string name, result;                // Flywheel types: int, double, bool, string, void,
+                                             // "struct:Name", or function<...> for callbacks
     std::vector<std::string> params;         // Flywheel parameter types
     std::vector<std::string> nativeParams;   // the source's own parameter types
+    std::vector<std::string> pointees;       // element types of pointer parameters ("" if none)
+    std::vector<std::string> callbacks;      // bind functions of callback parameters ("" if none)
     std::string nativeResult, symbol;
+};
+// A C struct whose fields are numbers, bools, pointers, fixed arrays of those, and other such
+// structs: it becomes a Flywheel struct with the same layout. Field types are Flywheel types,
+// or "struct:Name" for a nested struct of the same source.
+struct ForeignStruct {
+    std::string name;
+    std::vector<std::pair<std::string, std::string>> fields;
+};
+// A C function pointer type a foreign function takes: closures passed for it go through one of
+// a fixed set of trampolines in the shim.
+struct ForeignCallback {
+    std::string result, cResult;               // Flywheel and C result types
+    std::vector<std::string> params, cParams;  // Flywheel and C parameter types
+    std::string cType;                         // the C function pointer type, for casts
+    std::string symbol;                        // the bind function: closure -> function pointer
 };
 struct ForeignModule {
     std::string language, source, shim, key; // key: hash identifying the source and shim
     std::vector<ForeignFunction> functions;
+    std::vector<ForeignStruct> structs;
+    std::vector<ForeignCallback> callbacks;
     // From `// flywheel: link|pkg|cflags|ldflags ...` comments in a C or C++ source: extra
     // compiler flags, linker flags, and pkg-config packages (resolved when the module is built).
     std::vector<std::string> compileFlags, linkFlags, packages;
@@ -199,6 +223,7 @@ struct Program {
     std::map<std::string, Location> importLocations;
     bool html = false;
     std::set<std::string> wildcards, privateNames;
+    std::set<std::string> reexports; // aliases of `public import name.*`
     std::vector<UnitNamespace> unitNamespaces;
     std::vector<UnitConversion> unitConversions; // consumed by lowerUnits
     // Static members (`static int count`, `static function make()`) become a module global or

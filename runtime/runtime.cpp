@@ -277,9 +277,13 @@ struct BorrowedValues {
         next = (next + 1) % 256;
         release(old);
     }
-    ~BorrowedValues() {
+    // Called by a thread before it stops counting as running (see singleThreaded).
+    void clear() {
         for (auto &item : items)
             release(std::exchange(item, nullptr));
+    }
+    ~BorrowedValues() {
+        clear();
     }
 };
 BorrowedValues &borrowedValues() {
@@ -491,8 +495,18 @@ void unlinkCandidate(CycleCandidates &c, Object *p) {
     p->previousCandidate = p->nextCandidate = nullptr;
     --c.count;
 }
+// While only one thread runs Flywheel code, reference counts change with plain loads and
+// stores instead of atomic read-modify-writes. A thread's start (the count rises first) and
+// its end (it touches no object after the count drops) order these with the atomic ones.
+inline bool singleThreaded() {
+    return activeThreads.load(std::memory_order_acquire) == 0;
+}
 void retain(Object *p) {
-    if (p)
+    if (!p)
+        return;
+    if (singleThreaded())
+        p->refs.store(p->refs.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+    else
         p->refs.fetch_add(1, std::memory_order_relaxed);
 }
 void release(Object *p);
@@ -538,7 +552,13 @@ void release(Object *p) {
             ++c.count;
         }
     }
-    if (p->refs.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    size_t before;
+    if (singleThreaded()) {
+        before = p->refs.load(std::memory_order_relaxed);
+        p->refs.store(before - 1, std::memory_order_relaxed);
+    } else
+        before = p->refs.fetch_sub(1, std::memory_order_acq_rel);
+    if (before == 1) {
         if (p->buffered.load(std::memory_order_relaxed)) {
             auto &c = candidates();
             SharedLock lock(c.lock);
@@ -793,6 +813,37 @@ Object *fw_uint_string(Frame *f, uint64_t n) {
     } catch (const NativeFailure &e) {
         recordFailure(e.type, e.message);
         return {};
+    } catch (const std::exception &e) {
+        recordFailure("RuntimeError", e.what());
+        return {};
+    }
+}
+// String interpolation: one buffer per thread, filled with no Flywheel code running between
+// fw_build_begin and fw_build_end (the compiler evaluates every part first).
+thread_local std::string buildBuffer;
+void fw_build_begin() {
+    buildBuffer.clear();
+}
+void fw_build_text(const char *text, int64_t length) {
+    buildBuffer.append(text, static_cast<size_t>(length));
+}
+void fw_build_int(int64_t n) {
+    char digits[24];
+    auto end = std::to_chars(digits, digits + sizeof digits, n).ptr;
+    buildBuffer.append(digits, end);
+}
+void fw_build_real(double n) {
+    std::ostringstream s;
+    s << std::setprecision(15) << n;
+    buildBuffer += s.str();
+}
+void fw_build_string(Object *text) {
+    if (text)
+        buildBuffer += text->text;
+}
+Object *fw_build_end(Frame *f) {
+    try {
+        return string(f, buildBuffer);
     } catch (const std::exception &e) {
         recordFailure("RuntimeError", e.what());
         return {};
