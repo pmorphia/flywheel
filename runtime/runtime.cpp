@@ -95,6 +95,7 @@ struct DesktopState {
     int width = 960, height = 640;
     bool running = false;
     Object *tree = nullptr;
+    Object *frame = nullptr; // window.on_frame closure
     std::vector<std::pair<std::string, Object *>> bindings;
     std::vector<std::pair<Object *, int>> handlers; // closure and arity, by rendered index
     std::string pending, rendered;
@@ -134,7 +135,13 @@ struct Object {
     std::atomic<bool> frozenFlag{false};
     Slot::Kind keyKind = Slot::Integer;
     std::string errorType, typeName;
-    std::vector<std::string> fieldNames;
+    // An Instance's field names: one list per class, shared by its instances and never
+    // freed (see internFields).
+    const std::vector<std::string> *fieldList = nullptr;
+    const std::vector<std::string> &fieldNames() const {
+        static const std::vector<std::string> none;
+        return fieldList ? *fieldList : none;
+    }
     std::vector<std::pair<std::string, std::string>> attributes;
     std::unique_ptr<MapIndex> index;
     // weakCell belongs to a weak reference's target; link is the cell a Weak object reads.
@@ -142,6 +149,9 @@ struct Object {
     void *code = nullptr; // Closure entry point; captured values live in slots.
     const void *classId = nullptr; // Instance class identity (compiler-generated name string)
     bool finalized = false;        // its destructors have run
+    // An instance whose fields hold only numbers, strings, and other such instances: it can
+    // never be part of a reference cycle, so the cycle collector ignores it.
+    bool leaf = false;
     Object *parentElement = nullptr; // latest parent of a markup node (not owning)
     // Cycle collector state: membership in the possible-roots list and trial-deletion marks.
     std::atomic<bool> buffered{false};
@@ -417,6 +427,8 @@ struct CycleCandidates {
     Object *head = nullptr;
     std::atomic<size_t> count{0};
     std::atomic<size_t> threshold{20000};
+    std::atomic<size_t> minimum{20000};  // the threshold never drops below this (gc.threshold)
+    std::atomic<int64_t> paused{0};      // gc.pause nesting: no automatic collection while > 0
 };
 CycleCandidates &candidates() {
     static CycleCandidates *state = new CycleCandidates; // never destroyed: used at exit
@@ -456,6 +468,7 @@ void release(Object *p);
 void linkParent(Object *parent, Object *child); // runtime/dom.inc
 DesktopState::~DesktopState() {
     release(tree);
+    release(frame);
     for (auto &[name, closure] : bindings)
         release(closure);
     for (auto &[closure, arity] : handlers)
@@ -479,7 +492,7 @@ void release(Object *p) {
         // stores `this` somewhere keeps it alive; it is then freed later without them.
         runDestructors(p);
     }
-    if (mayFormCycles(p->kind) && !p->buffered.load(std::memory_order_relaxed) &&
+    if (mayFormCycles(p->kind) && !p->leaf && !p->buffered.load(std::memory_order_relaxed) &&
         p->refs.load(std::memory_order_relaxed) > 1) {
         // `buffered` changes only under the candidate lock (or with no other threads), so
         // relaxed accesses suffice; locked read-modify-writes would cost every release.
@@ -683,7 +696,7 @@ void fw_sweep(Frame *f) {
     f->sweep();
     // Statement boundaries are safe points: every live reference is rooted or frame-owned.
     auto &c = candidates();
-    if (c.count > c.threshold && activeThreads.load() == 0)
+    if (c.count > c.threshold && activeThreads.load() == 0 && c.paused.load() == 0)
         fw_gc_collect();
 }
 void fw_root(Frame *f, Object **address) {
@@ -2101,8 +2114,8 @@ std::string thrownText(Object *value, bool *found = nullptr) {
     if (found)
         *found = true;
     if (value && value->kind == Object::Instance) {
-        for (size_t i = 0; i < value->fieldNames.size() && i < value->slots.size(); ++i)
-            if (value->fieldNames[i] == "message" && value->slots[i].object &&
+        for (size_t i = 0; i < value->fieldNames().size() && i < value->slots.size(); ++i)
+            if (value->fieldNames()[i] == "message" && value->slots[i].object &&
                 value->slots[i].object->kind == Object::String)
                 return value->slots[i].object->text;
         if (found)

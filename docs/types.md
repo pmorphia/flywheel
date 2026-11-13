@@ -143,6 +143,46 @@ print Money(150) + Money(275)    # $4.25
 
 The left operand selects the method, so `money * 2` works with `operator *(int k)` but `2 * money` does not. A class without `operator ==` keeps identity comparison (or `equals`, when it defines one). `function to_string returns string` sets how `print`, `string(x)`, and interpolation show an instance.
 
+## Structs
+
+A `struct` is a value type: a few numbers that travel together, such as a point, a color, or a rectangle. Assigning a struct, passing it, or returning it copies it, and creating one allocates nothing: struct values live in registers and stack slots, so arithmetic on them costs what the same arithmetic on separate variables would.
+
+```flywheel
+struct Vec2
+    double x = 0
+    double y = 0
+
+    function length() returns double
+        return math.sqrt(this.x * this.x + this.y * this.y)
+    end
+    function operator +(Vec2 other) returns Vec2
+        return Vec2(this.x + other.x, this.y + other.y)
+    end
+    function operator *(double k) returns Vec2
+        return Vec2(this.x * k, this.y * k)
+    end
+    static function zero() returns Vec2
+        return Vec2(0, 0)
+    end
+end
+
+var a = Vec2(3, 4)
+var b = a            # a copy
+b.x = 10
+print a.x, b.x                 # 3 10
+print (a + b * 2).x, a == Vec2(3, 4), a
+```
+
+- **Fields** are numbers, `bool`, `char`, enums, and other structs (held inline). A struct cannot hold a string, a collection, or a class instance, and cannot contain itself; use a class for those. Fields are public and assignable.
+- **Construction** takes the fields in order: `Vec2(3, 4)`. Trailing fields with defaults may be left out (`Vec2()`, `Vec2(5)`). Structs have no `constructor` or `destructor`; write a `static function` for other ways to build one.
+- **Methods** receive a copy of the value, so a method cannot change its own fields (`this.x = 1` is a compile error); return a new value instead. Operators work as in classes, and `2 * v` also uses the struct's `operator *` (and `+`) when the number is on the left. Methods cannot be taken as function values; wrap the call in a lambda.
+- **Changing a field** of a struct stored somewhere changes that copy in place, whatever holds it: `v.x = 1`, `body.position.y += 2`, `points[i].x = 0`, `box.low.x = 0`. A field of a temporary (`make().x = 1`) cannot be assigned.
+- **Equality** (`==`, `!=`) compares field by field, unless the struct declares `operator ==`. `in`, `contains`, `index_of`, and `remove` on arrays of structs compare the same way.
+- Structs print like classes (`Vec2(x=3, y=4)`, or their `to_string`), encode to JSON objects, and decode with `json.decode<Vec2>`.
+- `Vec2?` is a nullable struct, and structs work as elements of arrays, tuples, and map values, as class fields, in closures, with generics, in `Result`, and across threads. They cannot be map keys or set elements, cannot be generic, and cannot extend or implement anything. `struct` is a soft keyword: it starts a declaration only as `struct Name` on its own line.
+
+Stored inside a collection, a class field, or a closure, a struct is kept in a small heap object and copied out when read; local variables, parameters, and results never touch the heap.
+
 ## Inheritance
 
 `class Dog extends Animal` inherits fields and methods. The base class's fields come first in the subclass's field order (and its generated constructor). A subclass may override a method with exactly the same parameter and return types; a different signature is a compile error. `super.method(...)` calls the base class's implementation, `super.constructor(...)` runs the base class's constructor (or assigns its fields in order when it has none), and `super.field` reads an inherited field.

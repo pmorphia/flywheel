@@ -64,9 +64,51 @@ Functions are exposed when their parameters and result use these types:
 | `double` | `float`, `double` | `f32`, `f64` | `f16`, `f32`, `f64` |
 | `bool` | `bool`, `_Bool` | `bool` | `bool` |
 | `string` | `const char *`, `char *`; C++: `std::string`, `const std::string &`, `std::string_view` | `&str`, `String`, `&String` | `[]const u8`, `[:0]const u8`, `[*:0]const u8` |
+| `int` (a handle) | any other pointer: `void *`, `Texture *`, `const float *`, `struct node **` | | |
 | result only: nothing | `void` | `()` | `void` |
 
-Functions with other types (pointers, structs, classes, templates, generics), `main`, functions inside C++ namespaces and classes, and functions named like Flywheel keywords are not exposed; only the first of overloaded C++ functions is. Rust functions must be `pub` (or `pub(crate)`) and Zig functions `pub` or `export`; C `static` functions are exposed, since the module is compiled together with its source. Integers are converted from Flywheel's 64-bit `int` with the language's usual casts. Strings are UTF-8; string results are copied.
+In C and C++, a pointer crosses as an `int` holding its address (0 is the null pointer). Flywheel never looks behind it: a handle is something to keep and pass back, which is how native resources (windows, buffers, database connections) are used. Wrap it in a class to give it a type and a destructor:
+
+```c
+// audio.c
+// flywheel: pkg sdl3
+// flywheel(unix): link m
+#include <SDL3/SDL.h>
+typedef struct { SDL_AudioStream *stream; } Player;
+Player *player_open(void) { ... }
+void player_tone(Player *player, double frequency) { ... }
+void player_close(Player *player) { ... }
+```
+
+```flywheel
+import c audio
+
+class Player
+    private int handle = 0
+    constructor
+        this.handle = audio.player_open()
+    end
+    destructor
+        audio.player_close(this.handle)
+    end
+    function tone(double frequency)
+        audio.player_tone(this.handle, frequency)
+    end
+end
+```
+
+Comments in a C or C++ source name what it needs, so a native module (or a package that contains one) builds without any setup by its user:
+
+| Directive | Effect |
+|---|---|
+| `// flywheel: link SDL3 m` | link these libraries (`-lSDL3 -lm`; `SDL3.lib` with MSVC) |
+| `// flywheel: pkg sdl3 >= 3.2` | compile and link with a pkg-config package; a missing package is an error naming it |
+| `// flywheel: cflags -DFAST -Ivendor` | extra compiler flags |
+| `// flywheel: ldflags -L/opt/lib` | extra linker flags |
+
+`// flywheel(linux): ...`, `(windows)`, `(macos)`, and `(unix)` apply on that platform only. With `flywheel run` the libraries are linked into the module's shared library; `flywheel build` links them into the executable.
+
+Functions with other types (structs by value, function pointers, classes, templates, generics), `main`, functions inside C++ namespaces and classes, and functions named like Flywheel keywords are not exposed; only the first of overloaded C++ functions is. Rust functions must be `pub` (or `pub(crate)`) and Zig functions `pub` or `export`; C `static` functions are exposed, since the module is compiled together with its source. Integers are converted from Flywheel's 64-bit `int` with the language's usual casts. Strings are UTF-8; string results are copied.
 
 Failures become catchable `NativeError`s: C++ exceptions (with their `what()` message), Rust panics (with the panic message), and Zig error-union results (`!T`, with the error name). Crashes in native code (null pointers, aborts) end the program.
 

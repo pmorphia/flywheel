@@ -239,7 +239,7 @@ void encodeObject(Object *object, std::string &out, int indent, int depth,
     case Object::Instance:
         out += '{';
         for (size_t i = 0; i < slots.size(); ++i)
-            field(i, i < object->fieldNames.size() ? object->fieldNames[i] : std::to_string(i),
+            field(i, i < object->fieldNames().size() ? object->fieldNames()[i] : std::to_string(i),
                   slots[i]);
         if (!slots.empty())
             encodeNewline(out, indent, depth);

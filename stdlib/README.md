@@ -9,7 +9,7 @@ Libraries are compiler-resolved declarations backed by C++ runtime functions; no
 | `desktop` | native windows with events and JavaScript bindings — [desktop](../docs/desktop.md) |
 | `flywheel` | run other Flywheel files and get their return values — [flywheel](#flywheel) |
 | `fs` | files, directories, and paths |
-| `gc` | cycle collection — [runtime](../docs/runtime.md#cycle-collection) |
+| `gc` | cycle collection: `collect`, `step`, `pause`, `resume`, `paused`, `pending`, `threshold` — [runtime](../docs/runtime.md#cycle-collection) |
 | `html`, `svg` | tag sets (`import html.*`, `import svg.*`), rendering, tree queries — [HTML tools](../docs/html-dom.md) |
 | `io` | stream-style terminal I/O and files — [input and processes](../docs/input-processes.md) |
 | `json` | parsing, querying, encoding, typed decoding, files, `<json>` literals |

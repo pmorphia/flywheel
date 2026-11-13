@@ -158,7 +158,8 @@ std::string document(const std::string &path) {
         }
         if (!members.empty())
             members = "<ul class=\"members\">\n" + members + "</ul>\n";
-        entry(c.loc.line, c.isInterface ? "interface" : "class", c.name, members);
+        entry(c.loc.line, c.isInterface ? "interface" : c.isStruct ? "struct" : "class", c.name,
+              members);
     }
     for (auto &en : program.enums) {
         std::string members = "<ul class=\"members\">\n";

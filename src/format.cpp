@@ -191,7 +191,8 @@ std::string format(const std::string &source) {
         } else if (keyword == "match")
             stack.push_back({"match", depth});
         else if (keyword == "class" || keyword == "enum" || keyword == "elements" ||
-                 keyword == "while" || keyword == "for" || keyword == "try")
+                 keyword == "while" || keyword == "for" || keyword == "try" ||
+                 (keyword == "struct" && line.size() == first + 2 && line[first + 1]->kind == "id"))
             stack.push_back({"block", depth});
         else if (keyword == "interface")
             stack.push_back({"interface", depth});

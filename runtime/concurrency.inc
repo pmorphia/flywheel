@@ -5,12 +5,16 @@
 
 namespace {
 // Strong references an object holds: its slots and map/set keys.
+// Leaf instances cannot reach a cycle, so the collector does not follow references to them;
+// they are freed by their reference counts when their holders are.
 template <class F> void eachChild(Object *p, F &&visit) {
+    if (p->leaf)
+        return;
     for (auto &slot : p->slots)
-        if (slot.kind == Slot::Reference && slot.object)
+        if (slot.kind == Slot::Reference && slot.object && !slot.object->leaf)
             visit(slot.object);
     for (auto &slot : p->keys)
-        if (slot.kind == Slot::Reference && slot.object)
+        if (slot.kind == Slot::Reference && slot.object && !slot.object->leaf)
             visit(slot.object);
     for (auto &event : p->eventList())
         if (event.handler.object)
@@ -20,19 +24,23 @@ enum : uint8_t { gcBlack = 0, gcGray = 1, gcWhite = 2 };
 // Synchronous trial deletion over the possible roots (Bacon and Rajan). References from
 // outside the object graph (variables, frames, native owners) keep trial counts above zero,
 // so only unreachable cycles are freed. Must run while no other thread executes Flywheel code.
-int64_t collectCycles() {
+// `limit` bounds how many possible roots one call examines (gc.step); the rest stay queued.
+int64_t collectCycles(size_t limit = std::numeric_limits<size_t>::max()) {
     auto &c = candidates();
     std::vector<Object *> roots;
     {
         std::lock_guard<std::mutex> lock(c.lock);
-        for (auto p = c.head; p; p = p->nextCandidate)
+        auto p = c.head;
+        for (; p && roots.size() < limit; p = p->nextCandidate)
             roots.push_back(p);
-        for (auto p : roots) {
-            p->buffered.store(false);
-            p->previousCandidate = p->nextCandidate = nullptr;
+        c.head = p;
+        if (p)
+            p->previousCandidate = nullptr;
+        for (auto root : roots) {
+            root->buffered.store(false);
+            root->previousCandidate = root->nextCandidate = nullptr;
         }
-        c.head = nullptr;
-        c.count = 0;
+        c.count -= roots.size();
     }
     std::vector<Object *> stack, touched;
     auto gray = [&](Object *p) {
@@ -148,7 +156,7 @@ int64_t collectCycles() {
         }
         delete p;
     }
-    c.threshold = std::max<size_t>(20000, c.count.load() * 2);
+    c.threshold = std::max<size_t>(c.minimum.load(), c.count.load() * 2);
     return static_cast<int64_t>(garbage.size());
 }
 
@@ -206,6 +214,50 @@ int64_t fw_gc_collect() {
 }
 int64_t fw_gc_pending() {
     return static_cast<int64_t>(candidates().count.load());
+}
+// gc.pause / gc.resume: automatic collection at statement boundaries stops while paused
+// (calls nest). gc.collect and gc.step still collect.
+void fw_gc_pause() {
+    ++candidates().paused;
+}
+void fw_gc_resume() {
+    auto &paused = candidates().paused;
+    for (auto n = paused.load(); n > 0 && !paused.compare_exchange_weak(n, n - 1);)
+        ;
+}
+int64_t fw_gc_paused() {
+    return candidates().paused.load() > 0;
+}
+// gc.step(seconds): collects in small batches of possible roots until the time is used up or
+// none are left, for a bounded pause between frames. Returns the number of objects freed.
+int64_t fw_gc_step(double seconds) {
+    return nativeBoundary([&]() -> int64_t {
+        if (activeThreads.load() != 0)
+            return 0;
+        auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::duration<double>(std::max(0.0, seconds));
+        int64_t freed = 0;
+        auto &c = candidates();
+        // Each batch is a complete trial deletion over its roots; the first always runs.
+        for (size_t remaining = c.count.load(); remaining > 0;) {
+            size_t batch = std::min<size_t>(remaining, 256);
+            freed += collectCycles(batch);
+            remaining -= batch;
+            if (errorPending || std::chrono::steady_clock::now() >= deadline)
+                break;
+        }
+        return freed;
+    });
+}
+// gc.threshold(n): how many possible roots accumulate before an automatic collection.
+int64_t fw_gc_threshold(int64_t roots) {
+    auto &c = candidates();
+    auto previous = static_cast<int64_t>(c.minimum.load());
+    if (roots > 0) {
+        c.minimum = static_cast<size_t>(roots);
+        c.threshold = static_cast<size_t>(roots);
+    }
+    return previous;
 }
 // Runs `runner(closure, result)` on a new thread. Errors raised there are kept and re-raised by
 // join.

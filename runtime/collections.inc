@@ -26,11 +26,50 @@ Object *managed(Frame *frame, Object::Kind kind) {
 // code registers each class identity at startup so `is` and `match` work on native instances.
 std::mutex classRegistryMutex;
 std::map<std::string, const void *> classRegistry;
+// One field-name list per class. Generated code names a class's fields with a constant
+// string, so its address identifies the list; native classes are identified by content.
+const std::vector<std::string> *internFields(const char *fields) {
+    thread_local const char *lastKey = nullptr;
+    thread_local const std::vector<std::string> *lastList = nullptr;
+    if (fields == lastKey && lastList)
+        return lastList;
+    // Never destroyed: instances that outlive static destruction still read their lists.
+    static auto &mutex = *new std::mutex;
+    static auto &lists = *new std::unordered_map<const char *, const std::vector<std::string> *>;
+    std::lock_guard<std::mutex> lock(mutex);
+    auto &list = lists[fields];
+    if (!list) {
+        auto parsed = new std::vector<std::string>;
+        std::string names = fields;
+        size_t begin = 0;
+        while (begin < names.size()) {
+            auto end = names.find(',', begin);
+            parsed->push_back(names.substr(begin, end == std::string::npos ? end : end - begin));
+            if (end == std::string::npos)
+                break;
+            begin = end + 1;
+        }
+        list = parsed;
+    }
+    lastKey = fields;
+    lastList = list;
+    return list;
+}
+const std::vector<std::string> *internFields(const std::vector<std::string> &names) {
+    static auto &mutex = *new std::mutex;
+    static auto &lists =
+        *new std::map<std::vector<std::string>, const std::vector<std::string> *>;
+    std::lock_guard<std::mutex> lock(mutex);
+    auto &list = lists[names];
+    if (!list)
+        list = new std::vector<std::string>(names);
+    return list;
+}
 Object *nativeInstance(Frame *frame, const std::string &type,
                        std::vector<std::string> fieldNames) {
     auto object = managed(frame, Object::Instance);
     object->typeName = object->text = type;
-    object->fieldNames = std::move(fieldNames);
+    object->fieldList = internFields(fieldNames);
     std::lock_guard<std::mutex> lock(classRegistryMutex);
     auto it = classRegistry.find(type);
     object->classId = it == classRegistry.end() ? nullptr : it->second;
@@ -159,8 +198,8 @@ std::string formatObject(Object *object, bool nested, std::set<Object *> &active
         for (size_t i = 0; i < slots.size(); ++i) {
             if (i)
                 out += ", ";
-            if (i < object->fieldNames.size())
-                out += object->fieldNames[i] + "=";
+            if (i < object->fieldNames().size())
+                out += object->fieldNames()[i] + "=";
             out += item(slots[i]);
         }
         return out + ")";
@@ -558,18 +597,17 @@ Object *fw_instance(Frame *frame, int64_t count, const char *type, const char *n
         result->typeName = type;
         result->text = name;
         result->slots.resize(static_cast<size_t>(count));
-        std::string names = fields;
-        size_t begin = 0;
-        while (begin < names.size()) {
-            auto end = names.find(',', begin);
-            result->fieldNames.push_back(
-                names.substr(begin, end == std::string::npos ? end : end - begin));
-            if (end == std::string::npos)
-                break;
-            begin = end + 1;
-        }
+        result->fieldList = internFields(fields);
         return result;
     });
+}
+// An instance of a class whose fields cannot refer to containers (see Object::leaf).
+Object *fw_instance_leaf(Frame *frame, int64_t count, const char *type, const char *name,
+                         const char *fields) {
+    auto result = fw_instance(frame, count, type, name, fields);
+    if (result)
+        result->leaf = true;
+    return result;
 }
 const void *fw_class_id(Object *instance) {
     return instance ? instance->classId : nullptr;

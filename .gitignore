@@ -18,4 +18,8 @@ sbv/
 cogwheel/
 clutch/
 gearbox/
-valve/
+brace/
+.flywheel-modules/
+driveshaft/
+solenoid/
+aperture/

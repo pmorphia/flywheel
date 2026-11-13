@@ -1414,7 +1414,8 @@ EP Parser::outer() {
     // A known callable followed by a unary sign starts an outer call, not subtraction.
     bool callable = peek().text == "print";
     for (size_t i = 0; i + 1 < tokens.size(); ++i)
-        if ((tokens[i].text == "function" || tokens[i].text == "class") &&
+        if ((tokens[i].text == "function" || tokens[i].text == "class" ||
+             tokens[i].text == "struct") &&
             tokens[i + 1].text == peek().text)
             callable = true;
     EP e;
@@ -2588,17 +2589,31 @@ Program Parser::parse() {
             p.classes.push_back(std::move(c));
         } else if (!decorations.empty() && peek().text != "class") {
             throw Error(peek().loc, "decorators apply to functions and classes");
-        } else if (peek().text == "class" || peek().text == "interface") {
+        } else if (peek().text == "class" || peek().text == "interface" ||
+                   (peek().text == "struct" && peek().kind == "id" && peek(1).kind == "id" &&
+                    peek(1).loc.line == peek().loc.line &&
+                    (peek(2).kind == "nl" || peek(2).kind == "eof" || peek(2).text == "<" ||
+                     peek(2).text == "extends" || peek(2).text == "implements"))) {
+            // `struct` is a soft keyword: `struct Name` alone on a line declares a value type.
             Class c;
-            c.isInterface = take().text == "interface";
+            auto keyword = take().text;
+            c.isInterface = keyword == "interface";
+            c.isStruct = keyword == "struct";
             c.loc = peek().loc;
             c.name = identifier().text;
-            c.typeParams = typeParameters(&c.typeBounds);
-            if (!c.isInterface && accept("extends"))
+            if (c.isStruct && peek().text == "<")
+                throw Error(peek().loc, "generic structs are not supported; declare one struct "
+                                        "per field type, or use a generic class");
+            if (c.isStruct && (peek().text == "extends" || peek().text == "implements"))
+                throw Error(peek().loc, "structs cannot extend classes or implement interfaces; "
+                                        "use a class for that");
+            if (!c.isStruct)
+                c.typeParams = typeParameters(&c.typeBounds);
+            if (!c.isInterface && !c.isStruct && accept("extends"))
                 do {
                     c.bases.push_back(type());
                 } while (accept(","));
-            if (accept(c.isInterface ? "extends" : "implements"))
+            if (!c.isStruct && accept(c.isInterface ? "extends" : "implements"))
                 do {
                     c.interfaces.push_back(type());
                 } while (accept(","));
@@ -2638,6 +2653,17 @@ Program Parser::parse() {
                                 peek(1).text == "(" || peek(1).kind == "id");
                 if (special && c.isInterface)
                     throw Error(peek().loc, "interfaces cannot declare " + peek().text + "s");
+                if (special && c.isStruct)
+                    throw Error(peek().loc,
+                                "structs cannot declare " + peek().text +
+                                    "s: a struct is built from its fields in order, such as " +
+                                    c.name + "(1.0, 2.0); add a static function for other ways "
+                                             "to build one");
+                if (c.isStruct && (access == "private" || access == "protected" || readonly) &&
+                    peek().text != "function")
+                    throw Error(modifier.loc, "struct fields are public and assignable; '" +
+                                                  (readonly ? std::string("readonly") : access) +
+                                                  "' applies to class fields");
                 if (special) {
                     if (readonly || isStatic)
                         throw Error(modifier.loc, "'" + std::string(readonly ? "readonly" : "static") +
@@ -2883,6 +2909,7 @@ Class clone(const Class &c) {
     out.typeParams = c.typeParams;
     out.typeBounds = c.typeBounds;
     out.isInterface = c.isInterface;
+    out.isStruct = c.isStruct;
     out.variants = c.variants;
     out.variantOf = c.variantOf;
     return out;

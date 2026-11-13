@@ -689,7 +689,7 @@ class Navigator {
         for (auto &g : f->globals)
             if (seen.insert(g.name).second)
                 out.push_back({g.name, g.kind});
-        for (auto keyword : {"function", "class", "interface", "enum", "var", "const", "if",
+        for (auto keyword : {"function", "class", "struct", "interface", "enum", "var", "const", "if",
                              "else", "end", "while", "for", "in", "do", "return",
                              "match", "case", "try", "catch", "finally", "throw", "defer",
                              "import", "public", "private", "protected", "static", "readonly",
@@ -741,7 +741,7 @@ class Navigator {
             {"sqlite", {"open"}},
             {"toml", {"parse"}},
             {"yaml", {"parse"}},
-            {"gc", {"collect", "stats"}},
+            {"gc", {"collect", "pending", "pause", "resume", "paused", "step", "threshold"}},
             {"collections", {"range"}}};
         auto it = table.find(module);
         return it == table.end() ? std::vector<std::string>{} : it->second;

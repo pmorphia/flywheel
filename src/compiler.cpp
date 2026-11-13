@@ -128,10 +128,18 @@ std::set<std::string> &enumNames() {
     static std::set<std::string> names;
     return names;
 }
+// Struct type names; struct values are LLVM aggregates of their fields, copied by value.
+std::set<std::string> &structNames() {
+    static std::set<std::string> names;
+    return names;
+}
 struct Ty {
     std::string name = "void";
     bool enumeration() const {
         return enumNames().count(name) > 0;
+    }
+    bool structure() const {
+        return structNames().count(name) > 0;
     }
     bool operator==(const Ty &t) const {
         return name == t.name;
@@ -200,7 +208,7 @@ struct Ty {
     }
     bool object() const {
         return !numeric() && name != "bool" && name != "char" && name != "void" &&
-               !enumeration() && name.rfind("fn:", 0) != 0 &&
+               !enumeration() && !structure() && name.rfind("fn:", 0) != 0 &&
                name.rfind("module:", 0) != 0 && !classReference();
     }
     bool classReference() const {
@@ -230,6 +238,11 @@ struct Var {
 };
 bool primitive(const Ty &t) {
     return t.numeric() || t.name == "bool" || t.name == "char" || t.enumeration();
+}
+// Types held directly rather than by reference; their nullable forms (`int?`, `Vec2?`) are
+// boxed in a one-slot object.
+bool inlineValue(const Ty &t) {
+    return primitive(t) || t.structure();
 }
 Ty nonNull(const Ty &t) {
     return t.nullable() && t.name != "null" ? Ty{t.name.substr(0, t.name.size() - 1)} : t;
@@ -861,7 +874,86 @@ class Compiler {
             return b.getDoubleTy();
         if (t.name == "void")
             return b.getVoidTy();
+        if (t.structure())
+            return structType(t.name);
         return b.getPtrTy();
+    }
+    // The LLVM aggregate of a struct: one member per field, nested structs inline.
+    std::map<std::string, llvm::StructType *> structTypes;
+    std::set<std::string> structsBuilding;
+    llvm::StructType *structType(const std::string &name) {
+        if (auto found = structTypes.find(name); found != structTypes.end())
+            return found->second;
+        auto &c = *classes.at(name);
+        if (!structsBuilding.insert(name).second) {
+            location = c.loc;
+            error("struct " + displayName(name) + " contains itself; a struct holds its fields "
+                  "inline, so use a class for recursive data");
+        }
+        std::vector<llvm::Type *> members;
+        for (auto &f : c.fields) {
+            location = f.loc;
+            auto t = type(f.type);
+            if (!primitive(t) && !t.structure())
+                error("struct field '" + f.name + "' has type " + displayName(t.name) +
+                      "; struct fields are numbers, bool, char, enums, and other structs "
+                      "(use a class to hold references)");
+            members.push_back(ll(t));
+        }
+        structsBuilding.erase(name);
+        return structTypes[name] =
+                   llvm::StructType::create(ctx, members, "struct." + displayName(name));
+    }
+    // A struct value as a heap instance of its class, for slots of collections, class fields,
+    // closures, and anything else the runtime stores. Nested structs are boxed in turn.
+    llvm::Value *boxStruct(Val x) {
+        auto &c = *classes.at(x.t.name);
+        auto object = newInstance(c).v;
+        for (size_t i = 0; i < c.fields.size(); ++i)
+            set({object, Ty{"Error"}}, i64(static_cast<int64_t>(i)),
+                {b.CreateExtractValue(x.v, static_cast<unsigned>(i)), type(c.fields[i].type)});
+        return object;
+    }
+    // Reads a boxed struct back into a value, with `builder` (no error checks: the box always
+    // has the struct's fields).
+    llvm::Value *unboxStruct(llvm::IRBuilder<> &builder, llvm::Value *object, Ty t) {
+        auto &c = *classes.at(t.name);
+        llvm::Value *out = llvm::PoisonValue::get(ll(t));
+        auto slot = [&](const char *function, llvm::Type *result, size_t i) {
+            return builder.CreateCall(
+                module.getOrInsertFunction(
+                    function,
+                    llvm::FunctionType::get(result, {b.getPtrTy(), b.getInt64Ty()}, false)),
+                {object, i64(static_cast<int64_t>(i))});
+        };
+        for (size_t i = 0; i < c.fields.size(); ++i) {
+            auto ft = type(c.fields[i].type);
+            llvm::Value *v;
+            if (ft.structure())
+                v = unboxStruct(builder, slot("fw_get_object", b.getPtrTy(), i), ft);
+            else if (ft.real())
+                v = builder.CreateFPCast(slot("fw_get_real", b.getDoubleTy(), i), ll(ft));
+            else
+                v = builder.CreateIntCast(slot("fw_get_int", b.getInt64Ty(), i), ll(ft),
+                                          !ft.unsigned_() && ft.name != "bool");
+            out = builder.CreateInsertValue(out, v, static_cast<unsigned>(i));
+        }
+        return out;
+    }
+    // Field-by-field equality of two values of one struct type.
+    llvm::Value *structEqual(Val x, Val y) {
+        auto &c = *classes.at(x.t.name);
+        llvm::Value *all = b.getTrue();
+        for (size_t i = 0; i < c.fields.size(); ++i) {
+            auto ft = type(c.fields[i].type);
+            Val l{b.CreateExtractValue(x.v, static_cast<unsigned>(i)), ft};
+            Val r{b.CreateExtractValue(y.v, static_cast<unsigned>(i)), ft};
+            auto same = ft.structure() ? structEqual(l, r)
+                        : ft.real()    ? b.CreateFCmpOEQ(l.v, r.v)
+                                       : b.CreateICmpEQ(l.v, r.v);
+            all = b.CreateAnd(all, same);
+        }
+        return all;
     }
     Ty type(std::string name) {
         if (auto open = name.find('<'); open != std::string::npos && name.back() == '>' &&
@@ -901,7 +993,7 @@ class Compiler {
             Ty inner = type(name.substr(0, name.size() - 1));
             if (inner.name == "void" || inner.nullable())
                 error("'?' requires a non-void, non-nullable type");
-            if (!inner.object() && !primitive(inner))
+            if (!inner.object() && !inlineValue(inner))
                 error("type '" + inner.name + "' cannot be nullable");
             return Ty{inner.name + "?"};
         }
@@ -986,6 +1078,8 @@ class Compiler {
     }
     // Runtime slot kind for map keys: 0 signed, 1 unsigned, 3 bool, 4 reference, 5 char.
     bool hashable(Ty t) {
+        if (t.structure())
+            return false;
         if (t.integer() || t.name == "bool" || t.name == "char" || t.name == "string" ||
             t.enumeration() || classes.count(t.name) || templates.count(t.name))
             return true;
@@ -1161,6 +1255,7 @@ end
             "fw_error_value",   "fw_error_take",    "fw_error_restore", "fw_web_shutdown",
             "fw_class_id",      "fw_enum_register", "fw_register_class", "fw_set_args",
             "fw_gc_collect",    "fw_gc_pending",    "fw_error_matches_name", "fw_foreign_cstr",
+            "fw_gc_pause",      "fw_gc_resume",     "fw_gc_paused",     "fw_gc_threshold",
             "fw_quantity_register", "fw_register_destructor", "fw_thread_wait_all",
             "fw_thread_detach"};
         if (!safe.count(name))
@@ -1226,16 +1321,17 @@ end
         if (x.t.classReference())
             error("'" + displayName(x.t.name.substr(6)) +
                   "' is a class reference, not an instance; call it with () to construct one");
-        if (to.nullable() && primitive(nonNull(to)) && x.t.name != "null") {
-            // Present nullable primitives are boxed; widening applies to the payload.
-            if (!primitive(x.t))
+        if (to.nullable() && inlineValue(nonNull(to)) && x.t.name != "null" && x.t != to) {
+            // Present nullable primitives and structs are boxed; widening applies to the
+            // payload.
+            if (!inlineValue(x.t))
                 error("cannot convert " + x.t.name + " to " + to.name);
             auto payload = convert(x, nonNull(to), explicit_);
             Val box{objectCall("fw_new", {frame, i64(1), i64(12)}), to};
             set(box, i64(0), payload);
             return box;
         }
-        if (x.t.nullable() && primitive(nonNull(x.t)) && primitive(to)) {
+        if (x.t.nullable() && inlineValue(nonNull(x.t)) && inlineValue(to)) {
             if (!explicit_)
                 error("cannot implicitly convert " + x.t.name + " to " + to.name +
                       "; check for null, use '?\?', or cast explicitly");
@@ -1274,6 +1370,15 @@ end
                     fits = to.unsigned_()
                                ? (!v.isNegative() && v.getActiveBits() <= unsigned(to.bits()))
                                : v.isSignedIntN(to.bits());
+            }
+            // A whole-number constant is also a valid float when the float holds it exactly:
+            // `double x = 1`, `move(10, 20)`.
+            if (auto ci = llvm::dyn_cast_or_null<llvm::ConstantInt>(x.v);
+                ci && x.t.integer() && to.real()) {
+                auto v = ci->getValue();
+                unsigned exact = to.name == "float" ? 24 : 53;
+                fits = (x.t.unsigned_() ? v : v.abs()).getActiveBits() <= exact &&
+                       (x.t.unsigned_() || !v.isMinSignedValue());
             }
             if (!explicit_ && !widening(x.t, to) && !fits)
                 error("cannot implicitly convert " + x.t.name + " to " + to.name +
@@ -1322,7 +1427,7 @@ end
               "null value of type " + displayName(x.t.name) + " used as " +
                   displayName(inner.name),
               "CastError");
-        if (primitive(inner))
+        if (inlineValue(inner))
             return get({x.v, x.t}, i64(0), inner);
         return {x.v, inner};
     }
@@ -1500,6 +1605,8 @@ end
                 error(displayName(x.t.name) + ".to_string must return string");
             return text;
         }
+        if (x.t.structure())
+            return {objectCall("fw_format", {frame, boxStruct(x)}), Ty{"string"}};
         if (x.t.object())
             return {objectCall("fw_format", {frame, x.v}), Ty{"string"}};
         error("cannot format value of type " + x.t.name);
@@ -1558,6 +1665,8 @@ end
                                 "fw_store", llvm::FunctionType::get(
                                                 b.getVoidTy(), {b.getPtrTy(), b.getPtrTy()}, false)),
                             {address, get("fw_get_object", b.getPtrTy())});
+        else if (t.structure())
+            init.CreateStore(unboxStruct(init, get("fw_get_object", b.getPtrTy()), t), address);
         else if (t.real())
             init.CreateStore(init.CreateFPCast(get("fw_get_real", b.getDoubleTy()), ll(t)), address);
         else
@@ -1677,7 +1786,8 @@ end
     }
     void debugVariable(const std::string &name, Ty t, llvm::Value *address) {
         if (!dib || !current || !current->getSubprogram() || name.empty() || name[0] == '$' ||
-            name.rfind("__fw", 0) == 0 || t.name == "void" || t.name.rfind("fn:", 0) == 0 ||
+            name.rfind("__fw", 0) == 0 || t.name == "void" || t.structure() ||
+            t.name.rfind("fn:", 0) == 0 ||
             t.name.rfind("module:", 0) == 0 || t.classReference())
             return;
         auto alloca = llvm::dyn_cast<llvm::AllocaInst>(address);
@@ -1761,6 +1871,12 @@ end
         return slot;
     }
     Val get(Val obj, llvm::Value *index, Ty t) {
+        if (t.structure()) {
+            auto boxed = objectCall("fw_get_object", {obj.v, index});
+            guard(b.CreateICmpNE(boxed, llvm::ConstantPointerNull::get(b.getPtrTy())),
+                  displayName(t.name) + " value read before it was set", "RuntimeError");
+            return {unboxStruct(b, boxed, t), t};
+        }
         if (t.object())
             return {borrowed ? objectCall("fw_get_object", {obj.v, index})
                              : objectCall("fw_get_kept", {frame, obj.v, index}),
@@ -1781,12 +1897,16 @@ end
                                       : 0);
     }
     llvm::Value *slotInteger(Val x) {
+        if (x.t.structure())
+            error("struct " + displayName(x.t.name) + " cannot be used here");
         return b.CreateIntCast(x.v, b.getInt64Ty(), x.t.name != "bool" && !x.t.unsigned_());
     }
     void set(Val obj, llvm::Value *index, Val x) {
         if (x.t.classReference())
             x = convert(x, constructorType(x.t.name.substr(6)));
-        if (x.t.object())
+        if (x.t.structure())
+            call("fw_set_object", b.getVoidTy(), {obj.v, index, boxStruct(x)});
+        else if (x.t.object())
             call("fw_set_object", b.getVoidTy(), {obj.v, index, x.v});
         else if (x.t.real())
             call("fw_set_real", b.getVoidTy(),
@@ -1798,7 +1918,9 @@ end
     void push(Val array, Val x) {
         if (x.t.classReference())
             x = convert(x, constructorType(x.t.name.substr(6)));
-        if (x.t.object())
+        if (x.t.structure())
+            call("fw_array_push_object", b.getVoidTy(), {array.v, boxStruct(x)});
+        else if (x.t.object())
             call("fw_array_push_object", b.getVoidTy(), {array.v, x.v});
         else if (x.t.real())
             call("fw_array_push_real", b.getVoidTy(),
@@ -1817,6 +1939,10 @@ end
             return unitBinary(op, a, c);
         // Operator methods on classes: `function operator +(T other)`. `!=` negates
         // `operator ==`; comparisons missing an operator derive from `operator <`.
+        // 2.0 * v: a number on the left of a struct uses the struct's operator, as v * 2.0.
+        if ((op == "*" || op == "+") && a.t.numeric() && c.t.structure() &&
+            !resolveMethod(c.t.name, "operator" + op).empty())
+            return binary(op, c, a);
         if (classes.count(a.t.name)) {
             auto has = [&](const std::string &name) {
                 return !resolveMethod(a.t.name, name).empty();
@@ -1848,7 +1974,8 @@ end
             static const std::set<std::string> arithmetic = {"+", "-", "*", "/", "//", "%",
                                                              "<", "<=", ">", ">="};
             if (arithmetic.count(op))
-                error("class " + displayName(a.t.name) + " does not define operator " + op +
+                error(std::string(a.t.structure() ? "struct " : "class ") + displayName(a.t.name) +
+                      " does not define operator " + op +
                       "; declare `function operator " + op + "(...)`");
         }
         if (op == "+" && ((a.t.name == "string" && c.t.name == "char") ||
@@ -1910,6 +2037,32 @@ end
                 error(displayName(a.t.name) + ".equals must return bool");
             return {op == "==" ? eq.v : b.CreateNot(eq.v), Ty{"bool"}};
         }
+        if ((op == "==" || op == "!=") && nonNull(a.t).structure() && nonNull(a.t) == nonNull(c.t) &&
+            (a.t.nullable() || c.t.nullable())) {
+            // Vec2? == Vec2?: equal when both are null, or both present with equal fields.
+            Ty inner = nonNull(a.t), optional{inner.name + "?"};
+            auto x = convert(a, optional), y = convert(c, optional);
+            auto null = llvm::ConstantPointerNull::get(b.getPtrTy());
+            auto xNull = b.CreateICmpEQ(x.v, null), yNull = b.CreateICmpEQ(y.v, null);
+            auto compare = llvm::BasicBlock::Create(ctx, "struct.compare", current);
+            auto done = llvm::BasicBlock::Create(ctx, "struct.compared", current);
+            auto bothNull = b.CreateAnd(xNull, yNull);
+            auto from = b.GetInsertBlock();
+            b.CreateCondBr(b.CreateOr(xNull, yNull), done, compare);
+            b.SetInsertPoint(compare);
+            auto same = structEqual(get(x, i64(0), inner), get(y, i64(0), inner));
+            auto compared = b.GetInsertBlock();
+            b.CreateBr(done);
+            b.SetInsertPoint(done);
+            auto eq = b.CreatePHI(b.getInt1Ty(), 2);
+            eq->addIncoming(bothNull, from);
+            eq->addIncoming(same, compared);
+            return {op == "==" ? static_cast<llvm::Value *>(eq) : b.CreateNot(eq), Ty{"bool"}};
+        }
+        if ((op == "==" || op == "!=") && a.t.structure() && a.t == c.t) {
+            auto eq = structEqual(a, c);
+            return {op == "==" ? eq : b.CreateNot(eq), Ty{"bool"}};
+        }
         if ((op == "==" || op == "!=") && a.t.object() && c.t.object()) {
             auto related = derives(nonNull(a.t).name, nonNull(c.t).name) ||
                            derives(nonNull(c.t).name, nonNull(a.t).name);
@@ -1936,6 +2089,21 @@ end
                   "division by zero");
             return convert({b.CreateFDiv(a.v, c.v), Ty{"double"}}, Ty{"i64"}, true);
         }
+        // `x * 2` with a float x: a whole-number constant takes the float's type when the
+        // float holds it exactly.
+        auto exactIn = [&](Val constant, Ty real) {
+            auto ci = llvm::dyn_cast_or_null<llvm::ConstantInt>(constant.v);
+            if (!ci || !constant.t.integer() || !real.real())
+                return false;
+            auto v = ci->getValue();
+            unsigned exact = real.name == "float" ? 24 : 53;
+            return (constant.t.unsigned_() ? v : v.abs()).getActiveBits() <= exact &&
+                   (constant.t.unsigned_() || !v.isMinSignedValue());
+        };
+        if (exactIn(a, c.t))
+            a = convert(a, c.t, true);
+        else if (exactIn(c, a.t))
+            c = convert(c, a.t, true);
         Ty common = a.t;
         if (a.t != c.t) {
             if (widening(a.t, c.t))
@@ -2012,6 +2180,19 @@ end
                                : (u ? b.CreateURem(a.v, c.v) : b.CreateSRem(a.v, c.v)),
                     common};
         }
+        // Constant operands fold, so `100 + 28` is itself a constant (an overflowing one is
+        // left to the run-time check).
+        if (op == "+" || op == "-" || op == "*")
+            if (auto ca = llvm::dyn_cast<llvm::ConstantInt>(a.v))
+                if (auto cc = llvm::dyn_cast<llvm::ConstantInt>(c.v)) {
+                    bool overflow = false;
+                    auto &x = ca->getValue(), &y = cc->getValue();
+                    auto folded = op == "+"   ? (u ? x.uadd_ov(y, overflow) : x.sadd_ov(y, overflow))
+                                  : op == "-" ? (u ? x.usub_ov(y, overflow) : x.ssub_ov(y, overflow))
+                                              : (u ? x.umul_ov(y, overflow) : x.smul_ov(y, overflow));
+                    if (!overflow)
+                        return {llvm::ConstantInt::get(ctx, folded), common};
+                }
         llvm::Intrinsic::ID intrinsic;
         if (op == "+")
             intrinsic =
@@ -2048,7 +2229,15 @@ end
                 fields += ",";
             fields += f.name;
         }
-        return {objectCall("fw_instance",
+        // Instances whose fields are all numbers, bools, chars, enums, strings, and structs
+        // (or nullable ones) can never be in a reference cycle; the runtime skips its cycle
+        // bookkeeping for them.
+        bool leaf = true;
+        for (auto &f : c.fields) {
+            auto t = nonNull(type(f.type));
+            leaf = leaf && (inlineValue(t) || t.name == "string");
+        }
+        return {objectCall(leaf ? "fw_instance_leaf" : "fw_instance",
                            {frame, i64(c.fields.size()), classId(c.name),
                             b.CreateGlobalString(displayName(c.name)), b.CreateGlobalString(fields)}),
                 Ty{c.name}};
@@ -2239,6 +2428,18 @@ end
         bind(self, receiver, true);
         callee->args.push_back(syntheticName(self, location));
         call.args.push_back(std::move(callee));
+        // Constants convert to the parameter's type here, while they are still constants
+        // (`v * 2` with `operator *(double k)`).
+        if (auto key = resolveMethod(nonNull(receiver.t).name, method);
+            !key.empty() && functions.count(key)) {
+            auto &params = functions.at(key).ast->params;
+            for (size_t i = 0; i < args.size() && i < params.size(); ++i)
+                if (llvm::isa<llvm::ConstantInt>(args[i].v) && args[i].t.integer()) {
+                    auto wanted = type(params[i].type);
+                    if (wanted.real())
+                        args[i] = convert(args[i], wanted);
+                }
+        }
         for (auto &arg : args) {
             auto name = "$p" + std::to_string(hiddenCount++);
             bind(name, arg, true);
@@ -2278,6 +2479,32 @@ end
         b.CreateStore(b.CreateAdd(b.CreateLoad(b.getInt64Ty(), index), i64(1)), index);
         b.CreateBr(cond);
         b.SetInsertPoint(end);
+    }
+    // The first index of struct `item` in a sequence, comparing fields; -1 when absent.
+    llvm::Value *structIndexOf(Val sequence, Val item) {
+        auto size = call("fw_length", b.getInt64Ty(), {sequence.v});
+        auto index = allocate(Ty{"i64"}, "search");
+        b.CreateStore(i64(0), index);
+        auto cond = llvm::BasicBlock::Create(ctx, "search.condition", current);
+        auto loop = llvm::BasicBlock::Create(ctx, "search.body", current);
+        auto next = llvm::BasicBlock::Create(ctx, "search.next", current);
+        auto end = llvm::BasicBlock::Create(ctx, "search.end", current);
+        b.CreateBr(cond);
+        b.SetInsertPoint(cond);
+        auto i = b.CreateLoad(b.getInt64Ty(), index);
+        b.CreateCondBr(b.CreateICmpSLT(i, size), loop, end);
+        b.SetInsertPoint(loop);
+        auto same = structEqual(item, get(sequence, i, item.t));
+        auto found = b.GetInsertBlock();
+        b.CreateCondBr(same, end, next);
+        b.SetInsertPoint(next);
+        b.CreateStore(b.CreateAdd(i, i64(1)), index);
+        b.CreateBr(cond);
+        b.SetInsertPoint(end);
+        auto result = b.CreatePHI(b.getInt64Ty(), 2);
+        result->addIncoming(i64(-1), cond);
+        result->addIncoming(i, found);
+        return result;
     }
     std::optional<int64_t> constantIndex(Expr &e) {
         if (e.kind == "int") {
@@ -2630,6 +2857,23 @@ end
     std::optional<Val> mathCall(const std::string &name, std::vector<Val> &args);
     std::optional<Val> stdlibCall(const std::string &name, std::vector<Val> &args, Ty expected);
     void foreignBody(Signature &sig);
+    void assignStructField(Stmt &s, Val object);
+    // Expressions that can be evaluated twice with the same result and no effects: the base
+    // of `a.b[i].x = v` is read, changed, and stored back.
+    bool repeatable(Expr &e) {
+        if (e.kind == "name" || e.kind == "inst" || e.kind == "this" || e.kind == "int" ||
+            e.kind == "string" || e.kind == "real" || e.kind == "char")
+            return true;
+        if (e.kind == "member")
+            return repeatable(*e.args[0]);
+        if (e.kind == "index")
+            return repeatable(*e.args[0]) && repeatable(*e.args[1]);
+        if (e.kind == "unary" && e.text == "-")
+            return repeatable(*e.args[0]);
+        if (e.kind == "binary" && (e.text == "+" || e.text == "-" || e.text == "*"))
+            return repeatable(*e.args[0]) && repeatable(*e.args[1]);
+        return false;
+    }
     std::string compilerPath; // for the flywheel module
     Val unwrapForBinding(Val v);
     Val expectError(Expr &e);
@@ -2670,7 +2914,7 @@ end
         else if (sig.result.name != "$infer") {
             std::vector<llvm::Type *> args;
             if (!f.owner.empty())
-                args.push_back(b.getPtrTy());
+                args.push_back(ll(Ty{f.owner}));
             for (auto &a : f.params)
                 args.push_back(ll(type(a.type)));
             sig.function =
@@ -2712,6 +2956,10 @@ end
             enumIds[en.name] = static_cast<int64_t>(enumIds.size());
             enumNames().insert(en.name);
         }
+        structNames().clear();
+        for (auto &c : p.classes)
+            if (c.isStruct)
+                structNames().insert(c.name);
         for (auto &c : p.classes) {
             location = c.loc;
             if (classes.count(c.name) || templates.count(c.name) || enums.count(c.name))
@@ -2728,6 +2976,9 @@ end
         }
         for (auto c : declared)
             finishClass(*c);
+        for (auto c : declared)
+            if (c->isStruct)
+                structType(c->name); // checks the field types
         static const std::set<std::string> modules = {
             "desktop", "html", "math", "fs",          "os", "json",  "web", "time",
             "testing", "core", "io",   "collections", "net", "regex", "thread", "gc",
@@ -2776,6 +3027,9 @@ end
             for (auto &baseName : c.bases) {
                 baseName = type(baseName).name;
                 auto base = classes.find(baseName);
+                if (base != classes.end() && base->second->isStruct)
+                    error("'" + displayName(baseName) +
+                          "' is a struct; structs cannot be extended");
                 if (base == classes.end() || base->second->isInterface)
                     error("'" + displayName(baseName) +
                           "' is not a class; use implements for interfaces");
@@ -3330,6 +3584,9 @@ Val Compiler::value(Expr &e, Ty expected) {
         if (!hasField(obj.t.name, e.text) && !resolveMethod(obj.t.name, e.text).empty())
             return boundMethod(obj, e.text);
         auto [c, i] = field(obj.t, e.text);
+        if (obj.t.structure())
+            return {b.CreateExtractValue(obj.v, static_cast<unsigned>(i)),
+                    type(c->fields[i].type)};
         return get(obj, fieldIndex(obj, e.text, i), type(c->fields[i].type));
     }
     if (e.kind == "member" && e.args[0]->kind == "name" && enums.count(e.args[0]->text) &&
@@ -3410,6 +3667,9 @@ Val Compiler::value(Expr &e, Ty expected) {
             !resolveMethod(obj.t.name, e.text).empty())
             return boundMethod(obj, e.text);
         auto [c, i] = field(obj.t, e.text);
+        if (obj.t.structure())
+            return {b.CreateExtractValue(obj.v, static_cast<unsigned>(i)),
+                    type(c->fields[i].type)};
         return get(obj, fieldIndex(obj, e.text, i), type(c->fields[i].type));
     }
     if (e.kind == "index") {
@@ -3575,6 +3835,10 @@ Val Compiler::value(Expr &e, Ty expected) {
             return a;
         if (a.t.real())
             return {b.CreateFNeg(a.v), a.t};
+        // -4 stays a constant, so it converts like one (`double x = -4`).
+        if (auto ci = llvm::dyn_cast<llvm::ConstantInt>(a.v);
+            ci && !a.t.unsigned_() && !ci->getValue().isMinSignedValue())
+            return {llvm::ConstantInt::get(ctx, -ci->getValue()), a.t};
         return binary("-", {llvm::ConstantInt::get(ll(a.t), 0), a.t}, a);
     }
     if (e.kind == "binary" && e.text == "??")
@@ -3711,6 +3975,8 @@ Val Compiler::value(Expr &e, Ty expected) {
             if (!c.t.sequence())
                 error("membership requires an array, homogeneous tuple, string, or map");
             a = convert(a, c.t.item());
+            if (a.t.structure())
+                return {b.CreateICmpSGE(structIndexOf(c, a), i64(0)), Ty{"bool"}};
             std::string suffix = a.t.object() ? "object" : a.t.real() ? "real" : "int";
             llvm::Value *item = a.v;
             if (a.t.real())
@@ -4426,6 +4692,23 @@ Val Compiler::invoke(Expr &e, Ty expected) {
             call("fw_desktop_bind", b.getVoidTy(), {receiverValue.v, bindingName.v, handler.v});
             return {};
         }
+        if (callee.text == "on_frame") {
+            if (e.args.size() != 2)
+                error("desktop.window.on_frame expects a function(double elapsed), or null to "
+                      "stop");
+            if (e.args[1]->kind == "null") {
+                call("fw_desktop_on_frame", b.getVoidTy(),
+                     {receiverValue.v, llvm::ConstantPointerNull::get(b.getPtrTy())});
+                return {};
+            }
+            Ty expectedType{"function<void,double>"};
+            auto handler = asFunction(value(*e.args[1], expectedType));
+            if (handler.t != expectedType)
+                error("desktop.window.on_frame expects a function(double elapsed), or null to "
+                      "stop");
+            call("fw_desktop_on_frame", b.getVoidTy(), {receiverValue.v, handler.v});
+            return {};
+        }
         if (callee.text == "eval") {
             if (e.args.size() != 2)
                 error("desktop.window.eval expects JavaScript text");
@@ -4535,6 +4818,8 @@ Val Compiler::invoke(Expr &e, Ty expected) {
             if (e.args.size() != 1)
                 error("pop expects no arguments");
             auto t = obj.t.item();
+            if (t.structure())
+                return {unboxStruct(b, objectCall("fw_array_pop_object", {frame, obj.v}), t), t};
             if (t.object())
                 return {objectCall("fw_array_pop_object", {frame, obj.v}), t};
             if (t.real())
@@ -4593,6 +4878,27 @@ Val Compiler::invoke(Expr &e, Ty expected) {
         auto message = convert(value(*e.args[1]), Ty{"string"});
         return {objectCall("fw_error_new", {frame, message.v, b.CreateGlobalString(name)}),
                 Ty{name}};
+    }
+    if (classes.count(name) && classes.at(name)->isStruct) {
+        // A struct is built from its fields in order; trailing fields with defaults may be
+        // left out.
+        auto c = classes.at(name);
+        if (e.args.size() - 1 > c->fields.size())
+            error("too many fields for struct " + name);
+        llvm::Value *out = llvm::PoisonValue::get(ll(Ty{name}));
+        for (size_t i = 0; i < c->fields.size(); ++i) {
+            auto &f = c->fields[i];
+            Ty t = type(f.type);
+            Val x;
+            if (i + 1 < e.args.size())
+                x = value(*e.args[i + 1], t);
+            else if (f.value)
+                x = defaultValue(*f.value, t);
+            else
+                error("missing field '" + f.name + "' of struct " + name);
+            out = b.CreateInsertValue(out, convert(x, t).v, static_cast<unsigned>(i));
+        }
+        return {out, Ty{name}};
     }
     if (classes.count(name)) {
         auto c = classes.at(name);
@@ -5313,6 +5619,10 @@ void Compiler::statement(Stmt &s) {
             target = variable->narrowed ? variable->storage : variable->type;
         } else if (s.target->kind == "member" || s.target->kind == "inst") {
             object = unwrap(s.target->kind == "inst" ? receiver() : value(*s.target->args[0]));
+            if (object.t.structure()) {
+                assignStructField(s, object);
+                return;
+            }
             if ((object.t.name == "element" || object.t.name == "fragment") &&
                 (s.target->text == "text_content" || s.target->text == "id" ||
                  s.target->text == "class_name")) {
@@ -5621,6 +5931,40 @@ void Compiler::statement(Stmt &s) {
     }
     error("unsupported statement '" + s.kind + "'");
 }
+// `v.x = e` and `v.x += e` on a struct: the struct with that field changed is stored back into
+// `v`, whatever `v` is (a variable, a class field, an array element, a field of another struct).
+void Compiler::assignStructField(Stmt &s, Val object) {
+    auto structName = displayName(object.t.name);
+    if (s.target->kind == "inst")
+        error("a method of struct " + structName + " works on a copy, so it cannot change '" +
+              s.target->text + "'; return a new " + structName + " instead");
+    auto &base = *s.target->args[0];
+    if (base.kind == "this")
+        error("a method of struct " + structName + " works on a copy, so it cannot change '" +
+              s.target->text + "'; return a new " + structName + " instead");
+    if (!repeatable(base))
+        error("cannot assign to a field of a temporary " + structName +
+              "; store the struct in a variable, change it, and put it back");
+    auto [c, i] = field(object.t, s.target->text);
+    Ty target = type(c->fields[i].type);
+    auto rhs = value(*s.expr, target);
+    if (s.op != "=")
+        rhs = binary(s.op.substr(0, s.op.size() - 1),
+                     {b.CreateExtractValue(object.v, static_cast<unsigned>(i)), target}, rhs);
+    rhs = convert(rhs, target);
+    Val updated{b.CreateInsertValue(object.v, rhs.v, static_cast<unsigned>(i)), object.t};
+    scopes.emplace_back();
+    auto name = "$sv" + std::to_string(hiddenCount++);
+    bind(name, updated, true);
+    Stmt back;
+    back.kind = "assign";
+    back.op = "=";
+    back.loc = s.loc;
+    back.target = clone(base);
+    back.expr = syntheticName(name, s.loc);
+    statement(back);
+    scopes.pop_back();
+}
 // A natively imported function (see src/native.cpp): converts the arguments to the shim's ABI
 // (int64_t, double, const char *), calls it, and converts the result back.
 void Compiler::foreignBody(Signature &sig) {
@@ -5670,7 +6014,7 @@ void Compiler::buildFunction(Signature &sig, bool inference) {
     scopes.emplace_back();
     std::vector<llvm::Type *> paramTypes;
     if (!owner.empty())
-        paramTypes.push_back(b.getPtrTy());
+        paramTypes.push_back(ll(Ty{owner}));
     for (auto &param : sig.ast->params)
         paramTypes.push_back(ll(type(param.type)));
     if (inference)
@@ -6323,6 +6667,34 @@ std::optional<Val> Compiler::stdlibCall(const std::string &name, std::vector<Val
             arity(0, 0);
             return Val{call("fw_gc_pending", b.getInt64Ty(), {}), Ty{"i64"}};
         }
+        if (function == "pause" || function == "resume") {
+            arity(0, 0);
+            call(function == "pause" ? "fw_gc_pause" : "fw_gc_resume", b.getVoidTy(), {});
+            return Val{nullptr, Ty{}};
+        }
+        if (function == "paused") {
+            arity(0, 0);
+            return Val{b.CreateICmpNE(call("fw_gc_paused", b.getInt64Ty(), {}), i64(0)),
+                       Ty{"bool"}};
+        }
+        if (function == "step") {
+            // gc.step(0.002) or gc.step(2ms): collect for about that long, at most.
+            arity(1, 1);
+            return Val{call("fw_gc_step", b.getInt64Ty(), {seconds(args[0], "gc.step")}),
+                       Ty{"i64"}};
+        }
+        if (function == "threshold") {
+            arity(0, 1);
+            llvm::Value *roots = i64(0);
+            if (args.size() == 1) {
+                if (!args[0].t.integer())
+                    error("gc.threshold expects a count of possible roots (int)");
+                roots = convert(args[0], Ty{"i64"}).v;
+                guard(b.CreateICmpSGT(roots, i64(0)), "gc.threshold must be positive",
+                      "ValueError");
+            }
+            return Val{call("fw_gc_threshold", b.getInt64Ty(), {roots}), Ty{"i64"}};
+        }
         return std::nullopt;
     }
     if (module == "thread") {
@@ -6725,7 +7097,7 @@ llvm::Value *Compiler::jsonDecodeFunction(Ty t) {
                 b.SetInsertPoint(merge);
             }
         }
-        result = obj;
+        result = t.structure() ? Val{unboxStruct(b, obj.v, t), t} : obj;
     }
     if (result.t.object())
         call("fw_retain", b.getVoidTy(), {result.v});
@@ -6841,7 +7213,9 @@ std::optional<Val> Compiler::sequenceTool(Val sequence, const std::string &metho
     if (mutating.count(method) && !sequence.t.array())
         error("tuples are immutable; '" + method + "' requires an array");
     auto argument = [&](size_t i, Ty t) { return convert(value(*e.args[i], t), t); };
-    auto search = [&](size_t i) {
+    auto search = [&](size_t i) -> llvm::Value * {
+        if (item.structure())
+            return structIndexOf(sequence, argument(i, item));
         Val box{objectCall("fw_new", {frame, i64(1), i64(2)}), Ty{"Error"}};
         set(box, i64(0), argument(i, item));
         return call("fw_array_index_of", b.getInt64Ty(), {sequence.v, box.v});
@@ -7724,6 +8098,9 @@ Val Compiler::constructorValue(const std::string &className, Ty to) {
 }
 // receiver.method as a value: a closure holding the receiver that dispatches like a call.
 Val Compiler::boundMethod(Val receiver, const std::string &method) {
+    if (receiver.t.structure())
+        error("methods of struct " + displayName(receiver.t.name) +
+              " cannot be used as function values; wrap the call in a lambda");
     auto key = resolveMethod(receiver.t.name, method);
     auto &sig = signature(key);
     if (sig.ast->isPrivate || sig.ast->isProtected)
@@ -7754,7 +8131,8 @@ Val Compiler::typeTest(Expr &e) {
     auto t = type(e.text);
     auto base = nonNull(x.t);
     auto target = nonNull(t);
-    bool classValue = classes.count(base.name) > 0, classTarget = classes.count(target.name) > 0;
+    bool classValue = classes.count(base.name) > 0 && !base.structure(),
+         classTarget = classes.count(target.name) > 0 && !target.structure();
     if (e.kind == "is") {
         if (!classTarget) {
             // Non-class types are known statically; for nullable values `x is T` tests presence.
@@ -8242,7 +8620,7 @@ void Compiler::match(Stmt &s) {
                     covered.insert(typeName);
             } else {
                 auto t = type(typeName);
-                if (classes.count(t.name)) {
+                if (classes.count(t.name) && !t.structure()) {
                     if (!classes.count(base.name))
                         error("type pattern " + displayName(t.name) +
                               " requires a class or interface value");
@@ -8365,7 +8743,7 @@ void Compiler::match(Stmt &s) {
                 for (auto v : {"ok", "error"})
                     if (!covered.count(v))
                         missing.push_back(v);
-            } else if (classes.count(base.name)) {
+            } else if (classes.count(base.name) && !base.structure()) {
                 for (auto &c : concreteClasses(base.name))
                     if (!covered.count("class:" + c))
                         missing.push_back(displayName(c));

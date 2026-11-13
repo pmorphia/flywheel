@@ -85,20 +85,106 @@ DesktopState &desktopOf(Object *window) {
 const char *desktopScript = R"(<script>
 window.__fw_dispatch = function (index, event) {
   var target = event && event.target;
-  var value = target && target.value !== undefined ? String(target.value) : "";
+  var value = "";
+  if (event && typeof event.key === "string") value = event.key;
+  else if (target && target.value !== undefined) value = String(target.value);
   window.__fw_event(index, value);
 };
-window.__fw_render = function (html) {
-  var active = document.activeElement, id = active && active.id;
-  var start = active && active.selectionStart, end = active && active.selectionEnd;
-  document.body.innerHTML = html;
-  if (id) {
-    var again = document.getElementById(id);
-    if (again) {
-      again.focus();
-      try { again.setSelectionRange(start, end); } catch (e) {}
+// Changes the page into `html` in place: matching nodes are kept (with their focus, scroll
+// position, selection, and running animations) and only what differs is touched. Children
+// are matched by their data-key attribute or id when they have one, else by position and tag.
+window.__fw_patch = function (from, to) {
+  var i, name, attrs = to.attributes, old = from.attributes;
+  // Form state the user changed is kept unless the program changed the attribute itself.
+  var value = from.getAttribute("value"), checked = from.hasAttribute("checked");
+  var selected = from.hasAttribute("selected");
+  for (i = old.length - 1; i >= 0; --i) {
+    name = old[i].name;
+    if (!to.hasAttribute(name)) from.removeAttribute(name);
+  }
+  for (i = 0; i < attrs.length; ++i) {
+    name = attrs[i].name;
+    if (from.getAttribute(name) !== attrs[i].value) from.setAttribute(name, attrs[i].value);
+  }
+  var tag = from.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "OPTION") {
+    if (tag === "INPUT" || tag === "OPTION") {
+      var wanted = to.getAttribute("value");
+      if (wanted !== value && wanted !== null && from.value !== wanted) from.value = wanted;
+      if (checked !== to.hasAttribute("checked")) from.checked = to.hasAttribute("checked");
+      if (tag === "OPTION" && selected !== to.hasAttribute("selected"))
+        from.selected = to.hasAttribute("selected");
+    }
+    if (tag === "TEXTAREA") {
+      if (from.defaultValue !== to.defaultValue) from.value = to.defaultValue;
+      window.__fw_children(from, to);
+      return;
     }
   }
+  window.__fw_children(from, to);
+};
+window.__fw_key = function (node) {
+  return node.nodeType === 1 ? node.getAttribute("data-key") || node.id || "" : "";
+};
+window.__fw_children = function (from, to) {
+  var keyed = null, node, key;
+  for (node = from.firstChild; node; node = node.nextSibling) {
+    key = window.__fw_key(node);
+    if (key) (keyed || (keyed = {}))[key] = node;
+  }
+  var current = from.firstChild, next = to.firstChild, wanted, match, following;
+  while (next) {
+    wanted = next;
+    next = next.nextSibling;
+    key = window.__fw_key(wanted);
+    match = null;
+    if (key && keyed && keyed[key] && keyed[key].parentNode === from &&
+        keyed[key].tagName === wanted.tagName) {
+      match = keyed[key];
+      keyed[key] = null;
+    } else if (!key) {
+      // The next unkeyed node of the same kind; keyed nodes wait for their own turn.
+      for (node = current; node; node = node.nextSibling) {
+        if (window.__fw_key(node)) continue;
+        if (node.nodeType === wanted.nodeType && node.nodeName === wanted.nodeName) match = node;
+        break;
+      }
+    }
+    if (!match) {
+      from.insertBefore(wanted, current);
+      continue;
+    }
+    if (match !== current) from.insertBefore(match, current);
+    else current = current.nextSibling;
+    if (match.nodeType === 1) window.__fw_patch(match, wanted);
+    else if (match.nodeValue !== wanted.nodeValue) match.nodeValue = wanted.nodeValue;
+  }
+  while (current) {
+    following = current.nextSibling;
+    from.removeChild(current);
+    current = following;
+  }
+};
+window.__fw_render = function (html) {
+  var next = document.createElement("body");
+  next.innerHTML = html;
+  window.__fw_children(document.body, next);
+};
+// window.on_frame: one Flywheel call per display frame, with the seconds since the last one.
+// The next frame is requested once the call returns, so slow frames never pile up.
+window.__fw_frames = function () {
+  if (window.__fw_running) return;
+  window.__fw_running = true;
+  var last = 0;
+  function tick(now) {
+    var elapsed = last ? (now - last) / 1000 : 0;
+    last = now;
+    window.__fw_frame(elapsed).then(function (more) {
+      if (more) requestAnimationFrame(tick);
+      else window.__fw_running = false;
+    }, function () { window.__fw_running = false; });
+  }
+  requestAnimationFrame(tick);
 };
 </script>)";
 // Renders like render() but turns event handlers into calls of __fw_dispatch.
@@ -222,7 +308,26 @@ int desktopCall(void *context, int index, const char *name, const char *argument
         auto json = JsonParser(arguments).parse();
         Frame frame;
         std::string reply = "null";
-        if (std::string(name) == "__fw_event") {
+        if (std::string(name) == "__fw_frame") {
+            // The page's frame loop; replies whether to keep going.
+            if (!state.frame) {
+                *result = copyText("false");
+                return 0;
+            }
+            double elapsed = json->kind == Json::List && json->items.size() == 1
+                                 ? std::strtod(json->items[0]->text.c_str(), nullptr)
+                                 : 0.0;
+            auto closure = state.frame;
+            retain(closure);
+            struct Hold {
+                Object *value;
+                ~Hold() {
+                    release(value);
+                }
+            } hold{closure};
+            reinterpret_cast<void (*)(Object *, double)>(closure->code)(closure, elapsed);
+            reply = state.frame ? "true" : "false";
+        } else if (std::string(name) == "__fw_event") {
             if (json->kind != Json::List || json->items.size() != 2)
                 fail("invalid desktop event", "DesktopError");
             size_t handler = std::stoul(json->items[0]->text);
@@ -311,6 +416,8 @@ void runWindows(const std::vector<Object *> &windows, const char *backendPath) {
         retain(window);
         state.running = true;
         state.rendered = state.tree ? renderBody(state) : window->text;
+        if (state.frame)
+            state.pending += "window.__fw_frames();\n";
         auto scripts = std::string(desktopScript) +
                        (state.pending.empty() ? "" : "<script>" + state.pending + "</script>");
         std::string page;
@@ -320,7 +427,7 @@ void runWindows(const std::vector<Object *> &windows, const char *backendPath) {
             page = state.rendered + scripts;
         state.pending.clear();
         pages.push_back(std::move(page));
-        std::vector<const char *> list{"__fw_event"};
+        std::vector<const char *> list{"__fw_event", "__fw_frame"};
         for (auto &[name, closure] : state.bindings)
             list.push_back(name.c_str());
         names.push_back(std::move(list));
@@ -402,6 +509,18 @@ extern "C" void fw_desktop_bind(Object *window, Object *name, Object *closure) {
                 fail("duplicate binding '" + text + "'", "DesktopError");
         retain(closure);
         state.bindings.emplace_back(text, closure);
+    });
+}
+// window.on_frame(function(double elapsed)): called once per display frame while the window
+// runs; a null closure (window.on_frame(null)) stops the calls.
+extern "C" void fw_desktop_on_frame(Object *window, Object *closure) {
+    nativeBoundary([&] {
+        auto &state = desktopOf(window);
+        retain(closure);
+        release(state.frame);
+        state.frame = closure;
+        if (closure && state.running)
+            state.pending += "window.__fw_frames();\n";
     });
 }
 // Runs JavaScript in the page: after loading when called before run, else after the callback.

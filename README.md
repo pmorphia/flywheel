@@ -104,7 +104,7 @@ print Box("generic").value
 print <ul>{shapes.map(function(Shape s) => <li>{s.area()}</li>)}</ul>
 ```
 
-The language has classes with `constructor` and `destructor`, `public`/`private`/`protected`, `static` and `readonly` members, and operator methods; multiple inheritance (C3 method order, `super.method` and `super.Base.method`), interfaces, function and class decorators, the conditional expression `x if c else y`, `spawn` for threads, enums (including enums with data), exhaustive `match` with destructuring, monomorphized generics with constraints and generic methods, nullable values (including `int?`) with `??` and null-check narrowing, `char`, closures that share captured variables, first-class methods and constructors, sets and custom map keys, frozen collections, `defer`, format specs in interpolation, and an iterator protocol. See [language decisions](docs/language.md), [types](docs/types.md), and [collections](docs/collections.md).
+The language has classes with `constructor` and `destructor`, `public`/`private`/`protected`, `static` and `readonly` members, and operator methods; `struct` value types (points, colors, rectangles) that are copied like numbers and never allocated; multiple inheritance (C3 method order, `super.method` and `super.Base.method`), interfaces, function and class decorators, the conditional expression `x if c else y`, `spawn` for threads, enums (including enums with data), exhaustive `match` with destructuring, monomorphized generics with constraints and generic methods, nullable values (including `int?`) with `??` and null-check narrowing, `char`, closures that share captured variables, first-class methods and constructors, sets and custom map keys, frozen collections, `defer`, format specs in interpolation, and an iterator protocol. See [language decisions](docs/language.md), [types](docs/types.md), and [collections](docs/collections.md).
 
 ```flywheel
 enum Token
@@ -162,7 +162,7 @@ var same = desktop.window("my-window")
 
 ## Native code
 
-`import c name`, `import cxx name` (or `import++ name`), `import rust name`, and `import zig name` compile a C, C++, Rust, or Zig source file and call its functions directly; C++ exceptions and Rust panics become catchable `NativeError`s. See [native imports](docs/modules.md#native-imports-c-c-rust-and-zig).
+`import c name`, `import cxx name` (or `import++ name`), `import rust name`, and `import zig name` compile a C, C++, Rust, or Zig source file and call its functions directly; C++ exceptions and Rust panics become catchable `NativeError`s. C and C++ pointers cross as `int` handles, and `// flywheel: pkg sdl3` or `// flywheel: link m` comments in the source name the libraries it needs. See [native imports](docs/modules.md#native-imports-c-c-rust-and-zig).
 
 ```flywheel
 import rust fast          # fast.rs: pub fn fib(n: u64) -> u64 { ... }
@@ -185,9 +185,28 @@ print web.serve("/", index, 8000, "0.0.0.0")
 
 Markup tags come from `import html.*`, `import svg.*`, or declared [element families](docs/html-dom.md#element-families), and trees support CSS selectors (including pseudo-classes and sibling combinators), parent links, `closest`, and DOM-style mutation. See [HTML tools](docs/html-dom.md).
 
+## Games
+
+[Aperture](aperture/README.md) (`pulley add polymorphia.aperture`) is the 2D and 3D game library: a window, input, batched sprites and shapes, text, cameras, meshes with lighting, render targets, shaders, and sound, on SDL3 and OpenGL.
+
+```flywheel
+import aperture as ap
+
+ap.open("Hello", 800, 450)
+var position = ap.center()
+while ap.frame() do
+    position = position + ap.steer() * (240 * ap.delta())
+    ap.clear(ap.NAVY)
+    ap.circle(position.x, position.y, 24, ap.ORANGE)
+end
+ap.close()
+```
+
+For animated pages rather than games, desktop windows call `window.on_frame(function(double elapsed) ...)` once per display frame and change the page in place; see [desktop windows](docs/desktop.md#animation).
+
 ## Memory
 
-Values are reference counted with atomic counts and freed deterministically; a synchronous cycle collector reclaims unreachable cycles, and `weak<T>` is available for back links. See [runtime ownership](docs/runtime.md).
+Values are reference counted with atomic counts and freed deterministically; a synchronous cycle collector reclaims unreachable cycles, and `weak<T>` is available for back links. `gc.step(seconds)`, `gc.pause()`, and `gc.resume()` let games and other real-time programs decide when collection happens. See [runtime ownership](docs/runtime.md).
 
 ## Modules and errors
 

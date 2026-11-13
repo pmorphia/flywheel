@@ -14,6 +14,19 @@ Reference counting frees most objects immediately. Unreachable reference cycles 
 
 Collection runs automatically at statement boundaries once enough possible roots accumulate, after the program body finishes (so cycles held by globals are reclaimed at exit), and on demand with `gc.collect()`, which returns the number of objects freed. `gc.pending()` reports the current number of possible roots. Collection only runs while no spawned threads or web workers are active; it resumes when they finish. `weak<T>` remains available for back links that should not keep their target alive.
 
+Instances that cannot be part of a cycle are never candidates and are never traced: struct values stored on the heap, and instances of classes whose fields are all numbers, bools, chars, enums, strings, and structs (or nullable ones). Arrays of such objects cost the collector nothing.
+
+Programs that cannot afford a pause at an arbitrary statement (games, audio, animation) control when collection happens:
+
+| Function | Effect |
+|---|---|
+| `gc.collect()` | collect now; returns the number of objects freed |
+| `gc.step(seconds)` | collect for about that long at most (`gc.step(0.001)`, `gc.step(1ms)`), in small batches of possible roots; returns the number freed. Call it once per frame |
+| `gc.pause()` / `gc.resume()` | stop and restart automatic collection (calls nest); `gc.collect` and `gc.step` still work while paused |
+| `gc.paused()` | whether automatic collection is paused |
+| `gc.pending()` | the number of possible roots waiting |
+| `gc.threshold()` / `gc.threshold(n)` | how many possible roots trigger an automatic collection (default 20000); setting it returns the previous value |
+
 `weak<T>` holds a non-owning reference to a class instance, element, or other managed reference type. Assigning a `T` (or calling `weak(x)`) creates one; `get()` returns `T?` and `alive()` reports whether the target still exists. Each referenced object owns a shared cell that is cleared when the object is destroyed, under a lock, and `get()` only takes a reference while the target's count is above zero, so weak reads are safe across threads.
 
 ## Closures and captures

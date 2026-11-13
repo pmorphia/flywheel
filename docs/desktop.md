@@ -30,6 +30,7 @@ window.run()
 | `window.load(element_or_fragment)` | Show this tree; while running, the page shows it after the current callback |
 | `window.bind(string name, function(string) returns string)` | Expose a Flywheel function to page JavaScript as `name(value)` |
 | `window.eval(string script)` | Run JavaScript in the page: after loading when called before `run`, otherwise after the current callback |
+| `window.on_frame(function(double elapsed))` | Call a function once per display frame while the window runs, with the seconds since the previous frame; `window.on_frame(null)` stops |
 | `window.run()` | Show the window and block until it closes |
 | `desktop.run(desktop.window[] windows)` | Show several windows with one event loop; returns when all are closed |
 | `desktop.quit()` | Close every window and return from `run` after the current callback |
@@ -40,9 +41,39 @@ For a single page, `flywheel desktop app.fw` shows the `element` or `fragment` t
 
 ## Events and live updates
 
-Markup event attributes can hold Flywheel functions: `function() returns void`, or `function(string value) returns void`, which receives the event target's `value` (for example the text of an `<input>`). Inline JavaScript strings (`onclick="..."`) still work too.
+Markup event attributes can hold Flywheel functions: `function() returns void`, or `function(string value) returns void`, which receives the key of a keyboard event (`"a"`, `"Enter"`, `"ArrowLeft"`) and otherwise the event target's `value` (for example the text of an `<input>`). Inline JavaScript strings (`onclick="..."`) still work too.
 
-A window keeps the tree it was given. After every event handler and binding call, each running window re-renders its tree; when the HTML changed, the page body is replaced, keeping the focused element (by `id`) and its text selection. So a handler can mutate the tree in place (`node.text_content = ...`) or call `window.load(new_tree)`. Changes made before `run` are shown when the window opens.
+A window keeps the tree it was given. After every event handler, binding call, and frame callback, each running window re-renders its tree; when the HTML changed, the page is changed **in place**: elements that are still there are kept, with their focus, scroll position, text selection, and running CSS animations, and only the attributes, text, and children that differ are touched. Children are matched by their `data-key` attribute or `id` when they have one (so a reordered list moves its items instead of rewriting them), and by position and tag otherwise. Text a user typed into an input is kept unless the program changes that input's `value`. So a handler can mutate the tree in place (`node.text_content = ...`) or call `window.load(new_tree)`. Changes made before `run` are shown when the window opens.
+
+## Animation
+
+`window.on_frame` runs a function once per display frame, for animation and simple games drawn with markup, SVG, or a canvas:
+
+```flywheel
+import desktop
+import svg.*
+import html.*
+
+double angle = 0.0
+var window = desktop.window("Clock hand", 320, 320)
+function page() returns element
+    return <html><body>
+        <svg width="300" height="300" viewBox="-150 -150 300 300">
+            <circle r="140" fill="none" stroke="gray" />
+            <line x1="0" y1="0" x2="0" y2="-120" stroke="tomato" stroke-width="6"
+                  transform="rotate({angle})" />
+        </svg>
+    </body></html>
+end
+window.load(page())
+window.on_frame(function(double elapsed)
+    angle += 90 * elapsed          # a quarter turn per second
+    window.load(page())
+end)
+window.run()
+```
+
+The next frame is requested when the callback returns, so slow frames never pile up, and the page changes in place. The callback may be set before `run` or while the window runs. For games that need a real renderer, sound, and gamepads, use the [Aperture](../aperture/README.md) package instead of a window of markup.
 
 ## JavaScript bindings
 

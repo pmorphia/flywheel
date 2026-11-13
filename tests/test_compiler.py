@@ -12,6 +12,186 @@ from pathlib import Path
 COMPILER = str(Path(sys.argv.pop(1)).resolve()) if len(sys.argv) > 1 else "flywheel"
 
 POSITIVE = {
+    "struct_values": (
+        """import math
+struct Vec2
+    double x = 0
+    double y = 0
+    function length() returns double
+        return math.sqrt(this.x * this.x + this.y * this.y)
+    end
+    function operator +(Vec2 other) returns Vec2
+        return Vec2(this.x + other.x, this.y + other.y)
+    end
+    function operator *(double k) returns Vec2
+        return Vec2(this.x * k, this.y * k)
+    end
+    function operator -() returns Vec2
+        return Vec2(-this.x, -this.y)
+    end
+    static function unit() returns Vec2
+        return Vec2(1, 0)
+    end
+end
+struct Box
+    Vec2 low
+    Vec2 high
+    int id = 7
+    function width() returns double
+        return this.high.x - this.low.x
+    end
+end
+var a = Vec2(3, 4)
+var b = a
+b.x = 10
+print a.x, b.x, a.length(), Vec2().y, Vec2(5).x
+print (a + b).x, (a * 2).y, (2 * a).y, (-a).x, Vec2.unit().x
+print a == Vec2(3, 4), a != b, a
+var box = Box(Vec2(0, 0), Vec2(5, 6))
+box.high.x += 1
+box.id = 9
+print box.width(), box.id, box
+function scaled(Vec2 v, double k) returns Vec2
+    v.x *= k
+    return v
+end
+print scaled(a, 2).x, a.x""",
+        "3 10 5 0 5\n13 8 8 -3 1\ntrue true Vec2(x=3, y=4)\n6 9 Box(low=Vec2(x=0, y=0), high=Vec2(x=6, y=6), id=9)\n6 3\n",
+    ),
+    "struct_storage": (
+        """import json
+import testing
+struct P
+    double x
+    double y
+end
+enum Kind
+    A
+    B
+end
+struct Tagged
+    P at
+    Kind kind
+    bool on
+    char mark
+end
+class Body
+    P position
+    P[] trail = []
+    function step()
+        this.trail.push(this.position)
+        this.position.x += 1
+    end
+end
+P[] points = [P(1, 2), P(3, 4)]
+points.push(P(5, 6))
+points[0].x = 9
+points[1] = P(7, 7)
+for i, p in points do
+    print i, p.x + p.y
+end
+print points.index_of(P(7, 7)), points.contains(P(0, 0)), P(5, 6) in points
+print points.remove(P(7, 7)), points.pop().y, points.length
+points.sort(function(P l, P r) returns bool => l.x < r.x)
+map<string, P> named = {"a": P(1, 2)}
+named["a"].y = 5
+print named["a"], [P(1, 1), 2][0].x
+var body = Body(P(0, 0))
+body.step()
+body.step()
+print body.position.x, body.trail.length, body.trail[1].x
+var total = P(0, 0)
+var add = function(P p)
+    total.x += p.x
+end
+add(P(2, 0))
+add(P(3, 0))
+var read = function() returns double => total.x
+print total.x, read()
+P? maybe = null
+print maybe == null, maybe ?? P(8, 8)
+maybe = P(1, 2)
+if maybe != null do
+    print maybe.y
+end
+print maybe == P(1, 2), maybe is P
+match maybe
+    case P found do
+        print found.x
+    case null do
+        print "none"
+end
+var tag = Tagged(P(1, 2), Kind.B, true, 'q')
+tag.at.y = 3
+print tag, [tag][0] == tag
+print json.encode([P(1, 2)]), json.decode<P>(json.parse("{ \\"x\\": 4, \\"y\\": 5 }")).y
+int before = testing.live_objects()
+if true do
+    P[] many = []
+    for i in 0..<100 do
+        many.push(P(double(i), 0))
+    end
+end
+print testing.live_objects() == before""",
+        "0 11\n1 14\n2 11\n1 false true\ntrue 6 1\nP(x=1, y=5) 1\n2 2 1\n5 5\ntrue P(x=8, y=8)\n2\ntrue true\n1\nTagged(at=P(x=1, y=3), kind=B, on=true, mark='q') true\n[{\"x\":1,\"y\":2}] 5\ntrue\n",
+    ),
+    "number_constants_as_floats": (
+        """function area(double w, double h = 2) returns double
+    return w * h
+end
+double x = 1
+float small = 3
+double below = -4
+double[] items = [1, 2.5, 100 + 28]
+print x, small, below, items, area(3), area(3, 4)
+print x * 2 + 1, 2 * x, x / 4, x > 0, x == 1
+var grow = function(double by) returns double => by * 10
+print grow(2)""",
+        "1 3 -4 [1, 2.5, 128] 6 12\n3 2 0.25 true true\n20\n",
+    ),
+    "gc_controls": (
+        """import gc
+import time
+class Node
+    Node? next = null
+end
+class Plain
+    string name
+    double weight = 1
+end
+function cycles(int n)
+    for i in 0..<n do
+        var a = Node()
+        var b = Node()
+        a.next = b
+        b.next = a
+    end
+end
+print gc.threshold(), gc.paused()
+gc.pause()
+gc.pause()
+cycles(500)
+print gc.paused(), gc.pending() >= 500
+int freed = gc.step(0)
+print freed > 0 and freed <= 512
+while gc.pending() > 0 do
+    freed += gc.step(1ms)
+end
+print freed, gc.pending()
+gc.resume()
+print gc.paused()
+gc.resume()
+gc.resume()
+print gc.paused(), gc.threshold(300), gc.threshold()
+Plain[] plain = []
+for i in 0..<400 do
+    plain.push(Plain("p"))
+end
+print gc.pending() < 300
+cycles(1000)
+print gc.pending() < 700, gc.collect() >= 0""",
+        "20000 false\ntrue true\ntrue\n1000 0\ntrue\nfalse 20000 300\ntrue\ntrue true\n",
+    ),
     "math_integers": (
         """import math
 print math.cbrt(27.0), math.gcd(12, -18), math.lcm(4, -6), math.lcm(0, 3), math.factorial(5)
@@ -1320,6 +1500,27 @@ INPUT_CASES = {
 }
 
 NEGATIVE = {
+    "struct_recursive": ("struct Loop\n    Loop inner\nend", "contains itself"),
+    "struct_reference_field": ("struct Bad\n    string name\nend", "struct fields are numbers"),
+    "struct_method_assign": (
+        "struct S\n    int n\n    function bump()\n        this.n += 1\n    end\nend",
+        "works on a copy",
+    ),
+    "struct_temporary_assign": (
+        "struct S\n    int n\nend\nfunction make() returns S\n    return S(1)\nend\nmake().n = 2",
+        "field of a temporary S",
+    ),
+    "struct_generic": ("struct G<T>\n    T x\nend", "generic structs are not supported"),
+    "struct_extends": ("struct S\n    int n\nend\nclass C extends S\nend", "structs cannot be extended"),
+    "struct_implements": ("interface I\n    function f()\nend\nstruct S implements I\n    int n\nend", "structs cannot extend classes or implement interfaces"),
+    "struct_constructor": ("struct S\n    int n\n    constructor(int n)\n    end\nend", "structs cannot declare constructors"),
+    "struct_missing_field": ("struct S\n    int a\n    int b\nend\nvar s = S(1)", "missing field 'b' of struct S"),
+    "struct_map_key": ("struct S\n    int n\nend\nmap<S, int> m = {}", "map keys must be"),
+    "struct_const": ("struct S\n    int n\nend\nconst s = S(1)\ns.n = 2", "cannot assign to const 's'"),
+    "struct_operator": ("struct S\n    int n\nend\nprint S(1) < S(2)", "struct S does not define operator <"),
+    "float_from_variable": ("int n = 3\ndouble d = n", "cannot implicitly convert int to double"),
+    "float_inexact_constant": ("double d = 9007199254740993", "cannot implicitly convert int to double"),
+    "gc_threshold_type": ("import gc\ngc.threshold(1.5)", "gc.threshold expects a count"),
     "private_field": ("class A\n    private int x = 1\nend\nprint A().x", "private to class A"),
     "protected_field": (
         "class A\n    protected int x = 1\nend\nprint A().x",
@@ -4218,7 +4419,7 @@ print web.static("/assets", "public", {port})
         (self.root / "cmath.c").write_text(
             '#include <stdio.h>\nint add(int a, int b) { return a + b; }\nstatic double half(double x) { return x / 2; }\n'
             'const char *greet(const char *n) { static char b[64]; snprintf(b, sizeof b, "hi %s", n); return b; }\n'
-            '_Bool even(long n) { return n % 2 == 0; }\nstruct p { int x; };\nint skipped(struct p *q) { return q->x; }\nint main(void) { return 0; }\n',
+            '_Bool even(long n) { return n % 2 == 0; }\nstruct p { int x; };\nint skipped(struct p q) { return q.x; }\nint main(void) { return 0; }\n',
             encoding="utf-8",
         )
         (self.root / "text.cpp").write_text(
@@ -4258,6 +4459,39 @@ print web.static("/assets", "public", {port})
         self.assertEqual((result.returncode, result.stdout), (0, expected), result.stderr)
         self.source.write_text("import c cmath\nprint cmath.skipped(1)\n", encoding="utf-8")
         self.assertIn("has no exported name 'skipped'", run("check", self.source).stderr)
+        # Pointers cross as int handles, and `// flywheel:` comments add libraries and flags.
+        (self.root / "buffer.c").write_text(
+            "// flywheel: link m\n// flywheel: cflags -DSCALE=3\n// flywheel(windows): link user32\n"
+            "#include <math.h>\n#include <stdlib.h>\n"
+            "typedef struct { double *data; long count; } Buffer;\n"
+            "Buffer *buffer_new(long count) { Buffer *b = malloc(sizeof *b); b->data = calloc(count, sizeof(double)); b->count = count; return b; }\n"
+            "void buffer_set(Buffer *b, long i, double v) { b->data[i] = v * SCALE; }\n"
+            "double buffer_norm(const Buffer *b) { double s = 0; for (long i = 0; i < b->count; i++) s += b->data[i] * b->data[i]; return sqrt(s); }\n"
+            "const double *buffer_data(const Buffer *b) { return b->data; }\n"
+            "double peek(const double *values, long i) { return values[i]; }\n"
+            "void *nothing(void) { return 0; }\n"
+            "void buffer_free(Buffer *b) { free(b->data); free(b); }\n",
+            encoding="utf-8",
+        )
+        self.source.write_text(
+            "import c buffer\nint b = buffer.buffer_new(2)\nbuffer.buffer_set(b, 0, 1.0)\n"
+            "buffer.buffer_set(b, 1, 4.0 / 3.0)\nprint buffer.buffer_norm(b), buffer.peek(buffer.buffer_data(b), 0), buffer.nothing() == 0\n"
+            "buffer.buffer_free(b)\n",
+            encoding="utf-8",
+        )
+        result = run("run", self.source)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "5 3 true\n", ""))
+        result = run("build", self.source, "-o", exe)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
+        self.assertEqual((result.returncode, result.stdout), (0, "5 3 true\n"), result.stderr)
+        (self.root / "wrong.c").write_text("// flywheel: frobnicate x\nint one(void) { return 1; }\n", encoding="utf-8")
+        self.source.write_text("import c wrong\nprint wrong.one()\n", encoding="utf-8")
+        self.assertIn("unknown directive `flywheel: frobnicate`", run("check", self.source).stderr)
+        (self.root / "wrong.c").write_text("// flywheel: pkg no-such-package-for-flywheel\nint one(void) { return 1; }\n", encoding="utf-8")
+        result = run("run", self.source)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no-such-package-for-flywheel", result.stderr)
 
     def test_top_level_return(self):
         source = 'print "start"\nint code = 3\ntry\n    for i in [1, 2] do\n        if i == 2 do\n            return code + i\n        end\n    end\nfinally\n    print "finally"\nend\nprint "unreachable"\n'

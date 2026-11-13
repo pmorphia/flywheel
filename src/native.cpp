@@ -3,7 +3,9 @@
 // map to Flywheel (integers -> int, floating point -> double, bool, strings -> string, void).
 // A generated shim includes the source and exposes each function as a C symbol with a uniform
 // ABI (int64_t, double, const char *, malloc'd char * results); the compiler calls the shims.
-// Functions with other types (pointers, structs, templates, generics) are not exposed.
+// Other pointers cross as int handles (the address). Functions with other types (structs by
+// value, function pointers, templates, generics) are not exposed. `// flywheel:` comments in a
+// C or C++ source name the libraries and flags it needs (see scanDirectives).
 #include "flywheel/frontend.hpp"
 #include <algorithm>
 #include <cctype>
@@ -240,6 +242,14 @@ std::string cType(std::vector<std::string> words, bool cxx, bool parameter, std:
         kind = constant ? "cstr" : "mutable-cstr";
         return "string";
     }
+    // Any other pointer (`void *`, `Texture *`, `struct node **`) crosses as an int handle
+    // holding the address; 0 is the null pointer.
+    if (text.size() > 1 && text.back() == '*' && text.find('(') == std::string::npos &&
+        text.find('[') == std::string::npos && text.find('<') == std::string::npos &&
+        text.find('&') == std::string::npos) {
+        kind = "pointer";
+        return "int";
+    }
     if (cxx && (text == "std::string" || text == "string" || text == "std::string_view" ||
                 text == "string_view" || text == "std::string&" || text == "string&")) {
         bool reference = text.back() == '&';
@@ -402,6 +412,8 @@ std::string cShim(const ForeignModule &m, const std::string &path, bool cxx) {
                 arg = a + " != 0";
             else if (kind == "int" || kind == "real")
                 arg = "(" + unconst + ")" + a;
+            else if (kind == "pointer")
+                arg = "(" + spelled + ")(intptr_t)" + a; // qualifiers kept: `const char **`
             else if (kind == "cstr")
                 arg = a;
             else if (kind == "mutable-cstr")
@@ -420,6 +432,8 @@ std::string cShim(const ForeignModule &m, const std::string &path, bool cxx) {
             body = "return (" + invocation + ") ? 1 : 0;";
         else if (f.result == "string")
             body = "return fw_shim_out(" + invocation + ");";
+        else if (f.nativeResult == "pointer")
+            body = "return (int64_t)(intptr_t)(" + invocation + ");";
         else
             body = std::string("return (") + abi(f.result) + ")(" + invocation + ");";
         s += linkage + abi(f.result) + " " + f.symbol + "(" +
@@ -740,7 +754,112 @@ std::string zigShim(const ForeignModule &m) {
     }
     return s;
 }
+// --- Build directives ------------------------------------------------------------------------
+// Comments in a C or C++ source name what it needs to compile and link:
+//     // flywheel: link SDL3 m          libraries (-lSDL3 -lm, SDL3.lib)
+//     // flywheel: pkg sdl3 >= 3.2      a pkg-config package (its --cflags and --libs)
+//     // flywheel: cflags -DFAST -Ivendor
+//     // flywheel: ldflags -L/opt/lib -Wl,-rpath,/opt/lib
+// `// flywheel(linux): ...`, `(windows)`, `(macos)`, and `(unix)` apply on that platform only.
+bool directivePlatform(const std::string &platform) {
+    if (platform.empty())
+        return true;
+#ifdef _WIN32
+    return platform == "windows";
+#elif defined(__APPLE__)
+    return platform == "macos" || platform == "unix";
+#else
+    return platform == "linux" || platform == "unix";
+#endif
+}
+void scanDirectives(const std::string &text, ForeignModule &m) {
+    std::istringstream lines(text);
+    std::string line;
+    while (std::getline(lines, line)) {
+        auto at = line.find("//");
+        if (at == std::string::npos)
+            continue;
+        size_t p = at + 2;
+        while (p < line.size() && (line[p] == ' ' || line[p] == '\t' || line[p] == '/'))
+            ++p;
+        if (line.compare(p, 8, "flywheel") != 0)
+            continue;
+        p += 8;
+        std::string platform;
+        if (p < line.size() && line[p] == '(') {
+            auto close = line.find(')', p);
+            if (close == std::string::npos)
+                continue;
+            platform = line.substr(p + 1, close - p - 1);
+            p = close + 1;
+        }
+        if (p >= line.size() || line[p] != ':')
+            continue;
+        std::istringstream words(line.substr(p + 1));
+        std::string verb, word;
+        if (!(words >> verb))
+            continue;
+        if (verb != "link" && verb != "pkg" && verb != "cflags" && verb != "ldflags")
+            throw std::runtime_error("unknown directive `flywheel: " + verb + "` in " + m.source +
+                                     " (expected link, pkg, cflags, or ldflags)");
+        if (platform != "" && platform != "linux" && platform != "windows" &&
+            platform != "macos" && platform != "unix")
+            throw std::runtime_error("unknown platform `flywheel(" + platform + ")` in " +
+                                     m.source + " (expected linux, windows, macos, or unix)");
+        if (!directivePlatform(platform))
+            continue;
+        if (verb == "pkg") {
+            // The rest of the line is one pkg-config module, with an optional version test.
+            std::string rest;
+            std::getline(words, rest);
+            auto first = rest.find_first_not_of(" \t");
+            auto last = rest.find_last_not_of(" \t\r");
+            if (first != std::string::npos)
+                m.packages.push_back(rest.substr(first, last - first + 1));
+            continue;
+        }
+        while (words >> word) {
+            if (verb == "link")
+#ifdef _MSC_VER
+                m.linkFlags.push_back(word + ".lib");
+#else
+                m.linkFlags.push_back("-l" + word);
+#endif
+            else
+                (verb == "cflags" ? m.compileFlags : m.linkFlags).push_back(word);
+        }
+    }
+}
 // --- Building --------------------------------------------------------------------------------
+int runTool(const std::string &program, const std::vector<std::string> &args, std::string &output);
+// The compile and link flags of a module's `flywheel: pkg` packages, from pkg-config.
+void packageFlags(const ForeignModule &m, std::vector<std::string> &compile,
+                  std::vector<std::string> &link) {
+    if (m.packages.empty())
+        return;
+    auto tool = llvm::sys::findProgramByName("pkg-config");
+    if (!tool)
+        throw std::runtime_error(m.source + " needs `pkg-config` on PATH (flywheel: pkg " +
+                                 m.packages[0] + ")");
+    for (auto &package : m.packages) {
+        std::vector<std::string> spec;
+        std::istringstream words(package);
+        for (std::string word; words >> word;)
+            spec.push_back(word);
+        for (bool libs : {false, true}) {
+            std::vector<std::string> args = {libs ? "--libs" : "--cflags"};
+            args.insert(args.end(), spec.begin(), spec.end());
+            std::string output;
+            if (runTool(*tool, args, output) != 0)
+                throw std::runtime_error(m.source + " needs the `" + package +
+                                         "` development package (flywheel: pkg), which "
+                                         "pkg-config cannot find:\n" + output);
+            std::istringstream flags(output);
+            for (std::string flag; flags >> flag;)
+                (libs ? link : compile).push_back(flag);
+        }
+    }
+}
 int runTool(const std::string &program, const std::vector<std::string> &args, std::string &output) {
     llvm::SmallString<128> log;
     if (llvm::sys::fs::createTemporaryFile("flywheel-native", "log", log))
@@ -776,8 +895,10 @@ ForeignModule scanForeign(const std::string &language, const std::string &path) 
     m.source = path;
     auto text = readText(path);
     m.key = contentHash(path).substr(0, 10);
-    if (language == "c" || language == "cxx")
+    if (language == "c" || language == "cxx") {
         scanC(text, language == "cxx", m);
+        scanDirectives(text, m);
+    }
     else if (language == "rust")
         scanRust(text, m);
     else
@@ -800,7 +921,8 @@ ForeignModule scanForeign(const std::string &language, const std::string &path) 
     if (m.functions.empty())
         throw std::runtime_error(
             "no importable functions in " + path +
-            " (functions need int, floating-point, bool, string, or void parameters and results" +
+            " (functions need int, floating-point, bool, string, pointer, or void parameters and "
+            "results" +
             (language == "rust"  ? ", and `pub`"
              : language == "zig" ? ", and `pub`"
                                  : "") +
@@ -842,6 +964,17 @@ ForeignBuild buildForeign(const std::vector<ForeignModule> &modules, bool shared
         build.inputs.push_back(output.string());
         if (m.language == "zig")
             build.flags.push_back("-lc");
+        // Libraries named by `flywheel:` directives: a shared module links them itself; a
+        // static build passes them to the program's link.
+        std::vector<std::string> compileFlags = m.compileFlags, linkFlags;
+        if (!fs::exists(output) || !shared)
+            packageFlags(m, compileFlags, linkFlags);
+        linkFlags.insert(linkFlags.end(), m.linkFlags.begin(), m.linkFlags.end());
+        if (!shared)
+            for (auto &flag : linkFlags)
+                if (flag.rfind("-l", 0) != 0 ||
+                    std::find(build.flags.begin(), build.flags.end(), flag) == build.flags.end())
+                    build.flags.push_back(flag);
         if (fs::exists(output))
             continue;
         auto partial = output.string() + ".partial";
@@ -866,17 +999,21 @@ ForeignBuild buildForeign(const std::vector<ForeignModule> &modules, bool shared
             args = {"/nologo",     "/O2",
                     "/MD",         "/EHsc",
                     "/c",          cxx ? "/TP" : "/TC",
-                    "/D" + rename, "/I" + fs::path(m.source).parent_path().string(),
-                    shim.string(), "/Fo:" + partial};
+                    "/D" + rename, "/I" + fs::path(m.source).parent_path().string()};
+            args.insert(args.end(), compileFlags.begin(), compileFlags.end());
+            args.insert(args.end(), {shim.string(), "/Fo:" + partial});
 #else
             args = {"-O2", "-fPIC", "-D" + rename,
                     "-I" + fs::path(m.source).parent_path().string()};
             if (!cxx)
                 args.insert(args.begin(), {"-x", "c"});
+            args.insert(args.end(), compileFlags.begin(), compileFlags.end());
             args.push_back(shim.string());
-            if (shared)
+            if (shared) {
                 args.insert(args.end(), {"-shared", "-o", partial});
-            else
+                // After the source, so the linker resolves its references to them.
+                args.insert(args.end(), linkFlags.begin(), linkFlags.end());
+            } else
                 args.insert(args.end(), {"-c", "-o", partial});
 #endif
             compileTool(FW_CXX, args, cxx ? "C++" : "C", m.source);

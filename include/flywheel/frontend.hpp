@@ -97,6 +97,9 @@ struct Class {
     std::vector<std::string> interfaces, typeParams;
     std::map<std::string, std::string> typeBounds;
     bool isInterface = false;
+    // `struct Name`: a value type. Its fields are numbers, bools, chars, enums, and other
+    // structs; values are copied on assignment and live in registers and stack slots.
+    bool isStruct = false;
     // Enums with data become a base class whose subclasses are the variants: `variants` on the
     // base lists them, and each variant class names its enum in `variantOf`.
     std::vector<std::string> variants;
@@ -128,6 +131,9 @@ struct ForeignFunction {
 struct ForeignModule {
     std::string language, source, shim, key; // key: hash identifying the source and shim
     std::vector<ForeignFunction> functions;
+    // From `// flywheel: link|pkg|cflags|ldflags ...` comments in a C or C++ source: extra
+    // compiler flags, linker flags, and pkg-config packages (resolved when the module is built).
+    std::vector<std::string> compileFlags, linkFlags, packages;
 };
 // Reads the functions of a foreign source file (language: c, cxx, rust, zig) and generates its shim.
 ForeignModule scanForeign(const std::string &language, const std::string &path);

@@ -343,6 +343,71 @@ window.run()
         assert result.returncode == 0, result.stderr
         assert result.stdout == "3x2 0 BODY\n", (result.stdout, result.stderr)
     print("desktop relative resources and void elements OK")
+    frames(compiler)
+
+
+def frames(compiler):
+    """window.on_frame, and re-rendering that changes the page in place instead of replacing it."""
+    with tempfile.TemporaryDirectory(prefix="fw-desktop-frames-") as temporary:
+        root = Path(temporary)
+        source = root / "frames.fw"
+        source.write_text(
+            """import desktop
+import html.*
+int frames = 0
+double total = 0.0
+string[] items = ["a", "b", "c"]
+var window = desktop.window("Frames", 400, 300)
+function page() returns element
+    return <html><body>
+        <p id="count">{frames}</p>
+        <input id="name" value="keep">
+        <ul>{items.map(function(string s) => <li data-key={s}>{s}</li>)}</ul>
+    </body></html>
+end
+window.load(page())
+window.bind("report", function(string text) returns string
+    print "report " + text
+    desktop.quit()
+    return "ok"
+end)
+window.on_frame(function(double elapsed)
+    frames += 1
+    total += elapsed
+    if frames == 3 do
+        items = ["c", "x", "a"]
+        window.eval("window.__same = (window.__input === document.getElementById('name')) && window.__li.parentNode !== null && window.__li.textContent === 'c'")
+    end
+    if frames == 6 do
+        window.on_frame(null)
+        window.eval("setTimeout(function () { report([document.getElementById('count').textContent, window.__same, document.querySelectorAll('li').length, document.querySelector('ul').textContent, document.getElementById('name').value].join(' ')); }, 300)")
+    end
+    window.load(page())
+end)
+window.eval("window.__input = document.getElementById('name'); window.__input.value = 'typed'; window.__li = document.querySelectorAll('li')[2];")
+window.run()
+print "closed", frames, total >= 0.0
+""",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [str(compiler), "run", str(source)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={
+                **os.environ,
+                "GDK_BACKEND": "x11",
+                "WAYLAND_DISPLAY": "",
+                "WEBKIT_DISABLE_DMABUF_RENDERER": "1",
+                "LIBGL_ALWAYS_SOFTWARE": "1",
+            },
+        )
+        assert result.returncode == 0, result.stderr
+        # Six frames ran and then stopped; the input (with what was typed into it) and the
+        # reordered list item are the same nodes as before the re-renders.
+        assert result.stdout.splitlines() == ["report 6 true 3 cxa typed", "closed 6 true"], result.stdout
+    print("desktop frame callbacks and in-place re-rendering OK")
 
 
 if __name__ == "__main__":
