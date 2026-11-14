@@ -184,7 +184,7 @@ std::string format(const std::string &source) {
                 stack.pop_back();
             if (first + 1 < line.size() && line[first + 1]->text == "if")
                 stack.push_back({"runif", depth});
-        } else if (keyword == "if" && runs)
+        } else if ((keyword == "if" || keyword == "when") && runs)
             stack.push_back({"runif", depth});
         else if ((keyword == "while" || keyword == "for") && runs) {
             // one call, no block
@@ -207,6 +207,9 @@ std::string format(const std::string &source) {
             stack.push_back({"block", depth});
         else if (keyword == "when" && line.size() > first + 1 && line.back()->text == "do")
             stack.push_back({"block", depth}); // `when condition do` ... `end`
+        else if (keyword == "defer" && first + 2 < line.size() && line[first + 1]->text == "when" &&
+                 line.back()->text == "do")
+            stack.push_back({"block", depth}); // `defer when condition do` ... `end`
         else if (keyword == "defer" && first + 1 == line.size())
             stack.push_back({"block", depth}); // `defer` alone opens a block ending in `end`
         int lambdaDepth = 0;

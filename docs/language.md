@@ -143,7 +143,7 @@ print "{price:,.2f} | {42:>6} | {0.256:.1%} | {255:#x} | {"ok":*^6}"
 
 ## Cleanup with defer
 
-`defer statement` runs the statement when the enclosing block ends, however it ends: normally, by `return`, `break`, or `continue`, or by an error. Several `defer`s in one block run in reverse order. A deferred block is written `defer` ... `end`.
+`defer statement` runs the statement when the enclosing block ends, however it ends: normally, by `return`, `break`, or `continue`, or by an error. Several `defer`s in one block run in reverse order. A deferred block is written `defer` ... `end`. `defer when` is a different statement: a [deferred `when`](reactive.md#deferred-when).
 
 ```flywheel
 import io

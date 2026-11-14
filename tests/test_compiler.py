@@ -3213,6 +3213,132 @@ if true run run
             "hello medium\nthree\nelse run\n1\n2\na 1\n8\n7\nscore 5\nran\ntick 1\ntick 2\nopen\n"
             "hello bare\ntick 3\nran\n",
         ),
+        "reactive_when_else": (
+            """reactive int score = 0
+when score >= 3 do
+    print "up", score
+else do
+    print "down", score
+end
+score = 1
+score = 4
+score = 5
+score = 0
+score = 9
+int hp = 5
+when hp > 3 run print "healthy" else run print "hurt"
+hp = 2
+hp = 6
+bool open = false
+when open run print "opened"
+else run print "closed"
+open = true
+open = false
+""",
+            "up 4\ndown 0\nup 9\nhealthy\nhurt\nhealthy\nopened\nclosed\n",
+        ),
+        "reactive_when_fields": (
+            """class Player
+    string name
+    int health = 10
+    function hit(int n) returns void
+        this.health -= n
+    end
+end
+var p = Player("a")
+var q = Player("b")
+when p.health <= 0 do
+    print "down", p.name
+else do
+    print "up", p.name
+end
+p.hit(4)
+q.hit(20)
+p.hit(7)
+p.health = 3
+p = q
+p = Player("c")
+computed int total = p.health + q.health
+print total
+q.health = 1
+print total
+int[] xs = [0, 0]
+when xs[1] > 2 run print "xs", xs[1]
+xs[1] = 5
+xs[0] = 7
+""",
+            "down a\nup a\ndown b\nup c\n0\n11\nxs 5\n",
+        ),
+        "reactive_when_functions": (
+            """var px = 0
+var py = 0
+function far() returns bool
+    return length() > 25
+end
+function length() returns int
+    return px * px + py * py
+end
+when far() do
+    print "far", px, py
+else do
+    print "near", px, py
+end
+px = 3
+py = 4
+py = 5
+px = 0
+py = 0
+class Door
+    bool locked = true
+    function open() returns bool
+        return not this.locked
+    end
+end
+var door = Door()
+when door.open() run print "door open"
+door.locked = false
+""",
+            "far 3 5\nnear 0 5\ndoor open\n",
+        ),
+        "reactive_defer_when": (
+            """var y = 0.0
+defer when y < -10 do
+    print "fell", y
+    y = 0
+end
+function fall() returns void
+    y = -20
+    print "in fall", y
+    y = -5
+end
+fall()
+print "after fall", y
+function drop() returns void
+    y = -20
+    print "dropped"
+end
+drop()
+print "after drop", y
+var n = 0
+while n < 3 do
+    n += 1
+    if n == 2 do
+        y = -11
+        print "set", y
+    end
+end
+function scoped() returns void
+    reactive int k = 0
+    defer when k > 1 run print "k", k
+    k = 1
+    k = 2
+    print "k set"
+end
+scoped()
+""",
+            "in fall -20\nafter fall -5\ndropped\nfell -20\nafter drop 0\nfell -11\nset 0\n"
+            "k 2\nk set\n",
+        ),
     }
 )
 NEGATIVE.update(
@@ -3246,6 +3372,11 @@ NEGATIVE.update(
             "reactive int a = 1\ncomputed int b = a * 2\nb = 5\n",
             "cannot assign to computed value 'b'",
         ),
+        "computed_assign_into": (
+            "int[] a = [1]\ncomputed int[] b = a\nb[0] = 5\n",
+            "cannot assign into computed value 'b'",
+        ),
+        "when_else_if": ("bool a = true\nwhen a do\n    print 1\nelse if a do\n    print 2\nend\n", "expected"),
         "computed_constant": ("computed int c = 5\n", "a computed value must read a variable"),
         "reactive_const": ("reactive const int c = 5\n", "cannot be const"),
         "units_namespaces": (

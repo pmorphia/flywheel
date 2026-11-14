@@ -1836,6 +1836,17 @@ SP Parser::statement() {
         return s;
     }
     if (accept("defer")) {
+        // `defer when condition do ... end`: a deferred when, checked between statements.
+        if (peek().kind == "id" && peek().text == "when") {
+            auto saved = pos;
+            auto w = statement();
+            if (w->kind == "when") {
+                w->op = "defer";
+                w->loc = s->loc;
+                return w;
+            }
+            pos = saved;
+        }
         s->kind = "defer";
         if (peek().kind == "nl") {
             finish();
@@ -1864,8 +1875,9 @@ SP Parser::statement() {
         finish();
         return s;
     }
-    // `when condition do ... end` runs its body each time the condition becomes true; the
-    // condition reads reactive or computed variables (see src/lower.cpp).
+    // `when condition do ... end` runs its body each time the condition becomes true, and an
+    // `else do` body each time it becomes false again; the condition reads reactive or computed
+    // variables, fields, and what the functions it calls read (see src/lower.cpp).
     if (peek().kind == "id" && peek().text == "when") {
         auto saved = pos;
         auto loc = take().loc;
@@ -1882,6 +1894,18 @@ SP Parser::statement() {
             s->expr = std::move(condition);
             take();
             s->body = runBody();
+            // `else run call`, on the same line or the next.
+            auto after = pos;
+            newlines();
+            if (peek().text == "else" && peek().kind == "id") {
+                take();
+                if (runs()) {
+                    s->other = runBody();
+                    finish();
+                    return s;
+                }
+            }
+            pos = after;
             finish();
             return s;
         }
@@ -1892,6 +1916,16 @@ SP Parser::statement() {
             s->expr = std::move(condition);
             finish();
             s->body = block();
+            if (accept("else")) {
+                if (runs()) {
+                    s->other = runBody();
+                    finish();
+                    return s;
+                }
+                expect("do");
+                finish();
+                s->other = block();
+            }
             expect("end");
             finish();
             return s;
