@@ -1,4 +1,4 @@
-# Run with: flywheel test examples/tests
+# Run with: flywheel --test examples/tests
 import testing
 
 function test_length_counts_characters() returns void

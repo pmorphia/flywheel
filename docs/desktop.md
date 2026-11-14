@@ -37,7 +37,7 @@ window.run()
 
 `desktop.window` without parentheses is the class itself (`var Window = desktop.window`, then `Window("Title")`); see [classes and constructors](types.md#classes-and-constructors). `desktop.Window` is an alias. Windows are reference-managed objects: assignments alias the same window.
 
-For a single page, `flywheel desktop app.fw` shows the `element` or `fragment` the file returns at top level, without creating the window in code; see [pages](tooling.md#pages-desktop-and-serve).
+For a single page, `flywheel --desktop app.fw` shows the `element` or `fragment` the file returns at top level, without creating the window in code; see [pages](tooling.md#pages-desktop-and-serve).
 
 ## Events and live updates
 
@@ -99,7 +99,7 @@ Dimensions must be positive signed 32-bit values. Titles and rendered HTML canno
 ```sh
 cmake -S . -B build -DFLYWHEEL_DESKTOP=ON
 cmake --build build --parallel 2
-build/flywheel run examples/desktop_demo.fw
+build/flywheel examples/desktop_demo.fw
 ```
 
 The `FLYWHEEL_DESKTOP` CMake setting accepts `AUTO` (default), `ON`, or `OFF`. `AUTO` builds the backend when native development dependencies are available. `ON` makes missing build dependencies a configuration error. `OFF` retains the window API, but `run` raises `DesktopError` unless a compatible backend is provided. Command-line programs do not load the GUI backend.

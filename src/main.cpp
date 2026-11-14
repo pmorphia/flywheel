@@ -1,25 +1,25 @@
 #include "flywheel/frontend.hpp"
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <functional>
-#include <sstream>
-#include <filesystem>
 #include <iostream>
-#include <map>
-#include <optional>
-#include <set>
 #include <llvm/Config/llvm-config.h>
 #include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/Program.h>
+#include <map>
+#include <optional>
+#include <set>
+#include <sstream>
 #ifdef FW_JIT
 #include <cerrno>
-#include <cstring>
+#include <csignal>
 #include <cstdio>
+#include <cstring>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/Support/MemoryBuffer.h>
-#include <csignal>
 #include <sys/wait.h>
 #include <unistd.h>
 #ifdef __linux__
@@ -135,8 +135,8 @@ std::optional<int> runInProcess(const std::string &object, std::vector<std::stri
         for (auto &argument : arguments)
             argv.push_back(argument.data());
         argv.push_back(nullptr);
-        std::exit(entry->toPtr<int (*)(int, char **)>()(static_cast<int>(arguments.size()),
-                                                        argv.data()));
+        std::exit(
+            entry->toPtr<int (*)(int, char **)>()(static_cast<int>(arguments.size()), argv.data()));
     }
     int status = 0;
     while (waitpid(child, &status, 0) < 0)
@@ -153,10 +153,10 @@ std::optional<int> runInProcess(const std::string &object, std::vector<std::stri
     return 128 + signal;
 }
 #endif
-// Compiles `load()` and runs it (run, desktop, serve), links it (build), or only checks it
-// (check). `load` is called again when the in-process JIT is unavailable, because compilation
-// consumes a program.
-// `runSeconds`, when set, receives how long the program ran (not counting compilation).
+// Compiles `load()` and runs it (run, desktop, serve, desktop+serve), links it (build), or only
+// checks it (check). `load` is called again when the in-process JIT is unavailable, because
+// compilation consumes a program. `runSeconds`, when set, receives how long the program ran (not
+// counting compilation).
 int compileProgram(const std::string &command, const std::string &filename,
                    const std::function<fw::Program()> &load, const fw::Options &base,
                    const std::string &output, const std::vector<std::string> &programArguments,
@@ -166,7 +166,8 @@ int compileProgram(const std::string &command, const std::string &filename,
         auto start = std::chrono::steady_clock::now();
         auto status = run();
         if (runSeconds)
-            *runSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+            *runSeconds =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
         return status;
     };
     if (command == "check") {
@@ -178,7 +179,7 @@ int compileProgram(const std::string &command, const std::string &filename,
     auto runtime = runtimePath(argv0);
     auto options = base;
     options.desktopBackend = desktopPath(runtime);
-    if (command == "desktop" || command == "serve")
+    if (command == "desktop" || command == "serve" || command == "desktop+serve")
         options.entry = command;
     bool runs = command != "build";
 #ifdef FW_JIT
@@ -215,8 +216,8 @@ int compileProgram(const std::string &command, const std::string &filename,
     std::vector<std::string> link;
 #ifdef _MSC_VER
     // Bcrypt (entropy) and Crypt32 (root certificates) serve the bundled Mbed TLS.
-    link = {"/nologo", "/MD", object.string(), runtime.string(), "/Fe:" + binary.string(), "/link",
-            "Ws2_32.lib", "Bcrypt.lib", "Crypt32.lib"};
+    link = {"/nologo", "/MD",        object.string(), runtime.string(), "/Fe:" + binary.string(),
+            "/link",   "Ws2_32.lib", "Bcrypt.lib",    "Crypt32.lib"};
     if (options.debug)
         link.insert(link.begin() + 2, "/Zi");
 #else
@@ -293,11 +294,21 @@ std::optional<std::string> jsonString(const std::string &json) {
         if (++i + 1 >= json.size())
             return std::nullopt;
         switch (json[i]) {
-        case 'n': out += '\n'; break;
-        case 't': out += '\t'; break;
-        case 'r': out += '\r'; break;
-        case 'b': out += '\b'; break;
-        case 'f': out += '\f'; break;
+        case 'n':
+            out += '\n';
+            break;
+        case 't':
+            out += '\t';
+            break;
+        case 'r':
+            out += '\r';
+            break;
+        case 'b':
+            out += '\b';
+            break;
+        case 'f':
+            out += '\f';
+            break;
         case 'u': {
             if (i + 4 >= json.size())
                 return std::nullopt;
@@ -312,7 +323,8 @@ std::optional<std::string> jsonString(const std::string &json) {
             utf8(v);
             break;
         }
-        default: out += json[i];
+        default:
+            out += json[i];
         }
     }
     return out;
@@ -397,10 +409,76 @@ void reportCoverage(const std::string &path) {
             std::cout << "  missed: " << missed;
         std::cout << "\n";
     }
-    std::cout << "  total  " << allHit << "/" << allLines << " lines ("
-              << allHit * 100 / allLines << "%); wrote coverage.lcov\n";
+    std::cout << "  total  " << allHit << "/" << allLines << " lines (" << allHit * 100 / allLines
+              << "%); wrote coverage.lcov\n";
 }
-// flywheel test: runs every zero-argument `test_*` function in test_*.fw / *_test.fw files.
+// Test mode: appends a runner that calls every zero-argument `test_*` function of the file
+// (with setup/teardown fixtures) and fails if any of them throws. Returns the number of tests.
+size_t addTestRunner(fw::Program &program) {
+    // Test functions of the file itself are those of the first loaded module ($m0$).
+    std::vector<std::pair<std::string, std::string>> tests;
+    // Fixtures: setup/teardown run around each test, setup_all/teardown_all once.
+    std::set<std::string> fixtures;
+    for (auto &f : program.functions) {
+        if (f.name.rfind("$m0$test_", 0) == 0 && f.params.empty() && f.owner.empty())
+            tests.emplace_back(f.name, f.name.substr(4));
+        for (std::string fixture : {"setup", "teardown", "setup_all", "teardown_all"})
+            if (f.name == "$m0$" + fixture && f.params.empty() && f.owner.empty())
+                fixtures.insert(fixture);
+    }
+    std::string runner = "int __fw_failed = 0\n";
+    if (fixtures.count("setup_all"))
+        runner += "__fw_fixture_setup_all()\n";
+    for (size_t i = 0; i < tests.size(); ++i) {
+        std::string body = "        __fw_test_" + std::to_string(i) + "()\n";
+        if (fixtures.count("setup"))
+            body = "        __fw_fixture_setup()\n" + body;
+        if (fixtures.count("teardown"))
+            body = "    try\n" + body + "    finally\n        __fw_fixture_teardown()\n    end\n";
+        else
+            body = body.substr(4);
+        runner += "try\n" + body + "    print \"  ok   " + tests[i].second +
+                  "\"\ncatch Error __fw_error\n    print \"  FAIL " + tests[i].second +
+                  ": \" + __fw_error.message\n    __fw_failed += 1\nend\n";
+    }
+    if (fixtures.count("teardown_all"))
+        runner += "__fw_fixture_teardown_all()\n";
+    runner += "if __fw_failed > 0 do\n    throw AssertionError(string(__fw_failed) + "
+              "\" of " +
+              std::to_string(tests.size()) + " test(s) failed\")\nend\n";
+    auto extra = fw::Parser(fw::lex(runner)).parse();
+    std::function<void(fw::Expr &)> rename = [&](fw::Expr &e) {
+        if (e.kind == "name" && e.text.rfind("__fw_test_", 0) == 0)
+            e.text = tests.at(std::stoul(e.text.substr(10))).first;
+        else if (e.kind == "name" && e.text.rfind("__fw_fixture_", 0) == 0)
+            e.text = "$m0$" + e.text.substr(13);
+        for (auto &a : e.args)
+            if (a)
+                rename(*a);
+    };
+    std::function<void(std::vector<fw::SP> &)> statements = [&](std::vector<fw::SP> &body) {
+        for (auto &st : body) {
+            if (st->expr)
+                rename(*st->expr);
+            if (st->target)
+                rename(*st->target);
+            statements(st->body);
+            statements(st->other);
+            statements(st->finalizer);
+            for (auto &c : st->catches)
+                statements(c);
+        }
+    };
+    statements(extra.body);
+    // Before the first top-level `return`, so a program that returns a page (--desktop,
+    // --serve) runs its tests before showing it; at the end otherwise.
+    auto at = std::find_if(program.body.begin(), program.body.end(),
+                           [](const fw::SP &st) { return st && st->kind == "return"; });
+    for (auto &st : extra.body)
+        at = std::next(program.body.insert(at, std::move(st)));
+    return tests.size();
+}
+// flywheel --test: runs every zero-argument `test_*` function in test_*.fw / *_test.fw files.
 int runTests(std::vector<std::string> paths, const fw::Options &options, const char *argv0) {
     if (paths.empty())
         paths.push_back(".");
@@ -445,64 +523,7 @@ int runTests(std::vector<std::string> paths, const fw::Options &options, const c
         std::cout << filename << '\n' << std::flush;
         auto load = [&]() {
             auto program = fw::loadProgram(filename);
-            // Test functions of the file itself are those of the first loaded module ($m0$).
-            std::vector<std::pair<std::string, std::string>> tests;
-            // Fixtures: setup/teardown run around each test, setup_all/teardown_all once.
-            std::set<std::string> fixtures;
-            for (auto &f : program.functions) {
-                if (f.name.rfind("$m0$test_", 0) == 0 && f.params.empty() && f.owner.empty())
-                    tests.emplace_back(f.name, f.name.substr(4));
-                for (std::string fixture : {"setup", "teardown", "setup_all", "teardown_all"})
-                    if (f.name == "$m0$" + fixture && f.params.empty() && f.owner.empty())
-                        fixtures.insert(fixture);
-            }
-            std::string runner = "int __fw_failed = 0\n";
-            if (fixtures.count("setup_all"))
-                runner += "__fw_fixture_setup_all()\n";
-            for (size_t i = 0; i < tests.size(); ++i) {
-                std::string body = "        __fw_test_" + std::to_string(i) + "()\n";
-                if (fixtures.count("setup"))
-                    body = "        __fw_fixture_setup()\n" + body;
-                if (fixtures.count("teardown"))
-                    body = "    try\n" + body + "    finally\n        __fw_fixture_teardown()\n    end\n";
-                else
-                    body = body.substr(4);
-                runner += "try\n" + body + "    print \"  ok   " + tests[i].second +
-                          "\"\ncatch Error __fw_error\n    print \"  FAIL " + tests[i].second +
-                          ": \" + __fw_error.message\n    __fw_failed += 1\nend\n";
-            }
-            if (fixtures.count("teardown_all"))
-                runner += "__fw_fixture_teardown_all()\n";
-            runner += "if __fw_failed > 0 do\n    throw AssertionError(string(__fw_failed) + "
-                      "\" of " +
-                      std::to_string(tests.size()) + " test(s) failed\")\nend\n";
-            auto extra = fw::Parser(fw::lex(runner)).parse();
-            std::function<void(fw::Expr &)> rename = [&](fw::Expr &e) {
-                if (e.kind == "name" && e.text.rfind("__fw_test_", 0) == 0)
-                    e.text = tests.at(std::stoul(e.text.substr(10))).first;
-                else if (e.kind == "name" && e.text.rfind("__fw_fixture_", 0) == 0)
-                    e.text = "$m0$" + e.text.substr(13);
-                for (auto &a : e.args)
-                    if (a)
-                        rename(*a);
-            };
-            std::function<void(std::vector<fw::SP> &)> statements = [&](std::vector<fw::SP> &body) {
-                for (auto &st : body) {
-                    if (st->expr)
-                        rename(*st->expr);
-                    if (st->target)
-                        rename(*st->target);
-                    statements(st->body);
-                    statements(st->other);
-                    statements(st->finalizer);
-                    for (auto &c : st->catches)
-                        statements(c);
-                }
-            };
-            statements(extra.body);
-            for (auto &st : extra.body)
-                program.body.push_back(std::move(st));
-            total += tests.size();
+            total += addTestRunner(program);
             return program;
         };
         try {
@@ -521,13 +542,12 @@ int runTests(std::vector<std::string> paths, const fw::Options &options, const c
         reportCoverage(coverageFile);
     return failedFiles ? 1 : 0;
 }
-// flywheel repl: each input is added to a growing program that is re-run from the start;
+// flywheel --repl: each input is added to a growing program that is re-run from the start;
 // only output produced after the previous inputs is shown. Declarations (functions, classes,
 // enums, imports) are kept; statements are kept when they run without error.
 bool declaration(const fw::Program &p) {
-    return p.body.empty() &&
-           (!p.functions.empty() || !p.classes.empty() || !p.enums.empty() || !p.imports.empty() ||
-            !p.components.empty() || !p.families.empty());
+    return p.body.empty() && (!p.functions.empty() || !p.classes.empty() || !p.enums.empty() ||
+                              !p.imports.empty() || !p.components.empty() || !p.families.empty());
 }
 int repl(const char *argv0) {
     Temp temp;
@@ -552,8 +572,8 @@ int repl(const char *argv0) {
         std::optional<llvm::StringRef> redirects[] = {std::nullopt, llvm::StringRef(outPath),
                                                       llvm::StringRef(errPath)};
         std::string self = fs::absolute(argv0).string();
-        auto status = llvm::sys::ExecuteAndWait(self, {self, "run", source.string()}, std::nullopt,
-                                                redirects);
+        auto status = llvm::sys::ExecuteAndWait(self, {self, "--run", source.string()},
+                                                std::nullopt, redirects);
         auto read = [](const fs::path &p) {
             std::ifstream in(p, std::ios::binary);
             std::stringstream text;
@@ -623,8 +643,8 @@ int repl(const char *argv0) {
         // A lone expression is printed (unless it has no value, such as a void call).
         int status = -1;
         auto ran = input;
-        if (parsed.body.size() == 1 && parsed.body[0]->kind == "expr" &&
-            parsed.functions.empty() && parsed.classes.empty()) {
+        if (parsed.body.size() == 1 && parsed.body[0]->kind == "expr" && parsed.functions.empty() &&
+            parsed.classes.empty()) {
             ran = "print (" + input.substr(0, input.size() - 1) + ")";
             status = run(declarations, statements, ran, output, errors);
             if (status != 0 && errors.find("error:") != std::string::npos && output.empty())
@@ -643,100 +663,249 @@ int repl(const char *argv0) {
     return 0;
 }
 } // namespace
+namespace {
+// The parsed command line. Every command is a flag: modes say what to do with SOURCE, the
+// rest adjust it, and short flags combine (`-dvust`).
+struct Cli {
+    std::set<std::string> modes;
+    bool update = false, version = false, help = false, game = false, formatCheck = false;
+    std::string output, returnFile;
+    std::optional<std::string> source; // -x / --source CODE
+    std::vector<std::string> positionals, programArguments;
+};
+int64_t portNumber(const std::string &value) {
+    if (value.empty() || value.find_first_not_of("0123456789") != std::string::npos ||
+        value.size() > 5 || std::stoi(value) > 65535)
+        throw std::runtime_error("--port expects a number in 0..65535");
+    return std::stoi(value);
+}
+// flywheel --format [--check] files...
+int formatFiles(const std::vector<std::string> &files, bool check) {
+    int status = 0;
+    for (auto &file : files) {
+        std::ifstream input(file, std::ios::binary);
+        if (!input) {
+            std::cerr << "flywheel: cannot read " << file << '\n';
+            status = 1;
+            continue;
+        }
+        std::ostringstream text;
+        text << input.rdbuf();
+        try {
+            auto formatted = fw::format(text.str());
+            if (formatted == text.str())
+                continue;
+            if (check) {
+                std::cout << file << " needs formatting\n";
+                status = 1;
+            } else {
+                std::ofstream out(file, std::ios::binary);
+                out << formatted;
+            }
+        } catch (const fw::Error &e) {
+            reportError(e, file);
+            status = 1;
+        }
+    }
+    return status;
+}
+} // namespace
 int main(int argc, char **argv) {
     static int anchor;
-    fw::setExecutablePath(llvm::sys::fs::getMainExecutable(argv[0], &anchor));
+    auto self = llvm::sys::fs::getMainExecutable(argv[0], &anchor);
+    fw::setExecutablePath(self);
     std::string usage =
-        "Usage: flywheel run|r SOURCE [options] [-- program arguments]\n"
-        "           compile and run\n"
-        "       flywheel build|b SOURCE [options] [-o output]\n"
-        "           write an executable\n"
-        "       flywheel check|c SOURCE [options] [--emit-ir file.ll]\n"
-        "           type-check without running\n"
-        "       flywheel desktop|d SOURCE [options] [-- program arguments]\n"
-        "           show the returned page in a window\n"
-        "       flywheel serve|s SOURCE [--port N] [--host H] [options] [-- program arguments]\n"
-        "           serve the returned page over HTTP\n"
-        "       flywheel export|e SOURCE OUTPUT [options] [program arguments]\n"
-        "           write the returned value to OUTPUT\n"
-        "       flywheel debug|db SOURCE [options] [-- program arguments]\n"
-        "           print the returned value and run time\n"
-        "       flywheel test|t [files or directories] [-O0..3] [--coverage] [--race]\n"
-        "           run test_*.fw and *_test.fw files\n"
-        "       flywheel format|fmt|f [--check] files...\n"
-        "           format source files\n"
-        "       flywheel doc module.fw [-o output.html]\n"
-        "           generate HTML documentation\n"
-        "       flywheel update|u [curl arguments]\n"
-        "           reinstall from flywheel.polymorphia.dev\n"
-        "       flywheel repl | lsp | selftest\n"
-        "       flywheel help|h|--help | version|v|--version\n"
+        "Usage: flywheel [flags] SOURCE [program arguments] [-- program arguments]\n"
         "\n"
-        "SOURCE is a .fw/.fly path or a URL (https, http, ftp, ftps, sftp, ssh, scp, file);\n"
-        "`flywheel SOURCE [arguments]` (or `fw SOURCE`) runs it.\n"
-        "Use -s CODE (--source CODE) instead of SOURCE to run code from the command line.\n"
+        "SOURCE is a .fw/.fly file, a directory with a source.fw, a URL (https, http, ftp, ftps,\n"
+        "sftp, ssh, scp, file), or - for standard input. Without a mode, SOURCE is compiled and\n"
+        "run. Short flags combine: `flywheel main.fw -dvust` updates Flywheel, prints its\n"
+        "version, then runs main.fw in test mode as a desktop app while also serving it.\n"
+        "\n"
+        "Modes:\n"
+        "  -r, --run            compile and run (the default)\n"
+        "  -b, --build          write an executable (-o FILE)\n"
+        "  -c, --check          type-check without running (--emit-ir FILE)\n"
+        "  -d, --desktop        show the returned page in a window\n"
+        "  -s, --serve          serve the returned page over HTTP (--port N, --host H);\n"
+        "                       with --desktop, both at once\n"
+        "  -e, --export         write the returned value to OUTPUT (-o OUTPUT, or the next\n"
+        "                       argument)\n"
+        "  -D, --debug          print the returned value and run time\n"
+        "  -t, --test           test mode: run the file's test_* functions first (combines with\n"
+        "                       the other modes); alone, tests every test_*.fw and *_test.fw in\n"
+        "                       the given files and directories (default .)\n"
+        "  -f, --format         format the given files (with -c/--check: only report)\n"
+        "      --doc            write HTML documentation of a module (-o FILE)\n"
+        "  -n, --new NAME       create a project with Pulley (--game: a game)\n"
+        "      --repl           interactive session\n"
+        "      --lsp            language server\n"
+        "      --selftest       run the compiler's test suite\n"
+        "\n"
+        "Run first, in this order:\n"
+        "  -u, --update         reinstall from flywheel.polymorphia.dev\n"
+        "  -v, --version        print the version\n"
+        "  -h, --help           print this help\n"
         "\n"
         "Options:\n"
-        "  -O0..-O3         optimization level\n"
-        "  -g               debug information\n"
-        "  --race           detect data races\n"
-        "  -o FILE          output file (build, export)\n"
-        "  --emit-ir FILE   write the LLVM IR\n";
+        "  -x, --source CODE    run CODE instead of SOURCE\n"
+        "  -o, --output FILE    output file (build, export, doc)\n"
+        "  -O0..-O3             optimization level\n"
+        "  -g                   debug information\n"
+        "  --race               detect data races\n"
+        "  --coverage           line coverage (test mode)\n"
+        "  --port N, --host H   where --serve listens (default 127.0.0.1:8000)\n"
+        "  --emit-ir FILE       write the LLVM IR\n";
     if (argc < 2) {
         std::cerr << usage;
         return 2;
     }
-    // Short aliases; fmt is the old name of format.
-    static const std::map<std::string, std::string> aliases = {
-        {"r", "run"},     {"b", "build"},    {"c", "check"},       {"d", "desktop"},
-        {"s", "serve"},   {"e", "export"},   {"db", "debug"},      {"t", "test"},
-        {"f", "format"},  {"fmt", "format"}, {"u", "update"},      {"h", "help"},
-        {"-h", "help"},   {"--help", "help"}, {"v", "version"},    {"--version", "version"},
-    };
-    std::string command = argv[1];
-    if (auto alias = aliases.find(command); alias != aliases.end())
-        command = alias->second;
-    // `flywheel SOURCE [arguments]` runs SOURCE and passes every later argument to the program;
-    // `flywheel -s CODE` is `flywheel run -s CODE`.
-    static const std::set<std::string> commands = {
-        "run",  "build",  "check", "desktop", "serve", "export", "debug", "test", "format",
-        "doc",  "update", "help",  "version", "repl",  "lsp",    "selftest", "new", "get",
-        "add",  "install"};
-    std::vector<std::string> implicitArgs;
-    std::vector<char *> implicitArgv;
-    if (!commands.count(command) &&
-        (command == "-s" || command == "--source" || command.rfind("-", 0) != 0 ||
-         command == "-")) {
-        implicitArgs.push_back(argv[0]);
-        implicitArgs.push_back("run");
-        implicitArgs.push_back(argv[1]);
-        if (command == "-s" || command == "--source") {
-            for (int i = 2; i < argc; ++i)
-                implicitArgs.push_back(argv[i]);
-        } else {
-            int i = 2;
-            if (i < argc && std::string(argv[i]) == "--")
-                ++i;
-            implicitArgs.push_back("--");
-            for (; i < argc; ++i)
-                implicitArgs.push_back(argv[i]);
+    static const std::map<char, std::string> shortModes = {
+        {'r', "run"},    {'b', "build"}, {'c', "check"}, {'d', "desktop"}, {'s', "serve"},
+        {'e', "export"}, {'D', "debug"}, {'t', "test"},  {'f', "format"},  {'n', "new"}};
+    // --built is accepted as a spelling of --build.
+    static const std::map<std::string, std::string> longModes = {
+        {"--run", "run"},       {"--build", "build"},     {"--built", "build"},
+        {"--check", "check"},   {"--desktop", "desktop"}, {"--serve", "serve"},
+        {"--export", "export"}, {"--debug", "debug"},     {"--test", "test"},
+        {"--format", "format"}, {"--doc", "doc"},         {"--new", "new"},
+        {"--repl", "repl"},     {"--lsp", "lsp"},         {"--selftest", "selftest"}};
+    Cli cli;
+    fw::Options options;
+    options.compilerPath = self;
+    try {
+        for (int i = 1; i < argc; ++i) {
+            std::string arg = argv[i];
+            auto next = [&](const std::string &flag) -> std::string {
+                if (i + 1 >= argc)
+                    throw std::runtime_error(flag + " expects a value");
+                return argv[++i];
+            };
+            if (arg == "--") {
+                cli.programArguments.assign(argv + i + 1, argv + argc);
+                break;
+            }
+            if (arg.size() < 2 || arg[0] != '-') {
+                cli.positionals.push_back(arg); // includes `-`, standard input
+                continue;
+            }
+            if (arg.rfind("--", 0) == 0) {
+                auto equals = arg.find('=');
+                auto name = arg.substr(0, equals);
+                std::optional<std::string> attached;
+                if (equals != std::string::npos)
+                    attached = arg.substr(equals + 1);
+                auto value = [&] { return attached ? *attached : next(name); };
+                bool plain = !attached;
+                if (auto mode = longModes.find(name); mode != longModes.end() && plain)
+                    cli.modes.insert(mode->second);
+                else if (name == "--update" && plain)
+                    cli.update = true;
+                else if (name == "--version" && plain)
+                    cli.version = true;
+                else if (name == "--help" && plain)
+                    cli.help = true;
+                else if (name == "--game" && plain)
+                    cli.game = true;
+                else if (name == "--race" && plain)
+                    options.race = true;
+                else if (name == "--coverage" && plain)
+                    options.coverage = true;
+                else if (name == "--source")
+                    cli.source = value();
+                else if (name == "--output")
+                    cli.output = value();
+                else if (name == "--emit-ir")
+                    options.ir = value();
+                else if (name == "--return-file")
+                    cli.returnFile = value();
+                else if (name == "--port")
+                    options.servePort = portNumber(value());
+                else if (name == "--host")
+                    options.serveHost = value();
+                else
+                    throw std::runtime_error("unknown option " + arg);
+                continue;
+            }
+            // Short flags: -dvust, -O2g, -o FILE or -oFILE, -x CODE.
+            for (size_t k = 1; k < arg.size(); ++k) {
+                char c = arg[k];
+                auto value = [&] {
+                    auto rest = arg.substr(k + 1);
+                    k = arg.size();
+                    return rest.empty() ? next(std::string("-") + c) : rest;
+                };
+                if (auto mode = shortModes.find(c); mode != shortModes.end())
+                    cli.modes.insert(mode->second);
+                else if (c == 'u')
+                    cli.update = true;
+                else if (c == 'v')
+                    cli.version = true;
+                else if (c == 'h')
+                    cli.help = true;
+                else if (c == 'g')
+                    options.debug = true;
+                else if (c == 'O') {
+                    if (k + 1 >= arg.size() || arg[k + 1] < '0' || arg[k + 1] > '3')
+                        throw std::runtime_error("-O expects a level 0..3 (-O2)");
+                    options.optimization = arg[++k] - '0';
+                } else if (c == 'o')
+                    cli.output = value();
+                else if (c == 'x')
+                    cli.source = value();
+                else
+                    throw std::runtime_error(std::string("unknown option -") + c +
+                                             (arg.size() > 2 ? " in " + arg : ""));
+            }
         }
-        for (auto &arg : implicitArgs)
-            implicitArgv.push_back(arg.data());
-        implicitArgv.push_back(nullptr);
-        argc = static_cast<int>(implicitArgs.size());
-        argv = implicitArgv.data();
-        command = "run";
+    } catch (const std::exception &e) {
+        std::cerr << "flywheel: " << e.what() << " (see flywheel --help)\n";
+        return 2;
     }
-    if (command == "version" && argc == 2) {
-        std::cout << "Flywheel " FW_VERSION ", LLVM " LLVM_VERSION_STRING "\n";
+    bool more =
+        !cli.modes.empty() || !cli.positionals.empty() || cli.source || cli.version || cli.help;
+    // -u: reinstall, then carry on with the rest of the command line in the new compiler.
+    if (cli.update) {
+        auto updated = std::getenv("FLYWHEEL_UPDATED");
+        if (!updated || !*updated) {
+            auto shell = llvm::sys::findProgramByName("sh");
+            if (!shell) {
+                std::cerr << "flywheel: --update needs sh, curl, and bash\n";
+                return 1;
+            }
+            int status =
+                execute(*shell, {"-c", "curl -fsSL https://flywheel.polymorphia.dev/install.sh "
+                                       "| bash"});
+            if (status != 0 || !more)
+                return status;
+            setEnvironment("FLYWHEEL_UPDATED", "1");
+            // The installed binary may have just been replaced; run whichever is there now.
+            return execute(self, std::vector<std::string>(argv + 1, argv + argc));
+        }
+    }
+    if (cli.version)
+        std::cout << "Flywheel " FW_VERSION ", LLVM " LLVM_VERSION_STRING "\n" << std::flush;
+    if (cli.help)
+        std::cout << usage << std::flush;
+    if ((cli.version || cli.help || cli.update) && cli.modes.empty() && cli.positionals.empty() &&
+        !cli.source)
         return 0;
-    }
-    if (command == "help" && argc == 2) {
-        std::cout << usage;
-        return 0;
-    }
-    if (command == "selftest") {
+    bool test = cli.modes.erase("test") > 0;
+    // -f -c: check formatting rather than type-check.
+    if (cli.modes.count("format") && cli.modes.erase("check"))
+        cli.formatCheck = true;
+    std::string mode = "run";
+    if (cli.modes == std::set<std::string>{"desktop", "serve"})
+        mode = "desktop+serve";
+    else if (cli.modes.size() > 1) {
+        std::string names;
+        for (auto &m : cli.modes)
+            names += (names.empty() ? "--" : " and --") + m;
+        std::cerr << "flywheel: " << names << " cannot be combined\n";
+        return 2;
+    } else if (cli.modes.size() == 1)
+        mode = *cli.modes.begin();
+    if (mode == "selftest") {
         auto python = llvm::sys::findProgramByName("python3");
         if (!python)
             python = llvm::sys::findProgramByName("python");
@@ -744,25 +913,14 @@ int main(int argc, char **argv) {
             std::cerr << "Python 3 is required for the development test harness\n";
             return 1;
         }
-        return execute(*python, {std::string(FW_TEST_DIR) + "/test_compiler.py",
-                                 fs::absolute(argv[0]).string()});
+        return execute(*python, {std::string(FW_TEST_DIR) + "/test_compiler.py", self});
     }
-    if (command == "lsp")
+    if (mode == "lsp")
         return fw::languageServer();
-    if (command == "update") {
-        // curl -fsSL https://flywheel.polymorphia.dev/install.sh [arguments] | bash
-        auto shell = llvm::sys::findProgramByName("sh");
-        if (!shell) {
-            std::cerr << "flywheel: update needs sh, curl, and bash\n";
-            return 1;
-        }
-        std::vector<std::string> args = {
-            "-c", "curl -fsSL https://flywheel.polymorphia.dev/install.sh \"$@\" | bash", "sh"};
-        args.insert(args.end(), argv + 2, argv + argc);
-        return execute(*shell, args);
-    }
-    if (command == "new") {
-        // `flywheel new NAME` and `flywheel new game NAME` create a project through Pulley.
+    if (mode == "repl")
+        return repl(argv[0]);
+    if (mode == "new") {
+        // `flywheel --new NAME` and `flywheel --new --game NAME` create a project through Pulley.
         auto pulley = llvm::sys::findProgramByName("pulley");
         if (!pulley)
             pulley = llvm::sys::findProgramByName("ppm");
@@ -771,141 +929,83 @@ int main(int argc, char **argv) {
                          "(see https://flywheel.polymorphia.dev)\n";
             return 2;
         }
-        std::vector<std::string> args = {"new"};
-        int first = 2;
-        bool game = argc > 3 && std::string(argv[2]) == "game";
-        if (game)
-            first = 3;
-        args.insert(args.end(), argv + first, argv + argc);
-        if (game)
-            args.push_back("--game");
-        if (args.size() == 1) {
-            std::cerr << "usage: flywheel new [game] NAME\n";
+        auto names = cli.positionals;
+        if (!names.empty() && names.front() == "game" && names.size() > 1) {
+            names.erase(names.begin());
+            cli.game = true;
+        }
+        if (names.empty()) {
+            std::cerr << "usage: flywheel --new [--game] NAME\n";
             return 2;
         }
+        std::vector<std::string> args = {"new"};
+        args.insert(args.end(), names.begin(), names.end());
+        if (cli.game)
+            args.push_back("--game");
         return execute(*pulley, args);
     }
-    if (command == "get" || command == "add" || command == "install") {
-        std::cerr << "flywheel: packages are managed by Pulley: use `pulley " << command
-                  << "` (or `ppm " << command << "`)\n";
-        return 2;
+    if (mode == "doc") {
+        auto args = cli.positionals;
+        if (!cli.output.empty())
+            args.insert(args.end(), {"-o", cli.output});
+        return fw::docCommand(args);
     }
-    if (command == "doc")
-        return fw::docCommand(std::vector<std::string>(argv + 2, argv + argc));
-    if (command == "repl")
-        return repl(argv[0]);
-    if (command == "format") {
-        bool check = false;
-        std::vector<std::string> files;
-        for (int i = 2; i < argc; ++i) {
-            std::string arg = argv[i];
-            if (arg == "--check")
-                check = true;
-            else
-                files.push_back(arg);
-        }
-        if (files.empty()) {
-            std::cerr << usage;
+    if (mode == "format") {
+        if (cli.positionals.empty()) {
+            std::cerr << "usage: flywheel --format [--check] files...\n";
             return 2;
         }
-        int status = 0;
-        for (auto &file : files) {
-            std::ifstream input(file, std::ios::binary);
-            if (!input) {
-                std::cerr << "flywheel: cannot read " << file << '\n';
-                status = 1;
-                continue;
-            }
-            std::ostringstream text;
-            text << input.rdbuf();
-            try {
-                auto formatted = fw::format(text.str());
-                if (formatted == text.str())
-                    continue;
-                if (check) {
-                    std::cout << file << " needs formatting\n";
-                    status = 1;
-                } else {
-                    std::ofstream out(file, std::ios::binary);
-                    out << formatted;
-                }
-            } catch (const fw::Error &e) {
-                reportError(e, file);
-                status = 1;
-            }
-        }
-        return status;
+        return formatFiles(cli.positionals, cli.formatCheck);
     }
-    if (command != "build" && command != "run" && command != "check" && command != "test" &&
-        command != "desktop" && command != "serve" && command != "export" && command != "debug") {
-        std::cerr << (command.rfind("-", 0) == 0 ? usage : "unknown command: " + command + "\n");
+    // The commands became flags; say so rather than failing to find a file named `build`.
+    static const std::set<std::string> oldCommands = {
+        "run", "build",  "check", "desktop", "serve", "export", "debug",    "test", "format", "fmt",
+        "doc", "update", "help",  "version", "repl",  "lsp",    "selftest", "new",  "r",      "b",
+        "c",   "d",      "s",     "e",       "db",    "t",      "f",        "u",    "h",      "v"};
+    if (!cli.source && !cli.positionals.empty()) {
+        auto first = cli.positionals.front();
+        std::error_code ec;
+        if ((first == "get" || first == "add" || first == "install") && !fs::exists(first, ec)) {
+            std::cerr << "flywheel: packages are managed by Pulley: use `pulley " << first
+                      << "` (or `ppm " << first << "`)\n";
+            return 2;
+        }
+    }
+    if (!cli.source && !cli.positionals.empty() && oldCommands.count(cli.positionals.front())) {
+        std::error_code ec;
+        if (!fs::exists(cli.positionals.front(), ec)) {
+            static const std::map<std::string, std::string> renamed = {
+                {"r", "run"},    {"b", "build"},    {"c", "check"},  {"d", "desktop"},
+                {"s", "serve"},  {"e", "export"},   {"db", "debug"}, {"t", "test"},
+                {"f", "format"}, {"fmt", "format"}, {"u", "update"}, {"h", "help"},
+                {"v", "version"}};
+            auto name = cli.positionals.front();
+            if (auto it = renamed.find(name); it != renamed.end())
+                name = it->second;
+            std::cerr << "flywheel: commands are flags now: use `flywheel --" << name
+                      << "` (see flywheel --help)\n";
+            return 2;
+        }
+    }
+    if (mode == "run" && test && !cli.source)
+        return runTests(cli.positionals, options, argv[0]);
+    if (!test && options.coverage) {
+        std::cerr << "flywheel: --coverage needs --test\n";
         return 2;
     }
-    std::string filename, output, returnFile;
-    std::optional<std::string> source; // --source code
-    std::vector<std::string> programArguments, testPaths; // after `--`: arguments for run
-    std::vector<std::string> positionals;
-    fw::Options options;
-    options.compilerPath = llvm::sys::fs::getMainExecutable(argv[0], &anchor);
+    const std::string &command = mode;
+    std::string filename, output = cli.output;
+    auto &source = cli.source;
+    auto programArguments = cli.programArguments;
     try {
-        for (int i = 2; i < argc; ++i) {
-            std::string arg = argv[i];
-            if (arg == "--") {
-                programArguments.assign(argv + i + 1, argv + argc);
-                break;
-            }
-            if ((arg == "-s" || arg == "--source") && i + 1 < argc && command != "test") {
-                source = argv[++i];
-                continue;
-            }
-            if (arg.rfind("--source=", 0) == 0 && command != "test") {
-                source = arg.substr(9);
-                continue;
-            }
-            if (arg == "--return-file" && i + 1 < argc && command != "test") {
-                returnFile = argv[++i];
-                continue;
-            }
-            if (arg.size() == 3 && arg.substr(0, 2) == "-O" && arg[2] >= '0' && arg[2] <= '3')
-                options.optimization = arg[2] - '0';
-            else if (arg == "-g")
-                options.debug = true;
-            else if (arg == "--coverage" && command == "test")
-                options.coverage = true;
-            else if (arg == "--race")
-                options.race = true;
-            else if ((arg == "--port" || arg == "--host") && command == "serve" && i + 1 < argc) {
-                std::string value = argv[++i];
-                if (arg == "--host")
-                    options.serveHost = value;
-                else if (value.empty() ||
-                         value.find_first_not_of("0123456789") != std::string::npos ||
-                         value.size() > 5 || std::stoi(value) > 65535)
-                    throw std::runtime_error("--port expects a number in 0..65535");
-                else
-                    options.servePort = std::stoi(value);
-            } else if ((arg == "-o" || arg == "--emit-ir") && i + 1 < argc) {
-                if (arg == "-o")
-                    output = argv[++i];
-                else
-                    options.ir = argv[++i];
-            } else if (!arg.empty() && arg[0] != '-') {
-                if (command == "test")
-                    testPaths.push_back(arg);
-                else
-                    positionals.push_back(arg);
-            } else
-                throw std::runtime_error("unknown or incomplete option: " + arg);
-        }
-        if (command == "test")
-            return runTests(testPaths, options, argv[0]);
-        // Positionals: the source file (unless --source), then for export the output file, then
-        // (export only) program arguments.
+        // Positionals: the source file (unless --source), then for export the output file if
+        // -o was not given, then program arguments.
+        auto &positionals = cli.positionals;
         size_t next = 0;
         if (!source && next < positionals.size())
             filename = positionals[next++];
         // A directory stands for its entry point: `flywheel app/` runs app/source.fw.
-        if (!source && filename != "-") {
+        if (!source && !filename.empty() && filename != "-") {
             std::error_code ec;
             if (fs::is_directory(filename, ec)) {
                 auto entry = fs::path(filename) / "source.fw";
@@ -914,7 +1014,7 @@ int main(int argc, char **argv) {
                               << " is a directory without a source.fw entry point\n";
                     return 2;
                 }
-                // `flywheel build app` writes app/app (named after the directory, not `source`).
+                // `flywheel --build app` writes app/app (named after the directory).
                 if (command == "build" && output.empty()) {
                     auto dir = fs::absolute(filename).lexically_normal();
                     if (dir.filename().empty())
@@ -931,9 +1031,8 @@ int main(int argc, char **argv) {
         if (command == "export" && output.empty() && next < positionals.size())
             output = positionals[next++];
         if (next < positionals.size()) {
-            if (command != "export")
-                throw std::runtime_error("unexpected argument: " + positionals[next] +
-                                         " (pass program arguments after --)");
+            if (command == "build" || command == "check")
+                throw std::runtime_error("unexpected argument: " + positionals[next]);
             programArguments.insert(programArguments.begin(), positionals.begin() + next,
                                     positionals.end());
         }
@@ -948,18 +1047,22 @@ int main(int argc, char **argv) {
             overlay[sourceFile()] = *source;
         }
         auto load = [&] {
-            return source ? fw::loadProgram(filename, overlay) : fw::loadProgram(filename);
+            auto program = source ? fw::loadProgram(filename, overlay) : fw::loadProgram(filename);
+            if (test)
+                addTestRunner(program);
+            return program;
         };
         if (source && command == "build" && output.empty())
             output = "program";
+        bool page = command == "desktop" || command == "serve" || command == "desktop+serve";
         // export and debug run the program and capture its top-level return value; so do run,
         // desktop, and serve with --return-file (the flywheel module uses it).
-        bool captures = command == "export" || command == "debug" || !returnFile.empty();
+        bool captures = command == "export" || command == "debug" || !cli.returnFile.empty();
         if (captures && command != "build" && command != "check") {
-            if (command != "desktop" && command != "serve")
+            if (!page)
                 options.entry = "value";
             std::optional<Temp> temp;
-            fs::path record = returnFile;
+            fs::path record = cli.returnFile;
             if (record.empty()) {
                 temp.emplace();
                 record = temp->path / "return.txt";

@@ -18,7 +18,7 @@ ctest --test-dir build --output-on-failure
 | | Linux | macOS | Windows |
 |---|---|---|---|
 | Build | CMake 3.24+, C++20 compiler, LLVM 21–23 dev libraries | Same, with the Xcode Command Line Tools and LLVM from Homebrew (`-DLLVM_DIR="$(brew --prefix llvm)/lib/cmake/llvm"`) | Same, from an x64 Visual Studio developer shell with an MSVC build of LLVM |
-| `flywheel build` | System linker and C++ runtime (mold/lld used if found); `flywheel run` needs none | System linker (Xcode Command Line Tools) | MSVC linker |
+| `flywheel --build` | System linker and C++ runtime (mold/lld used if found); running a program needs none | System linker (Xcode Command Line Tools) | MSVC linker |
 | Desktop windows (optional) | GTK + WebKitGTK dev packages, e.g. `libgtk-3-dev libwebkit2gtk-4.1-dev` | Downloaded at build time; uses the system WKWebView | Downloaded at build time; users need the WebView2 runtime |
 
 SQLite 3.54.1 and Mbed TLS 4.1.1 (HTTPS) are compiled into the runtime, so programs need no system SQLite or OpenSSL. Configuring downloads them once from pinned, hash-checked releases; for an offline build, set `FETCHCONTENT_SOURCE_DIR_SQLITE` and `FETCHCONTENT_SOURCE_DIR_MBEDTLS` to extracted copies. The HTTPS client trusts the system's root certificates (the Windows store, `/etc/ssl/cert.pem` on macOS, or the distribution's CA bundle on Linux). Python 3 is optional and only runs the test suite. See [desktop windows](docs/desktop.md) for backend options.
@@ -26,27 +26,27 @@ SQLite 3.54.1 and Mbed TLS 4.1.1 (HTTPS) are compiled into the runtime, so progr
 ## Use
 
 ```sh
-build/flywheel run examples/hello.fly
-build/flywheel examples/hello.fly            # the same: `flywheel SOURCE [arguments]` runs it (also `fw SOURCE`; a directory runs its source.fw)
-build/flywheel run app.fw -- arguments for the program
-build/flywheel build examples/core.fly -O3 -o core
-build/flywheel check examples/demo.fly --emit-ir demo.ll
-build/flywheel desktop my_app.fw           # show the element the file returns in a window
-build/flywheel serve my_app.fw --port 8080 # serve it at http://127.0.0.1:8080/
-build/flywheel export report.fw report.html # write the value the file returns
-build/flywheel debug app.fw                # print the returned value and run time
-build/flywheel run -s 'print 6 * 7'        # run code given on the command line
-build/flywheel run https://example.com/hello.fw  # or ssh://, sftp://, file://, ...
-build/flywheel build -g app.fw -o app      # DWARF lines and locals for gdb/lldb
-build/flywheel run --race app.fw           # stop on data races between threads
-build/flywheel test --coverage             # run test_*.fw / *_test.fw files, report lines
-build/flywheel format --check src/*.fw        # indentation formatter
-build/flywheel doc lib.fw -o lib.html      # HTML from documentation comments
-build/flywheel repl                        # interactive session
-build/flywheel lsp                         # language server for editors
+build/flywheel examples/hello.fly            # compile and run (also `fw SOURCE`; a directory runs its source.fw)
+build/flywheel app.fw arguments -- --more    # program arguments; those starting with - go after --
+build/flywheel --build examples/core.fly -O3 -o core
+build/flywheel --check examples/demo.fly --emit-ir demo.ll
+build/flywheel --desktop my_app.fw           # show the element the file returns in a window
+build/flywheel --serve my_app.fw --port 8080 # serve it at http://127.0.0.1:8080/
+build/flywheel --export report.fw report.html # write the value the file returns
+build/flywheel --debug app.fw                # print the returned value and run time
+build/flywheel -x 'print 6 * 7'              # run code given on the command line
+build/flywheel https://example.com/hello.fw  # or ssh://, sftp://, file://, ...
+build/flywheel --build -g app.fw -o app      # DWARF lines and locals for gdb/lldb
+build/flywheel --race app.fw                 # stop on data races between threads
+build/flywheel --test --coverage             # run test_*.fw / *_test.fw files, report lines
+build/flywheel --format --check src/*.fw     # indentation formatter
+build/flywheel --doc lib.fw -o lib.html      # HTML from documentation comments
+build/flywheel --repl                        # interactive session
+build/flywheel --lsp                         # language server for editors
+build/flywheel main.fw -dvust                # update, print the version, then test, show, and serve main.fw
 ```
 
-`run` compiles and executes the program, returning its exit status; a top-level `return 3` ends the program with status 3. `desktop` and `serve` run a program whose top level returns an element or fragment, and show it in a native window or serve it over HTTP ([details](docs/tooling.md#pages-desktop-and-serve)). `export` writes the value a program returns at top level (any value: text, markup, or JSON) to a file, and `debug` prints it with the run time. Source files can be URLs (`https`, `http`, `ftp`, `ftps`, `sftp`, `ssh`, `scp`, `file`), and `-s CODE` runs code instead of a file. `check` runs the front end and verifies generated LLVM IR without linking. Optimization levels `-O0` through `-O3` are accepted. `flywheel selftest` runs the compiler's own regression suite. See [tooling](docs/tooling.md).
+Every command is a flag, and short flags combine (`-dvust` is `-d -v -u -s -t`). Running compiles and executes the program, returning its exit status; a top-level `return 3` ends the program with status 3. `--desktop` and `--serve` (alone or together) run a program whose top level returns an element or fragment, and show it in a native window or serve it over HTTP ([details](docs/tooling.md#pages-desktop-and-serve)). `--export` writes the value a program returns at top level (any value: text, markup, or JSON) to a file, and `--debug` prints it with the run time. Source files can be URLs (`https`, `http`, `ftp`, `ftps`, `sftp`, `ssh`, `scp`, `file`), and `-x CODE` runs code instead of a file. `--check` runs the front end and verifies generated LLVM IR without linking. Optimization levels `-O0` through `-O3` are accepted. `flywheel --selftest` runs the compiler's own regression suite. See [tooling](docs/tooling.md).
 
 ## A tour
 
@@ -202,7 +202,7 @@ end
 ap.close()
 ```
 
-Game math is built in: `import vecmath.*` gives `Vec2`, `Vec3`, `Vec4`, `Mat4`, and `Quat` structs with operators, which Aperture shares. Arrays of structs and numbers are stored as one contiguous block, so updating tens of thousands of particles a frame allocates nothing, and C libraries take those arrays, structs by value, and Flywheel functions as callbacks directly (see [native imports](docs/modules.md#structs-arrays-and-callbacks)). `flywheel new game NAME` starts a game project.
+Game math is built in: `import vecmath.*` gives `Vec2`, `Vec3`, `Vec4`, `Mat4`, and `Quat` structs with operators, which Aperture shares. Arrays of structs and numbers are stored as one contiguous block, so updating tens of thousands of particles a frame allocates nothing, and C libraries take those arrays, structs by value, and Flywheel functions as callbacks directly (see [native imports](docs/modules.md#structs-arrays-and-callbacks)). `flywheel --new --game NAME` starts a game project.
 
 For animated pages rather than games, desktop windows call `window.on_frame(function(double elapsed) ...)` once per display frame and change the page in place; see [desktop windows](docs/desktop.md#animation).
 
@@ -228,11 +228,11 @@ An optional local install is supported:
 
 ```sh
 cmake --install build --prefix "$PWD/install"
-install/bin/flywheel run examples/hello.fly
+install/bin/flywheel examples/hello.fly
 ```
 
 The installed compiler locates its runtime archive in `../lib`; the C++ linker toolchain and LLVM shared libraries must remain available.
 
 ## VS Code
 
-The [Flywheel VS Code extension](https://github.com/pmorphia/vscode-flywheel) supplies syntax highlighting and snippets for `.fw` / `.fly` files, and starts `flywheel lsp` for diagnostics, hover, go to definition, references, rename, completion, document symbols, and formatting (set `flywheel.path` if the compiler is not on `PATH`). Other editors can use `flywheel lsp` through a generic LSP client.
+The [Flywheel VS Code extension](https://github.com/pmorphia/vscode-flywheel) supplies syntax highlighting and snippets for `.fw` / `.fly` files, and starts `flywheel --lsp` for diagnostics, hover, go to definition, references, rename, completion, document symbols, and formatting (set `flywheel.path` if the compiler is not on `PATH`). Other editors can use `flywheel --lsp` through a generic LSP client.

@@ -43,8 +43,8 @@ else()
   target_link_libraries(flywheel PRIVATE ${FLYWHEEL_LLVM_LIBS})
 endif()
 file(TO_CMAKE_PATH "${CMAKE_CXX_COMPILER}" FW_CXX_PATH)
-# `flywheel build` links through FW_CXX; mold and lld link programs several times faster than GNU ld.
-set(FLYWHEEL_LINKER "auto" CACHE STRING "Linker for flywheel build: auto, mold, lld, or default")
+# `flywheel --build` links through FW_CXX; mold and lld link programs several times faster than GNU ld.
+set(FLYWHEEL_LINKER "auto" CACHE STRING "Linker for flywheel --build: auto, mold, lld, or default")
 set(FW_LINKER_FLAG "")
 if(NOT MSVC AND NOT FLYWHEEL_LINKER STREQUAL "default")
   include(CheckLinkerFlag)
@@ -63,10 +63,10 @@ if(NOT MSVC AND NOT FLYWHEEL_LINKER STREQUAL "default")
     message(FATAL_ERROR "FLYWHEEL_LINKER=${FLYWHEEL_LINKER} is not supported by ${CMAKE_CXX_COMPILER}")
   endif()
 endif()
-message(STATUS "flywheel build links with: ${FW_CXX_PATH} ${FW_LINKER_FLAG}")
+message(STATUS "flywheel --build links with: ${FW_CXX_PATH} ${FW_LINKER_FLAG}")
 target_compile_definitions(flywheel PRIVATE FW_VERSION="${FLYWHEEL_VERSION}" FW_CXX="${FW_CXX_PATH}" FW_LINKER_FLAG="${FW_LINKER_FLAG}" FW_RUNTIME="$<TARGET_FILE:flywheel_runtime>" FW_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests")
 add_dependencies(flywheel flywheel_runtime)
-# `flywheel run` JIT-loads the program and resolves runtime calls against a copy of the runtime
+# Running (`flywheel app.fw`) JIT-loads the program and resolves runtime calls against a copy of the runtime
 # linked into the compiler. Other platforms link a temporary executable instead.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME MATCHES "BSD")
   target_link_libraries(flywheel PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,flywheel_runtime>")

@@ -300,9 +300,15 @@ void refreshWindows(DesktopSession &session) {
         }
     }
 }
+// Set while `flywheel --desktop --serve` also serves the page from another thread: whichever
+// thread runs program code (a window callback or an HTTP request) holds it.
+std::mutex *desktopGate = nullptr;
 int desktopCall(void *context, int index, const char *name, const char *arguments, char **result) {
     auto &session = *static_cast<DesktopSession *>(context);
     *result = nullptr;
+    std::unique_lock<std::mutex> gated;
+    if (desktopGate)
+        gated = std::unique_lock<std::mutex>(*desktopGate);
     try {
         auto &state = *session.windows.at(static_cast<size_t>(index))->desktop;
         auto json = JsonParser(arguments).parse();
@@ -452,7 +458,12 @@ void runWindows(const std::vector<Object *> &windows, const char *backendPath) {
     std::cout.flush();
     std::cerr.flush();
     char error[2048]{};
+    // The event loop itself runs ungated; desktopCall takes the gate around each callback.
+    if (desktopGate)
+        desktopGate->unlock();
     int status = run(specs.data(), static_cast<int>(specs.size()), &host, error, sizeof(error));
+    if (desktopGate)
+        desktopGate->lock();
     if (session.failed) {
         if (!pendingError.value)
             fail("desktop callback failed", "DesktopError");
@@ -541,7 +552,7 @@ extern "C" void fw_desktop_quit() {
 extern "C" void fw_desktop_run(Object *window, const char *backendPath) {
     nativeBoundary([&] { runWindows({window}, backendPath); });
 }
-// flywheel desktop: shows the markup a program returned at top level in a window titled by
+// flywheel --desktop: shows the markup a program returned at top level in a window titled by
 // its <title> element.
 extern "C" void fw_desktop_page(Frame *frame, Object *tree, const char *backendPath) {
     nativeBoundary([&] {

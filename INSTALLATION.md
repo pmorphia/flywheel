@@ -28,7 +28,7 @@ curl -fsSL https://flywheel.polymorphia.dev/install.sh | bash -s -- --dry-run
 curl -fsSL https://flywheel.polymorphia.dev/install.sh | bash -s -- --help
 ```
 
-Optional: for desktop windows (`flywheel desktop` and the `desktop` module), install GTK and WebKitGTK before running the installer:
+Optional: for desktop windows (`flywheel --desktop` and the `desktop` module), install GTK and WebKitGTK before running the installer:
 
 | Distribution  |               Packages               |
 |---------------|--------------------------------------|
@@ -56,7 +56,7 @@ To pass options, run it as a scriptblock:
 & ([scriptblock]::Create((irm https://flywheel.polymorphia.dev/install.ps1))) -Help
 ```
 
-The script also adds `flywheel-shell`, which opens a prompt with the Visual Studio environment that `flywheel run` and `flywheel build` need. Run Flywheel programs from there.
+The script also adds `flywheel-shell`, which opens a prompt with the Visual Studio environment that `flywheel` and `flywheel --build` need. Run Flywheel programs from there.
 
 ## macOS
 
@@ -87,6 +87,6 @@ On Windows, run the script with `-Help` to see its uninstall option.
 | Problem | Fix |
 |---|---|
 | `flywheel: command not found` | Open a new terminal so the updated `PATH` takes effect |
-| `flywheel build` cannot find a linker (Windows) | Run it from `flywheel-shell` |
+| `flywheel --build` cannot find a linker (Windows) | Run it from `flywheel-shell` |
 | HTTPS requests fail with "no trusted root certificates" | Install your distribution's `ca-certificates` package, or set `SSL_CERT_FILE` to a CA bundle |
 | `DesktopError` when opening a window | Install the GTK/WebKitGTK packages (Linux) or the WebView2 runtime (Windows), then run the installer again |

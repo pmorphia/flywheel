@@ -300,7 +300,7 @@ Class clone(const Class &c);
 struct Options {
     int optimization = 0;
     bool debug = false; // emit DWARF line tables
-    bool coverage = false; // count executions of each source line (flywheel test --coverage)
+    bool coverage = false; // count executions of each source line (flywheel --test --coverage)
     bool race = false;     // detect data races at run time (--race)
     std::string ir, object, desktopBackend;
     // What a top-level `return` of an element or fragment does: "desktop" shows it in a window,
@@ -337,6 +337,6 @@ std::vector<std::string> moduleDirectories(const std::string &sourceFile);
 std::map<std::string, std::string> packageRoots(const std::string &sourceFile);
 // The main module file of a package: `main` in its pulley.toml, else <name>.fw, main.fw, lib.fw.
 std::string packageMain(const std::string &directory, const std::string &name);
-// `flywheel doc`: renders documentation comments of a module (and its imports) to HTML.
+// `flywheel --doc`: renders documentation comments of a module (and its imports) to HTML.
 int docCommand(const std::vector<std::string> &args);
 } // namespace fw

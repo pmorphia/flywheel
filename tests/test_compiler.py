@@ -3327,7 +3327,7 @@ class CompilerTests(unittest.TestCase):
                 with self.subTest(name=name, optimization=opt):
                     self.source.write_text(source, encoding="utf-8")
                     exe = self.root / ("program.exe" if os.name == "nt" else "program")
-                    result = self.command("build", self.source, opt, "-o", exe)
+                    result = self.command("--build", self.source, opt, "-o", exe)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     # Executing independently confirms there is no source interpreter dependency.
                     result = subprocess.run(
@@ -3348,7 +3348,7 @@ class CompilerTests(unittest.TestCase):
                 with self.subTest(name=name, optimization=opt):
                     self.source.write_text(source, encoding="utf-8")
                     exe = self.root / ("input.exe" if os.name == "nt" else "input")
-                    result = self.command("build", self.source, opt, "-o", exe)
+                    result = self.command("--build", self.source, opt, "-o", exe)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     result = subprocess.run(
                         [str(exe)],
@@ -3368,7 +3368,7 @@ class CompilerTests(unittest.TestCase):
 
         self.source.write_text('print input("Name: ")', encoding="utf-8")
         exe = self.root / ("prompt.exe" if os.name == "nt" else "prompt")
-        result = self.command("build", self.source, "-O3", "-o", exe)
+        result = self.command("--build", self.source, "-O3", "-o", exe)
         self.assertEqual(result.returncode, 0, result.stderr)
         process = subprocess.Popen(
             [str(exe)],
@@ -3406,7 +3406,7 @@ class CompilerTests(unittest.TestCase):
         for opt in ("-O0", "-O3"):
             with self.subTest(optimization=opt):
                 exe = self.root / ("process.exe" if os.name == "nt" else "process")
-                result = self.command("build", self.source, opt, "-o", exe)
+                result = self.command("--build", self.source, opt, "-o", exe)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 result = subprocess.run(
                     [str(exe)],
@@ -3430,14 +3430,14 @@ class CompilerTests(unittest.TestCase):
             'import os\nprint os.command(["/bin/sh", "-c", "kill -TERM $$"])',
             encoding="utf-8",
         )
-        result = self.command("run", self.source, "-O3")
+        result = self.command("--run", self.source, "-O3")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "-15\n")
 
     def test_desktop_failure_cleanup(self):
         self.source.write_text(DESKTOP_FAILURE, encoding="utf-8")
         exe = self.root / ("desktop.exe" if os.name == "nt" else "desktop")
-        result = self.command("build", self.source, "-O3", "-o", exe)
+        result = self.command("--build", self.source, "-O3", "-o", exe)
         self.assertEqual(result.returncode, 0, result.stderr)
         result = subprocess.run(
             [str(exe)],
@@ -3458,7 +3458,7 @@ class CompilerTests(unittest.TestCase):
         for name, (source, message) in NEGATIVE.items():
             with self.subTest(name=name):
                 self.source.write_text(source, encoding="utf-8")
-                result = self.command("check", self.source)
+                result = self.command("--check", self.source)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(message, result.stderr)
                 self.assertIn(": error:", result.stderr)
@@ -3474,7 +3474,7 @@ class CompilerTests(unittest.TestCase):
                         target = directory / path
                         target.parent.mkdir(parents=True, exist_ok=True)
                         target.write_text(content, encoding="utf-8")
-                    result = self.command("run", directory / "main.fw", opt)
+                    result = self.command("--run", directory / "main.fw", opt)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(result.stdout, expected)
 
@@ -3487,7 +3487,7 @@ class CompilerTests(unittest.TestCase):
                     target = directory / path
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(content, encoding="utf-8")
-                result = self.command("check", directory / "main.fw")
+                result = self.command("--check", directory / "main.fw")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(expected, result.stderr)
 
@@ -3497,14 +3497,14 @@ class CompilerTests(unittest.TestCase):
             'class User\nstring name\nend\nvar user=User("Danny")\nprint user.name',
             encoding="utf-8",
         )
-        result = self.command("check", self.source, "--emit-ir", ir)
+        result = self.command("--check", self.source, "--emit-ir", ir)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("@fw_keep(", ir.read_text())
         self.source.write_text(
             'string text="before"\nfunction replace() returns string\ntext="after"\nreturn "!"\nend\nprint text+replace()',
             encoding="utf-8",
         )
-        result = self.command("check", self.source, "--emit-ir", ir)
+        result = self.command("--check", self.source, "--emit-ir", ir)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("@fw_keep(", ir.read_text())
 
@@ -3516,7 +3516,7 @@ class CompilerTests(unittest.TestCase):
         ]:
             with self.subTest(source=source):
                 self.source.write_text(source, encoding="utf-8")
-                result = self.command("check", self.source)
+                result = self.command("--check", self.source)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(
                     f"expected end of statement, got '{unexpected}'", result.stderr
@@ -3525,7 +3525,7 @@ class CompilerTests(unittest.TestCase):
         self.source.write_text(
             "ii function page() returns element\nend", encoding="utf-8"
         )
-        result = self.command("check", self.source)
+        result = self.command("--check", self.source)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unknown or unimplemented callable 'ii'", result.stderr)
         self.assertNotIn("nested calls", result.stderr)
@@ -3537,7 +3537,7 @@ class CompilerTests(unittest.TestCase):
             "    print 4\nend\n",
             encoding="utf-8",
         )
-        result = self.command("run", self.source)
+        result = self.command("--run", self.source)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "3\n")
         self.assertIn('warning: catch "EmptyKye" never matches', result.stderr)
@@ -3549,7 +3549,7 @@ class CompilerTests(unittest.TestCase):
             'var n = "A"\ntry\n    throw n with "x"\ncatch "B" e\n    print 1\ncatch e\n    print 2\nend\n',
             encoding="utf-8",
         )
-        result = self.command("run", self.source)
+        result = self.command("--run", self.source)
         self.assertEqual(result.stdout, "2\n")
         self.assertNotIn("warning:", result.stderr)
 
@@ -3558,7 +3558,7 @@ class CompilerTests(unittest.TestCase):
             for opt in ("-O0", "-O3"):
                 with self.subTest(name=name, optimization=opt):
                     self.source.write_text(source, encoding="utf-8")
-                    result = self.command("run", self.source, opt)
+                    result = self.command("--run", self.source, opt)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(message, result.stderr)
 
@@ -3576,7 +3576,7 @@ class CompilerTests(unittest.TestCase):
             encoding="utf-8",
         )
         exe = self.root / ("server.exe" if os.name == "nt" else "server")
-        result = self.command("build", self.source, "-O3", "-o", exe)
+        result = self.command("--build", self.source, "-O3", "-o", exe)
         self.assertEqual(result.returncode, 0, result.stderr)
         process = subprocess.Popen(
             [str(exe)], cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE
@@ -3624,7 +3624,7 @@ class CompilerTests(unittest.TestCase):
 
         self.source.write_text(source, encoding="utf-8")
         exe = self.root / ("url-server.exe" if os.name == "nt" else "url-server")
-        result = self.command("build", self.source, opt, "-o", exe)
+        result = self.command("--build", self.source, opt, "-o", exe)
         self.assertEqual(result.returncode, 0, result.stderr)
         process = subprocess.Popen(
             [str(exe)],
@@ -3737,7 +3737,7 @@ print web.route("POST", "/echo", echo, 0, "::1")
             )
             env = dict(os.environ, SSL_CERT_FILE=str(self.root / "cert.pem"))
             result = subprocess.run(
-                [COMPILER, "run", str(client)], cwd=self.root, env=env,
+                [COMPILER, "--run", str(client)], cwd=self.root, env=env,
                 capture_output=True, text=True, encoding="utf-8", timeout=30,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -3758,13 +3758,13 @@ print web.route("POST", "/echo", echo, 0, "::1")
             "function test_good() returns void\n    testing.assert(true)\nend\n",
             encoding="utf-8",
         )
-        result = self.command("test", tests)
+        result = self.command("--test", tests)
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("  ok   test_add", result.stdout)
         self.assertIn("  FAIL test_bad: assertion failed: product: expected 5, got 4", result.stdout)
         self.assertIn("  ok   test_good", result.stdout)
         self.assertIn("2 test file(s), 1 failed", result.stdout)
-        self.assertEqual(self.command("test", tests / "test_ok.fw").returncode, 0)
+        self.assertEqual(self.command("--test", tests / "test_ok.fw").returncode, 0)
 
         messy = self.root / "messy.fw"
         messy.write_text(
@@ -3778,18 +3778,18 @@ print web.route("POST", "/echo", echo, 0, "::1")
             "function main\n    var xs = [1,\n        2]\n    if true do\n        print xs\n    else do\n        print 0\n    end\n"
             "    xs.each(function(int x)\n        print x\n    end)\n    var s = \"a  \n   b\"\nend\n"
         )
-        self.assertEqual(self.command("format", "--check", messy).returncode, 1)
-        self.assertEqual(self.command("format", messy).returncode, 0)
+        self.assertEqual(self.command("--format", "--check", messy).returncode, 1)
+        self.assertEqual(self.command("--format", messy).returncode, 0)
         self.assertEqual(messy.read_text(encoding="utf-8"), expected)
-        self.assertEqual(self.command("fmt", "--check", messy).returncode, 0)
-        self.assertEqual(self.command("f", "--check", messy).returncode, 0)
+        self.assertEqual(self.command("--format", "--check", messy).returncode, 0)
+        self.assertEqual(self.command("--format", "--check", messy).returncode, 0)
         # `run` bodies open no block; an `if ... run` chain continues with `else ... run`.
         messy.write_text(
             "if true do\nif a run f()\n# note\nelse if b run g()\nelse run h()\n"
             "for i in xs run f(i)\nwhile c run g()\nwhen d run h()\nf()\nend\n",
             encoding="utf-8",
         )
-        self.assertEqual(self.command("fmt", messy).returncode, 0)
+        self.assertEqual(self.command("--format", messy).returncode, 0)
         self.assertEqual(
             messy.read_text(encoding="utf-8"),
             "if true do\n    if a run f()\n    # note\n    else if b run g()\n    else run h()\n"
@@ -3797,28 +3797,47 @@ print web.route("POST", "/echo", echo, 0, "::1")
         )
         # A line opening with a delimiter is not a continuation line.
         messy.write_text("print 1\n[int, int] p = [1, 2]\n(print)(p)\n", encoding="utf-8")
-        self.assertEqual(self.command("fmt", "--check", messy).returncode, 0)
+        self.assertEqual(self.command("--format", "--check", messy).returncode, 0)
 
-        # Command aliases.
+        # Commands are flags; short ones combine.
         self.source.write_text("print 6 * 7\n", encoding="utf-8")
-        for alias in ("r", "run"):
-            result = self.command(alias, self.source)
+        for flag in ("-r", "--run"):
+            result = self.command(flag, self.source)
             self.assertEqual((result.returncode, result.stdout), (0, "42\n"), result.stderr)
-        self.assertEqual(self.command("c", self.source).returncode, 0)
-        for alias in ("v", "version", "--version"):
-            self.assertTrue(self.command(alias).stdout.startswith("Flywheel "), alias)
-        for alias in ("h", "help", "-h", "--help"):
-            result = self.command(alias)
-            self.assertEqual(result.returncode, 0, alias)
-            self.assertIn("format|fmt|f", result.stdout)
+        result = self.command(self.source, "-r")
+        self.assertEqual((result.returncode, result.stdout), (0, "42\n"), result.stderr)
+        self.assertEqual(self.command("-c", self.source).returncode, 0)
+        for flag in ("-v", "--version"):
+            self.assertTrue(self.command(flag).stdout.startswith("Flywheel "), flag)
+        for flag in ("-h", "--help"):
+            result = self.command(flag)
+            self.assertEqual(result.returncode, 0, flag)
+            self.assertIn("-f, --format", result.stdout)
+        result = self.command(self.source, "-vr")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.startswith("Flywheel ") and result.stdout.endswith("\n42\n"), result.stdout)
+        result = self.command("-bc", self.source)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--build and --check cannot be combined", result.stderr)
+        result = self.command("build", self.source)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("use `flywheel --build`", result.stderr)
+        self.assertEqual(self.command("-q", self.source).returncode, 2)
+        built = self.root / ("built.exe" if os.name == "nt" else "built")
+        self.assertEqual(self.command("--built", self.source, "-O2g", "-o", built).returncode, 0)
+        self.assertEqual(subprocess.run([str(built)], capture_output=True, text=True).stdout, "42\n")
+        # Test mode runs a file's tests before the program's own top-level return.
+        self.source.write_text("function test_one() returns void\n    assert 1 == 1\nend\nprint \"body\"\nreturn 3\n", encoding="utf-8")
+        result = self.command("-rt", "-x", self.source.read_text(encoding="utf-8"))
+        self.assertEqual((result.returncode, result.stdout), (3, "body\n  ok   test_one\n"), result.stderr)
 
         self.source.write_text("function f() returns int\n    return 1\nend\nprint f()", encoding="utf-8")
-        result = self.command("check", "-g", self.source, "--emit-ir", self.root / "debug.ll")
+        result = self.command("--check", "-g", self.source, "--emit-ir", self.root / "debug.ll")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("!DISubprogram(name: \"f\"", (self.root / "debug.ll").read_text())
 
         server = subprocess.Popen(
-            [COMPILER, "lsp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=self.root
+            [COMPILER, "--lsp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=self.root
         )
         self.addCleanup(server.kill)
 
@@ -4092,7 +4111,7 @@ print web.static("/assets", "public", {port})
                 + ")",
                 encoding="utf-8",
             )
-            result = self.command("run", self.source)
+            result = self.command("--run", self.source)
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(result.stdout, "")
             self.assertRegex(result.stderr, "cannot (bind|listen)")
@@ -4122,7 +4141,7 @@ print web.static("/assets", "public", {port})
                         json.dumps(user), encoding="utf-8"
                     )
                 exe = self.root / ("demo.exe" if os.name == "nt" else "demo")
-                result = self.command("build", self.source, "-O3", "-o", exe)
+                result = self.command("--build", self.source, "-O3", "-o", exe)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 process = subprocess.Popen(
                     [str(exe)],
@@ -4163,7 +4182,7 @@ print web.static("/assets", "public", {port})
     def test_ir_and_check(self):
         self.source.write_text('print "native"', encoding="utf-8")
         ir = self.root / "program.ll"
-        result = self.command("check", self.source, "--emit-ir", ir)
+        result = self.command("--check", self.source, "--emit-ir", ir)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("define i32 @main(i32 %0, ptr %1)", ir.read_text())
         self.assertFalse((self.root / "case").exists())
@@ -4186,7 +4205,7 @@ print web.static("/assets", "public", {port})
             "function teardown_all\n    print \"log\", log\nend\n",
             encoding="utf-8",
         )
-        result = self.command("test", suite / "test_shapes.fw", "--coverage")
+        result = self.command("--test", suite / "test_shapes.fw", "--coverage")
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("  ok   test_area", result.stdout)
         self.assertIn("  ok   test_error", result.stdout)
@@ -4201,7 +4220,7 @@ print web.static("/assets", "public", {port})
             "var a = thread.spawn(bump)\nvar b = thread.spawn(bump)\na.join()\nb.join()\n",
             encoding="utf-8",
         )
-        result = self.command("run", "--race", self.source)
+        result = self.command("--run", "--race", self.source)
         self.assertEqual(result.returncode, 66)
         self.assertIn("data race on global variable 'counter'", result.stderr)
         self.source.write_text(
@@ -4210,7 +4229,7 @@ print web.static("/assets", "public", {port})
             "var a = thread.spawn(add)\nvar b = thread.spawn(add)\na.join()\nb.join()\nxs.push(0)\nprint xs.length\n",
             encoding="utf-8",
         )
-        result = self.command("run", "--race", self.source)
+        result = self.command("--run", "--race", self.source)
         self.assertEqual((result.returncode, result.stdout), (0, "201\n"), result.stderr)
 
         # Installed packages: the nearest .flywheel-modules (directories or .link files), then
@@ -4232,7 +4251,7 @@ print web.static("/assets", "public", {port})
         (app / "src" / "app.fw").write_text(
             "import geometry\nimport geometry.extra\nimport linked\nimport shared\n"
             "print geometry.double_it(4), extra.triple(2), linked.hi(), shared.g()\n", encoding="utf-8")
-        result = subprocess.run([COMPILER, "run", app / "src" / "app.fw"], cwd=self.root, capture_output=True,
+        result = subprocess.run([COMPILER, "--run", app / "src" / "app.fw"], cwd=self.root, capture_output=True,
                                 text=True, timeout=60, env=dict(os.environ, FLYWHEEL_HOME=str(home)))
         self.assertEqual((result.returncode, result.stdout), (0, "8 6 linked 7\n"), result.stderr)
         # A nested project with its own .flywheel-modules still sees the enclosing project's
@@ -4250,11 +4269,11 @@ print web.static("/assets", "public", {port})
         (nested / "tool.fw").write_text(
             "import geometry\nimport linked\nimport vendor\nprint geometry.double_it(1), linked.hi(), vendor.v()\n",
             encoding="utf-8")
-        result = subprocess.run([COMPILER, "run", nested / "tool.fw"], cwd=self.root, capture_output=True,
+        result = subprocess.run([COMPILER, "--run", nested / "tool.fw"], cwd=self.root, capture_output=True,
                                 text=True, timeout=60)
         self.assertEqual((result.returncode, result.stdout), (0, "20 linked 41\n"), result.stderr)
         (nested / "missing.fw").write_text("import nowhere\n", encoding="utf-8")
-        result = subprocess.run([COMPILER, "check", nested / "missing.fw"], cwd=self.root, capture_output=True,
+        result = subprocess.run([COMPILER, "--check", nested / "missing.fw"], cwd=self.root, capture_output=True,
                                 text=True, timeout=60)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(str(nested / ".flywheel-modules") + ", " + str(modules), result.stderr)
@@ -4268,14 +4287,14 @@ print web.static("/assets", "public", {port})
             "private function hidden\n    print 1\nend\n",
             encoding="utf-8",
         )
-        result = self.command("doc", self.root / "lib.fw", "-o", self.root / "lib.html")
+        result = self.command("--doc", self.root / "lib.fw", "-o", self.root / "lib.html")
         self.assertEqual(result.returncode, 0, result.stderr)
         page = (self.root / "lib.html").read_text()
         self.assertIn("<p>Adds <code>n</code>.</p>", page)
         self.assertNotIn("hidden", page)
 
         # The REPL keeps declarations and earlier statements.
-        repl = subprocess.run([COMPILER, "repl"], input="var x = 4\nfunction sq(int n) returns int\n"
+        repl = subprocess.run([COMPILER, "--repl"], input="var x = 4\nfunction sq(int n) returns int\n"
                               "    return n * n\nend\nsq(x)\nx = 5\nsq(x)\n", cwd=self.root,
                               capture_output=True, text=True, timeout=60)
         self.assertEqual(repl.returncode, 0, repl.stderr)
@@ -4285,7 +4304,7 @@ print web.static("/assets", "public", {port})
         # Debug builds describe locals.
         self.source.write_text("function f(int n) returns int\n    var total = n * 2\n    return total\nend\nprint f(1)\n",
                                encoding="utf-8")
-        result = self.command("check", "-g", self.source, "--emit-ir", self.root / "debug.ll")
+        result = self.command("--check", "-g", self.source, "--emit-ir", self.root / "debug.ll")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('!DILocalVariable(name: "total"', (self.root / "debug.ll").read_text())
 
@@ -4299,7 +4318,7 @@ print web.static("/assets", "public", {port})
         text = ("import geo\nvar total = geo.area(2, 3)\nvar p = geo.Point(1)\n"
                 "function twice(int value) returns int\n    return value * 2\nend\nprint total, p.norm(), \"{total}\"\n")
         main.write_text(text, encoding="utf-8")
-        server = subprocess.Popen([COMPILER, "lsp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=self.root)
+        server = subprocess.Popen([COMPILER, "--lsp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=self.root)
         self.addCleanup(server.kill)
 
         def send(message):
@@ -4357,11 +4376,11 @@ print web.static("/assets", "public", {port})
         (app / "source.fw").write_text('import helper\nimport os\nprint helper.greet("dir"), os.args()\n', encoding="utf-8")
         result = self.command("app", "a", "b")
         self.assertEqual((result.returncode, result.stdout), (0, 'hi dir ["a", "b"]\n'), result.stderr)
-        result = self.command("run", "app/", "--", "x")
+        result = self.command("--run", "app/", "--", "x")
         self.assertEqual((result.returncode, result.stdout), (0, 'hi dir ["x"]\n'), result.stderr)
-        result = self.command("check", "app")
+        result = self.command("--check", "app")
         self.assertEqual(result.returncode, 0, result.stderr)
-        result = self.command("build", "app/")
+        result = self.command("--build", "app/")
         self.assertEqual(result.returncode, 0, result.stderr)
         built = subprocess.run([str(app / ("app.exe" if os.name == "nt" else "app"))], capture_output=True, text=True, check=False, timeout=45)
         self.assertEqual(built.stdout, 'hi dir []\n', built.stderr)
@@ -4372,34 +4391,34 @@ print web.static("/assets", "public", {port})
     def test_beta8_commands(self):
         calc = 'import os\nvar total = 0\nfor a in os.args() do\n    total += int(a)\nend\nreturn {"sum": total, "count": os.args().length}\n'
         (self.root / "calc.fw").write_text(calc, encoding="utf-8")
-        result = self.command("export", "calc.fw", "sum.json", "1", "2", "3")
+        result = self.command("--export", "calc.fw", "sum.json", "1", "2", "3")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads((self.root / "sum.json").read_text()), {"sum": 6, "count": 3})
-        result = self.command("export", "-s", 'import html.*\nreturn <p>a &amp; b</p>', "page.html")
+        result = self.command("--export", "-x", 'import html.*\nreturn <p>a &amp; b</p>', "page.html")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / "page.html").read_text(), "<p>a &amp; b</p>")
-        result = self.command("export", "-s", 'print "x"', "none.txt")
+        result = self.command("--export", "-x", 'print "x"', "none.txt")
         self.assertEqual(result.returncode, 1)
         self.assertIn("returned no value", result.stderr)
-        result = self.command("debug", "calc.fw", "--", "4", "5")
+        result = self.command("--debug", "calc.fw", "--", "4", "5")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertRegex(result.stderr, r'^\[debug\] returned map<string,int> \{"sum":9,"count":2\} in [0-9.]+ (us|ms|s)\n$')
-        result = self.command("debug", "-s", 'throw "Oops" with "bad"')
+        result = self.command("--debug", "-x", 'throw "Oops" with "bad"')
         self.assertEqual(result.returncode, 1)
         self.assertIn("Oops: bad", result.stderr)
         self.assertIn("[debug] no return value, exit status 1 in", result.stderr)
-        result = self.command("run", "--source", 'print "from source", 6 * 7')
+        result = self.command("--run", "--source", 'print "from source", 6 * 7')
         self.assertEqual((result.returncode, result.stdout), (0, "from source 42\n"), result.stderr)
-        result = self.command("run", "-s", "print x")
+        result = self.command("--run", "-x", "print x")
         self.assertIn("<source>:1:7: error:", result.stderr)
         # Sources and imports named by file:// URL and path strings.
         lib = self.root / "lib"
         lib.mkdir()
         (lib / "util.fw").write_text("function twice(int n) returns int\n    return n * 2\nend\n", encoding="utf-8")
         (self.root / "main.fw").write_text('import "lib/util.fw"\nimport "lib/util" as again\nprint util.twice(21), again.twice(1)\nreturn 7\n', encoding="utf-8")
-        result = self.command("run", (self.root / "main.fw").as_uri())
+        result = self.command("--run", (self.root / "main.fw").as_uri())
         self.assertEqual((result.returncode, result.stdout), (7, "42 2\n"), result.stderr)
-        result = self.command("run", "ws://example.invalid/x.fw")
+        result = self.command("--run", "ws://example.invalid/x.fw")
         self.assertIn("message streams, not files", result.stderr)
         # The flywheel module runs other files and returns their top-level values.
         (self.root / "noreturn.fw").write_text('print "side effect"\n', encoding="utf-8")
@@ -4411,23 +4430,23 @@ print web.static("/assets", "public", {port})
             'try\n    flywheel.run("broken.fw")\ncatch ProcessError e\n    print "failed"\nend\nprint "still running"\n'
         )
         self.source.write_text(caller, encoding="utf-8")
-        result = self.command("run", self.source)
+        result = self.command("--run", self.source)
         self.assertEqual(result.stdout, "side effect\n30 null\n5\nfailed\nstill running\n", result.stderr)
         self.assertEqual(json.loads((self.root / "out.json").read_text()), {"sum": 5, "count": 1})
 
     def test_vecmath_and_reexports(self):
         self.source.write_text('import vecmath.*\nimport math\nvar a = Vec3(1, 2, 3)\nprint a + Vec3(1, 1, 1) * 2, 2 * a, a.cross(Vec3(0, 1, 0)), a.dot(a)\nvar m = Mat4.translation(Vec3(10, 0, 0)) * Mat4.rotation(Vec3(0, 1, 0), 90)\nprint m.transform_point(Vec3(1, 0, 0))\nvar inv = m.inverted()\nprint inv.transform_point(m.transform_point(a))\nprint (m * inv) == Mat4()\nvar q = Quat.from_axis_angle(Vec3(0, 1, 0), 90)\nprint q.rotate(Vec3(1, 0, 0)), q.to_matrix().transform_direction(Vec3(1, 0, 0))\nprint q.slerp(Quat(), 0.5).angle(), q.angle(), q.axis()\nprint Quat.between(Vec3(1, 0, 0), Vec3(0, 0, 1)).rotate(Vec3(1, 0, 0))\nvar p = Mat4.perspective(60, 16 / 9.0, 0.1, 100) * Mat4.look_at(Vec3(0, 0, 5), Vec3(0, 0, 0), Vec3(0, 1, 0))\nprint p.transform_point(Vec3(0, 0, 0)).z\nprint Vec2(3, 4).length(), Vec2.from_angle(90), m.at(0, 3), m.values().length\nprint Mat4().determinant(), Mat4.scaling(Vec3(2, 3, 4)).determinant()\n', encoding="utf-8")
-        result = subprocess.run([COMPILER, "run", self.source], capture_output=True, text=True, timeout=180)
+        result = subprocess.run([COMPILER, "--run", self.source], capture_output=True, text=True, timeout=180)
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, 'Vec3(x=3, y=4, z=5) Vec3(x=2, y=4, z=6) Vec3(x=-3, y=0, z=1) 14\nVec3(x=10, y=0, z=-1)\nVec3(x=1, y=2, z=3)\ntrue\nVec3(x=2.22044604925031e-16, y=0, z=-1) Vec3(x=2.22044604925031e-16, y=0, z=-1)\n45 90 Vec3(x=0, y=1, z=0)\nVec3(x=2.22044604925031e-16, y=0, z=1)\n0.961961961961962\n5 Vec2(x=6.12323399573677e-17, y=1) 10 16\n1 24\n', ""))
         # `public import name.*` makes a module's names part of the importing module's.
         (self.root / "shapes.fw").write_text("public import vecmath.*\nfunction origin() returns Vec2\n"
                                             "    return Vec2(0, 0)\nend\n", encoding="utf-8")
         self.source.write_text("import shapes\nimport vecmath\nvecmath.Vec2 p = shapes.Vec2(1, 2) + "
                                "shapes.origin()\nprint p, shapes.Mat4().m0\n", encoding="utf-8")
-        result = subprocess.run([COMPILER, "run", self.source], capture_output=True, text=True, timeout=180)
+        result = subprocess.run([COMPILER, "--run", self.source], capture_output=True, text=True, timeout=180)
         self.assertEqual((result.returncode, result.stdout), (0, "Vec2(x=1, y=2) 1\n"), result.stderr)
         (self.root / "shapes.fw").write_text("public import vecmath\n", encoding="utf-8")
-        result = subprocess.run([COMPILER, "check", self.source], capture_output=True, text=True, timeout=180)
+        result = subprocess.run([COMPILER, "--check", self.source], capture_output=True, text=True, timeout=180)
         self.assertIn("write `public import vecmath.*`", result.stderr)
 
     def test_flat_arrays(self):
@@ -4435,7 +4454,7 @@ print web.static("/assets", "public", {port})
         # operation (formatting, sorting, slicing, freezing, threads) still sees ordinary items.
         self.source.write_text("import thread\nenum Suit\n    Hearts\n    Spades\nend\nstruct V\n    double x\n    i32 n\n    bool on\nend\nV[] vs = []\nfor i in 0..<5 do\n    vs.push(V(double(i), i32(i * 2), i % 2 == 0))\nend\nvs[1].x = 9\nprint vs[1], vs.length, vs.pop(), vs.length\nprint V(0, 0, true) in vs, vs.index_of(V(9, 2, false))\nvar copy = vs[1..<3]\ncopy[0] = V(7, 7, true)\nprint copy, vs[1]\nvs.sort(function(V a, V b) returns bool\n    return a.x < b.x\nend)\nprint vs\ntry\n    print vs[10]\ncatch e\n    print e.name, e.message\nend\nvar frozen = [V(1, 1, true)].freeze()\ntry\n    frozen[0] = V(2, 2, false)\ncatch e\n    print e.name\nend\ntry\n    frozen.push(V(2, 2, false))\ncatch e\n    print e.name\nend\nprint frozen\nint[] ns = [3, 1, 2]\nns.sort()\nns.push(10)\nns[0] += 100\nprint ns, ns.pop(), 2 in ns\nbool[] bs = [true, false]\nbs[1] = true\nprint bs\nSuit[] suits = [Suit.Hearts, Suit.Spades]\nsuits[0] = Suit.Spades\nprint suits\nchar[] cs = ['a', 'é']\ncs.push('z')\nprint cs\nu8[] bytes = [255, 1]\nbytes[1] = 200\nprint bytes\nfloat[] fs = [float(1.5), float(2.25)]\nfs[0] = float(fs[0] * 2)\nprint fs\n# Threads: other threads read and write while the main thread does too.\nint[] shared = []\nfor i in 0..<1000 do\n    shared.push(i)\nend\nvar tasks = [thread.spawn(function() returns int\n    var t = 0\n    for i in 0..<1000 do\n        t += shared[i]\n        shared[i] = shared[i] + 1\n    end\n    return t\nend), thread.spawn(function() returns int\n    for i in 0..<100 do\n        shared.push(i)\n    end\n    return 0\nend)]\nfor t in tasks do\n    t.join()\nend\nprint shared.length, shared[0], shared[999]\nV[][] grid = [[V(1, 1, true)], []]\ngrid[1].push(V(2, 2, false))\nprint grid\n", encoding="utf-8")
         for level in ("-O0", "-O3"):
-            result = subprocess.run([COMPILER, "run", self.source, level], capture_output=True, text=True,
+            result = subprocess.run([COMPILER, "--run", self.source, level], capture_output=True, text=True,
                                     timeout=180)
             self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "V(x=9, n=2, on=false) 5 V(x=4, n=8, on=true) 4\ntrue 1\n[V(x=7, n=7, on=true), V(x=2, n=4, on=true)] V(x=9, n=2, on=false)\n[V(x=0, n=0, on=true), V(x=2, n=4, on=true), V(x=3, n=6, on=false), V(x=9, n=2, on=false)]\nIndexError index out of bounds\nValueError\nValueError\n[V(x=1, n=1, on=true)]\n[101, 2, 3] 10 true\n[true, true]\n[Spades, Spades]\n['a', 'é', 'z']\n[255, 200]\n[3, 2.25]\n1100 1 1000\n[[V(x=1, n=1, on=true)], [V(x=2, n=2, on=false)]]\n", ""))
 
@@ -4450,22 +4469,22 @@ print web.static("/assets", "public", {port})
         env = {**os.environ, "XDG_CACHE_HOME": str(self.root / "cache")}
         run = lambda *args: subprocess.run([COMPILER, *map(str, args)], cwd=self.root, capture_output=True,
                                            text=True, timeout=180, env=env)
-        result = run("run", self.source)
+        result = run("--run", self.source)
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, expected, ""))
         exe = self.root / ("phys.exe" if os.name == "nt" else "phys")
-        result = run("build", self.source, "-O3", "-o", exe)
+        result = run("--build", self.source, "-O3", "-o", exe)
         self.assertEqual(result.returncode, 0, result.stderr)
         result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
         self.assertEqual((result.returncode, result.stdout), (0, expected))
         wrong = self.root / "wrong.fw"
         wrong.write_text("import c phys\nint[] xs = [1, 2]\nprint phys.sum(xs, 2)\n", encoding="utf-8")
-        result = run("check", wrong)
+        result = run("--check", wrong)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("points to double values", result.stderr)
         self.assertIn("pass a double[]", result.stderr)
         wrong.write_text("import c phys\nstruct Three\n    double a\n    double b\n    double c\nend\n"
                          "print phys.vec_len2(Three(1, 2, 3))\n", encoding="utf-8")
-        result = run("check", wrong)
+        result = run("--check", wrong)
         self.assertIn("does not have the layout of", result.stderr)
 
     def test_beta8_native_imports(self):
@@ -4502,16 +4521,16 @@ print web.static("/assets", "public", {port})
         cache = self.root / "cache"
         env = {**os.environ, "XDG_CACHE_HOME": str(cache)}
         run = lambda *args: subprocess.run([COMPILER, *map(str, args)], cwd=self.root, capture_output=True, text=True, timeout=180, env=env)
-        result = run("run", self.source)
+        result = run("--run", self.source)
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, expected, ""))
-        self.assertEqual(run("check", self.source).returncode, 0)
+        self.assertEqual(run("--check", self.source).returncode, 0)
         exe = self.root / ("native.exe" if os.name == "nt" else "native")
-        result = run("build", self.source, "-o", exe)
+        result = run("--build", self.source, "-o", exe)
         self.assertEqual(result.returncode, 0, result.stderr)
         result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
         self.assertEqual((result.returncode, result.stdout), (0, expected), result.stderr)
         self.source.write_text("import c cmath\nprint cmath.skipped(1)\n", encoding="utf-8")
-        self.assertIn("has no exported name 'skipped'", run("check", self.source).stderr)
+        self.assertIn("has no exported name 'skipped'", run("--check", self.source).stderr)
         # Pointers cross as int handles, and `// flywheel:` comments add libraries and flags.
         (self.root / "buffer.c").write_text(
             "// flywheel: link m\n// flywheel: cflags -DSCALE=3\n// flywheel(windows): link user32\n"
@@ -4532,39 +4551,39 @@ print web.static("/assets", "public", {port})
             "buffer.buffer_free(b)\n",
             encoding="utf-8",
         )
-        result = run("run", self.source)
+        result = run("--run", self.source)
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "5 3 true\n", ""))
-        result = run("build", self.source, "-o", exe)
+        result = run("--build", self.source, "-o", exe)
         self.assertEqual(result.returncode, 0, result.stderr)
         result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
         self.assertEqual((result.returncode, result.stdout), (0, "5 3 true\n"), result.stderr)
         (self.root / "wrong.c").write_text("// flywheel: frobnicate x\nint one(void) { return 1; }\n", encoding="utf-8")
         self.source.write_text("import c wrong\nprint wrong.one()\n", encoding="utf-8")
-        self.assertIn("unknown directive `flywheel: frobnicate`", run("check", self.source).stderr)
+        self.assertIn("unknown directive `flywheel: frobnicate`", run("--check", self.source).stderr)
         (self.root / "wrong.c").write_text("// flywheel: pkg no-such-package-for-flywheel\nint one(void) { return 1; }\n", encoding="utf-8")
-        result = run("run", self.source)
+        result = run("--run", self.source)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("no-such-package-for-flywheel", result.stderr)
 
     def test_top_level_return(self):
         source = 'print "start"\nint code = 3\ntry\n    for i in [1, 2] do\n        if i == 2 do\n            return code + i\n        end\n    end\nfinally\n    print "finally"\nend\nprint "unreachable"\n'
         self.source.write_text(source, encoding="utf-8")
-        result = self.command("run", self.source)
+        result = self.command("--run", self.source)
         self.assertEqual((result.returncode, result.stdout), (5, "start\nfinally\n"), result.stderr)
         exe = self.root / ("exit.exe" if os.name == "nt" else "exit")
-        result = self.command("build", self.source, "-O3", "-o", exe)
+        result = self.command("--build", self.source, "-O3", "-o", exe)
         self.assertEqual(result.returncode, 0, result.stderr)
         result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=15)
         self.assertEqual((result.returncode, result.stdout), (5, "start\nfinally\n"))
         self.source.write_text('print "x"\nreturn\n', encoding="utf-8")
-        result = self.command("run", self.source)
+        result = self.command("--run", self.source)
         self.assertEqual((result.returncode, result.stdout), (0, "x\n"), result.stderr)
         markup = "import html.*\nreturn <p>hi</p>\n"
         for command, source, message in [
-            ("run", 'return "hi"\n', "top-level return expects an int exit status"),
-            ("run", markup, "needs `flywheel desktop` or `flywheel serve`"),
-            ("serve", 'print "x"\n', "expects the program to `return` an element"),
-            ("desktop", 'return true\n', "int exit status, element, or fragment"),
+            ("--run", 'return "hi"\n', "top-level return expects an int exit status"),
+            ("--run", markup, "needs `flywheel --desktop` or `flywheel --serve`"),
+            ("--serve", 'print "x"\n', "expects the program to `return` an element"),
+            ("--desktop", 'return true\n', "int exit status, element, or fragment"),
         ]:
             with self.subTest(command=command, source=source):
                 self.source.write_text(source, encoding="utf-8")
@@ -4572,21 +4591,21 @@ print web.static("/assets", "public", {port})
                 self.assertEqual(result.returncode, 1)
                 self.assertIn(message, result.stderr)
         self.source.write_text(markup, encoding="utf-8")
-        self.assertEqual(self.command("check", self.source).returncode, 0)
+        self.assertEqual(self.command("--check", self.source).returncode, 0)
         # desktop and serve may still exit early with a status instead of showing a page.
         self.source.write_text('import html.*\nif true do\n    return 4\nend\nreturn <p>x</p>\n', encoding="utf-8")
-        self.assertEqual(self.command("desktop", self.source).returncode, 4)
+        self.assertEqual(self.command("--desktop", self.source).returncode, 4)
         self.source.write_text('import html.*\nif false do\n    return <p>x</p>\nend\n', encoding="utf-8")
-        result = self.command("serve", self.source)
+        result = self.command("--serve", self.source)
         self.assertEqual(result.returncode, 1)
         self.assertIn("ended without returning an element or fragment", result.stderr)
         (self.root / "helper.fw").write_text("return 1\n", encoding="utf-8")
         self.source.write_text("import helper\n", encoding="utf-8")
-        result = self.command("run", self.source)
+        result = self.command("--run", self.source)
         self.assertIn("at the top level of the main file", result.stderr)
         self.source.write_text(markup, encoding="utf-8")
         result = subprocess.run(
-            [COMPILER, "desktop", str(self.source)],
+            [COMPILER, "--desktop", str(self.source)],
             cwd=self.root, capture_output=True, text=True, timeout=45,
             env={**os.environ, "FLYWHEEL_DESKTOP_BACKEND": str(self.root / "missing-backend")},
         )
@@ -4603,7 +4622,7 @@ print web.static("/assets", "public", {port})
             encoding="utf-8",
         )
         process = subprocess.Popen(
-            [COMPILER, "serve", str(self.source), "--port", "0"],
+            [COMPILER, "--serve", str(self.source), "--port", "0"],
             cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
 

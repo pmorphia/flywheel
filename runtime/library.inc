@@ -2967,7 +2967,7 @@ extern "C" Object *fw_yaml_parse(Frame *frame, Object *text) {
     return nativeBoundary([&] { return jsonObject(frame, YamlParser(requireString(text)->text).run()); });
 }
 
-// coverage: line counters registered by programs built for `flywheel test --coverage` -------
+// coverage: line counters registered by programs built for `flywheel --test --coverage` -------
 namespace {
 struct CoverageTable {
     int64_t **counters = nullptr;

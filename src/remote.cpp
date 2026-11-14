@@ -1,4 +1,4 @@
-// Sources named by URL: `flywheel run https://...`, `import "https://..."`, and remote native
+// Sources named by URL: `flywheel https://...`, `import "https://..."`, and remote native
 // imports. Downloads use curl (http, https, ftp, ftps, sftp) or ssh (ssh, scp), which are
 // installed on Linux and Windows 10+; file:// URLs read local files.
 #include "flywheel/frontend.hpp"

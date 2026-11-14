@@ -45,7 +45,7 @@ struct HttpRoute {
     Object *handler = nullptr;
     int arity = 0;
     std::filesystem::path directory; // non-empty for static file routes
-    Object *page = nullptr;          // a fixed element or fragment (flywheel serve)
+    Object *page = nullptr;          // a fixed element or fragment (flywheel --serve)
     HttpRoute() = default;
     HttpRoute(const HttpRoute &) = delete;
     ~HttpRoute() {
@@ -741,8 +741,10 @@ int pollSockets(std::vector<PollEntry> &entries, int milliseconds) {
 }
 #endif
 constexpr auto idleTimeout = std::chrono::seconds(15);
-// Serves all listeners until they are shut down. Returns false after a handler error.
-bool serveLoop(HttpRuntime &state) {
+// Serves all listeners until they are shut down (or `stop` is set). Returns false after a
+// handler error. With a `gate`, it is held while requests are handled but not while waiting.
+bool serveLoop(HttpRuntime &state, std::mutex *gate = nullptr,
+               const std::atomic<bool> *stop = nullptr) {
     if (state.workerCount > 1 && !state.workers) {
         state.workers = std::make_unique<HttpWorkers>();
         for (int i = 0; i < state.workerCount; ++i) {
@@ -759,7 +761,7 @@ bool serveLoop(HttpRuntime &state) {
         }
     }
     auto workers = state.workers.get();
-    while (!state.servers.empty()) {
+    while (!state.servers.empty() && !(stop && stop->load())) {
         std::vector<PollEntry> entries;
         for (auto &server : state.servers)
             entries.push_back({server->socket.value, POLLIN, 0});
@@ -769,7 +771,12 @@ bool serveLoop(HttpRuntime &state) {
                 events |= POLLOUT;
             entries.push_back({c->socket.value, events, 0});
         }
-        int ready = pollSockets(entries, workers && workers->outstanding ? 2 : 1000);
+        int ready = pollSockets(entries, workers && workers->outstanding ? 2 : stop ? 100 : 1000);
+        std::unique_lock<std::mutex> gated;
+        if (gate)
+            gated = std::unique_lock<std::mutex>(*gate);
+        if (stop && stop->load())
+            break;
         if (workers && !collectWorkers(state))
             return false;
         if (ready < 0) {
@@ -976,7 +983,7 @@ extern "C" Object *fw_serve_static(Frame *frame, Object *route, Object *director
         return url;
     });
 }
-// flywheel serve: answers GET / with the markup a program returned at top level.
+// flywheel --serve: answers GET / with the markup a program returned at top level.
 extern "C" Object *fw_serve_page(Frame *frame, Object *tree, int64_t port, Object *host) {
     return nativeBoundary([&] {
         auto entry = std::make_unique<HttpRoute>();
@@ -984,6 +991,58 @@ extern "C" Object *fw_serve_page(Frame *frame, Object *tree, int64_t port, Objec
         entry->page = tree;
         return addRoute(frame, "GET", "/", std::move(entry), port, host->text);
     });
+}
+// flywheel --desktop --serve: shows the returned markup in a window and serves it over HTTP
+// until the window closes. Requests are handled on another thread, one at a time with the
+// window's callbacks, so a served page shows the window's current state.
+extern "C" void fw_desktop_serve_page(Frame *frame, Object *tree, const char *backendPath,
+                                      int64_t port, Object *host) {
+    Object *url = fw_serve_page(frame, tree, port, host);
+    if (pendingError.value)
+        return;
+    std::cout << "Serving at " << url->text << std::endl;
+    auto &state = *httpRuntime();
+    if (state.running) {
+        nativeBoundary([] { fail("the page is already being served"); });
+        return;
+    }
+    std::mutex gate;
+    std::atomic<bool> stop{false};
+    std::unique_lock<std::mutex> held(gate);
+    desktopGate = &gate;
+    state.running = true;
+    ++activeThreads; // atomic reference counts, and no cycle collection, while both run
+    RaceClock start;
+    raceRelease(start);
+    std::thread server([&, start] {
+        guardStack();
+        raceAcquire(start);
+        bool ok = false;
+        std::string failure;
+        try {
+            ok = serveLoop(state, &gate, &stop);
+        } catch (const NativeFailure &e) {
+            failure = e.message;
+        }
+        std::lock_guard<std::mutex> lock(gate);
+        if (!failure.empty())
+            std::cerr << "flywheel: serving stopped: " << failure << std::endl;
+        else if (!ok && pendingError.value) {
+            bool hasMessage = true;
+            auto text = thrownText(pendingError.value, &hasMessage);
+            std::cerr << "flywheel: serving stopped: " << (text.empty() ? pendingError.type : text)
+                      << std::endl;
+            pendingError.clear();
+        }
+        borrowedValues().clear();
+    });
+    fw_desktop_page(frame, tree, backendPath);
+    stop = true;
+    held.unlock();
+    server.join();
+    desktopGate = nullptr;
+    --activeThreads;
+    state.running = false;
 }
 extern "C" void fw_web_wait() {
     bool entered = false;

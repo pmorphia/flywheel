@@ -1236,7 +1236,7 @@ end
     void emitFailure() {
         auto saved = b.saveIP();
         b.SetInsertPoint(failure);
-        if (top && (usesWeb() || pageEntry == "serve"))
+        if (top && (usesWeb() || serves()))
             call("fw_web_shutdown", b.getVoidTy(), {});
         if (top)
             call("fw_error_report", b.getVoidTy(), {});
@@ -2834,11 +2834,11 @@ end
     }
     void statement(Stmt &s);
     // `return` outside functions ends the program: an int (or nothing) is its exit status, and
-    // an element or fragment is shown by `flywheel desktop` or served by `flywheel serve`.
+    // an element or fragment is shown by `flywheel --desktop` or served by `flywheel --serve`.
     void topLevelReturn(Stmt &s) {
         Val x = s.expr ? value(*s.expr) : Val{};
         bool page = x.t.name == "element" || x.t.name == "fragment";
-        // flywheel export / debug and the flywheel module ("value") take any value.
+        // flywheel --export / --debug and the flywheel module ("value") take any value.
         bool anyValue = pageEntry == "value";
         if (anyValue && s.expr &&
             (x.t.classReference() || x.t.name == "void" || x.t.name.rfind("fn:", 0) == 0 ||
@@ -2846,12 +2846,12 @@ end
             error("a top-level return cannot return " + displayName(x.t.name));
         if (page && pageEntry.empty())
             error("a top-level return of " + x.t.name +
-                  " needs `flywheel desktop` or `flywheel serve`; `run` and `build` expect an "
-                  "int exit status");
+                  " needs `flywheel --desktop` or `flywheel --serve`; running and `--build` "
+                  "expect an int exit status");
         if (!anyValue && !page && s.expr && !x.t.integer())
             error("top-level return expects an int exit status" +
                   std::string(pageEntry.empty() ? "" : ", element, or fragment") +
-                  "; `flywheel export` and `flywheel debug` take any value");
+                  "; `flywheel --export` and `flywheel --debug` take any value");
         llvm::Value *status = b.getInt32(0);
         if (s.expr && !page && !anyValue)
             status = b.CreateIntCast(x.v, b.getInt32Ty(), !x.t.unsigned_());
@@ -2880,6 +2880,10 @@ end
         if (page && pageEntry == "desktop")
             call("fw_desktop_page", b.getVoidTy(),
                  {frame, x.v, b.CreateGlobalString(desktopBackend)});
+        else if (page && pageEntry == "desktop+serve")
+            call("fw_desktop_serve_page", b.getVoidTy(),
+                 {frame, x.v, b.CreateGlobalString(desktopBackend), i64(servePort),
+                  literal(serveHost).v});
         else if (page && pageEntry == "serve") {
             auto url =
                 objectCall("fw_serve_page", {frame, x.v, i64(servePort), literal(serveHost).v});
@@ -2890,12 +2894,19 @@ end
         handlers = std::move(savedHandlers);
         if (!finalizers.empty() && page)
             protectedValues.pop_back();
-        if (usesWeb() || pageEntry == "serve")
+        if (usesWeb() || serves())
             call("fw_web_shutdown", b.getVoidTy(), {});
         call("fw_thread_wait_all", b.getVoidTy(), {}); // statement-level spawns finish first
         call("fw_drop", b.getVoidTy(), {frame});
         call("fw_gc_collect", b.getInt64Ty(), {});
         b.CreateRet(status);
+    }
+    // flywheel --desktop / --serve (or both): a top-level return of markup is shown or served.
+    bool pageHost() const {
+        return pageEntry == "desktop" || pageEntry == "serve" || pageEntry == "desktop+serve";
+    }
+    bool serves() const {
+        return pageEntry == "serve" || pageEntry == "desktop+serve";
     }
     bool terminated() {
         return !b.GetInsertBlock()->empty() && b.GetInsertBlock()->back().isTerminator();
@@ -3498,15 +3509,17 @@ end
         cells = cellNames(p.body);
         block(p.body, false);
         checkDeferredSignatures();
-        if ((pageEntry == "desktop" || pageEntry == "serve") && !pageReturned)
+        auto flags = pageEntry == "desktop+serve" ? std::string("--desktop --serve")
+                                                  : "--" + pageEntry;
+        if (pageHost() && !pageReturned)
             throw Error({1, 1, module.getModuleIdentifier()},
-                        "flywheel " + pageEntry +
+                        "flywheel " + flags +
                             " expects the program to `return` an element or fragment at top level");
-        if (!terminated() && (pageEntry == "desktop" || pageEntry == "serve"))
+        if (!terminated() && pageHost())
             call("fw_panic", b.getVoidTy(),
                  {b.CreateGlobalString("the program ended without returning an element or "
                                        "fragment for flywheel " +
-                                       pageEntry),
+                                       flags),
                   b.CreateGlobalString("RuntimeError")});
         if (!terminated()) {
             if (usesWeb()) {

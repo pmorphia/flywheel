@@ -835,7 +835,7 @@ struct Server {
         try {
             auto program = loadProgram(path, overlay);
             Options options;
-            options.entry = "check"; // like `flywheel check`: markup may be returned at top level
+            options.entry = "check"; // like `flywheel --check`: markup may be returned at top level
             options.warnings = &warnings;
             compile(program, path, options);
             for (auto &w : warnings)
@@ -1025,7 +1025,7 @@ int languageServer() {
             if (!server.handle(*message))
                 return 0;
         } catch (const std::exception &e) {
-            std::cerr << "flywheel lsp: " << e.what() << '\n';
+            std::cerr << "flywheel --lsp: " << e.what() << '\n';
         }
     }
 }

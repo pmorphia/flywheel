@@ -1,4 +1,4 @@
-// `flywheel doc`: renders the `#` comments directly above public declarations as HTML.
+// `flywheel --doc`: renders the `#` comments directly above public declarations as HTML.
 #include "flywheel/frontend.hpp"
 #include <algorithm>
 #include <filesystem>
@@ -201,7 +201,7 @@ int docCommand(const std::vector<std::string> &args) {
             input = args[i];
     }
     if (input.empty()) {
-        std::cerr << "usage: flywheel doc module.fw [-o output.html]\n";
+        std::cerr << "usage: flywheel --doc module.fw [-o output.html]\n";
         return 2;
     }
     if (output.empty())

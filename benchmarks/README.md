@@ -25,7 +25,7 @@ What changed: arrays of numbers and structs are stored as one contiguous block t
 [particles/](particles/) moves 50,000 particles (an array of a five-field struct) with gravity and wall bounces, the same code in Flywheel and C++:
 
 ```sh
-flywheel build benchmarks/particles/particles.fw -O3 -o particles && ./particles 50000 600
+flywheel --build benchmarks/particles/particles.fw -O3 -o particles && ./particles 50000 600
 c++ -O3 -o particles-cpp benchmarks/particles/particles.cpp && ./particles-cpp 50000 600
 ```
 

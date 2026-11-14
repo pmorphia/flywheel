@@ -159,11 +159,11 @@ Runs other Flywheel programs with the compiler that built the current program (s
 
 | Function | Runs |
 |---|---|
-| `run(file, string[] args = [])` | `flywheel run`; a top-level `return` hands back its value instead of exiting |
-| `desktop(file, string[] args = [])` | `flywheel desktop`, returning when the window closes |
-| `serve(file, port = 8000, host = "127.0.0.1")` | `flywheel serve` |
-| `debug(file, string[] args = [])` | `flywheel debug`, which also prints the value and run time |
-| `export(file, output, string[] args = [])` | `flywheel export`, writing the value to `output` |
+| `run(file, string[] args = [])` | `flywheel --run`; a top-level `return` hands back its value instead of exiting |
+| `desktop(file, string[] args = [])` | `flywheel --desktop`, returning when the window closes |
+| `serve(file, port = 8000, host = "127.0.0.1")` | `flywheel --serve` |
+| `debug(file, string[] args = [])` | `flywheel --debug`, which also prints the value and run time |
+| `export(file, output, string[] args = [])` | `flywheel --export`, writing the value to `output` |
 
 ```flywheel
 import flywheel

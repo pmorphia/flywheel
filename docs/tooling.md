@@ -1,14 +1,44 @@
 # Tooling
 
-## Command aliases
+## Command line
 
-Each `flywheel` command has a short alias: `r` (run), `b` (build), `c` (check), `d` (desktop), `s` (serve), `e` (export), `db` (debug), `t` (test), `f` or `fmt` (format), and `u` (update). `doc`, `repl`, `lsp`, and `selftest` have none. `help`, `h`, `-h`, and `--help` print the usage; `version`, `v`, and `--version` print the version.
+Every `flywheel` command is a flag. Without a mode flag, the source file is compiled and run: `flywheel app.fw a b` (or `fw app.fw a b`, the short name installed beside `flywheel`) runs `app.fw` with the program arguments `a b`. Arguments that start with `-` are Flywheel's own; program arguments that start with `-` go after `--` (`flywheel app.fw -- -v`).
 
-A source file in place of a command runs it, as `run` does: `flywheel app.fw a b` (or `fw app.fw a b`, the short name installed beside `flywheel`) is `flywheel run app.fw -- a b`, so every argument after the file goes to the program. `flywheel -s CODE` is `flywheel run -s CODE`. A directory in place of a source file stands for its `source.fw`: `flywheel app` (like `flywheel run app`, `check app`, or `build app`, which writes the executable `app/app`) uses `app/source.fw`, whose imports resolve beside it. Flywheel Lite (`flywheel-lite`, `fwl`) and `flywheel-js` accept the same form.
+| Flag | Does |
+| --- | --- |
+| `-r`, `--run` | compile and run (the default) |
+| `-b`, `--build` | write an executable (`-o FILE`) |
+| `-c`, `--check` | type-check without running (`--emit-ir FILE`) |
+| `-d`, `--desktop` | show the returned page in a window |
+| `-s`, `--serve` | serve the returned page over HTTP (`--port N`, `--host H`) |
+| `-e`, `--export` | write the returned value to a file |
+| `-D`, `--debug` | print the returned value and run time |
+| `-t`, `--test` | test mode (see [Testing](#testing)) |
+| `-f`, `--format` | format files (`-c` or `--check`: only report) |
+| `--doc` | write HTML documentation |
+| `-n`, `--new` | create a project with Pulley (`--game`: a game) |
+| `--repl`, `--lsp`, `--selftest` | interactive session, language server, the compiler's test suite |
+| `-u`, `--update` | reinstall from flywheel.polymorphia.dev |
+| `-v`, `--version` | print the version |
+| `-h`, `--help` | print the usage |
+| `-x CODE`, `--source CODE` | run CODE instead of a file |
+| `-o FILE`, `-O0`..`-O3`, `-g` | output file, optimization level, debug information |
+
+Short flags combine and may come before or after the file: `flywheel -bO3 app.fw -o app`, `flywheel app.fw -vt`. `--desktop` and `--serve` together show the page in a window and serve it at the same time (requests are handled one at a time with the window's callbacks, so the served page shows the window's current state). `--update`, `--version`, and `--help` run first and in that order, so
+
+```sh
+flywheel main.fw -dvust
+```
+
+updates Flywheel, prints the new version, then runs `main.fw` in test mode as a desktop app while serving it locally. Other modes cannot be combined (`flywheel -bc` is an error); `--built` is accepted for `--build`. The old command words (`flywheel build app.fw`) are reported with the flag to use instead.
+
+A directory in place of a source file stands for its `source.fw`: `flywheel app` (like `flywheel --check app`, or `flywheel --build app`, which writes the executable `app/app`) uses `app/source.fw`, whose imports resolve beside it.
 
 ## Testing
 
-`flywheel test [files or directories] [-O0..3]` discovers test files named `test_*.fw` or `*_test.fw` (or `.fly`), recursively under the given directories (default: the current directory, skipping `build` and hidden directories). In each file, every top-level function whose name starts with `test_` and that takes no arguments is a test. Each test runs in turn; a failure or error is reported and the remaining tests still run.
+`flywheel --test [files or directories] [-O0..3]` (`-t`) discovers test files named `test_*.fw` or `*_test.fw` (or `.fly`), recursively under the given directories (default: the current directory, skipping `build` and hidden directories). In each file, every top-level function whose name starts with `test_` and that takes no arguments is a test. Each test runs in turn; a failure or error is reported and the remaining tests still run.
+
+Combined with another mode, `--test` is test mode for one program: its `test_*` functions run right before its first top-level `return` (at the end when there is none), and the program stops with an `AssertionError` if any of them fails. `flywheel --desktop --test app.fw` checks the tests and then shows the page; `flywheel -bt app.fw` builds an executable that runs them.
 
 ```flywheel
 import testing
@@ -27,7 +57,7 @@ end
 ```
 
 ```text
-$ flywheel test
+$ flywheel --test
 ./test_math.fw
   ok   test_add
   ok   test_upper
@@ -62,7 +92,7 @@ Zero-argument functions with these names in a test file run around the tests:
 
 ### Coverage
 
-`flywheel test --coverage` counts how often each source line runs. After the tests it prints, for every non-test source file that was compiled, the covered and total lines and the line numbers never run, and writes `coverage.lcov` (LCOV format, for editors and coverage services) in the current directory. Library modules are not counted.
+`flywheel --test --coverage` counts how often each source line runs. After the tests it prints, for every non-test source file that was compiled, the covered and total lines and the line numbers never run, and writes `coverage.lcov` (LCOV format, for editors and coverage services) in the current directory. Library modules are not counted.
 
 ```text
 coverage:
@@ -72,20 +102,20 @@ coverage:
 
 Lines are statements: a line counts when any statement starting on it runs. Bodies of generic functions count once they are instantiated.
 
-The compiler's own regression suite (Python, in `tests/`) runs with `flywheel selftest` or `ctest --test-dir build`.
+The compiler's own regression suite (Python, in `tests/`) runs with `flywheel --selftest` or `ctest --test-dir build`.
 
 ## Formatting
 
-`flywheel format file...` (also `fmt` or `f`) re-indents files in place by block structure with four spaces per level; `flywheel format --check file...` only reports files that would change (exit status 1). Continuation lines (open brackets, trailing operators, `\`) get one extra level, lambda bodies inside call arguments are indented once, and trailing whitespace and extra blank lines at the end of the file are removed.
+`flywheel --format file...` (`-f`) re-indents files in place by block structure with four spaces per level; `flywheel --format --check file...` (`-fc`) only reports files that would change (exit status 1). Continuation lines (open brackets, trailing operators, `\`) get one extra level, lambda bodies inside call arguments are indented once, and trailing whitespace and extra blank lines at the end of the file are removed.
 
 The formatter only changes indentation and trailing whitespace. Lines that start inside a multi-line string or markup literal are left exactly as written, so formatting never changes program output.
 
 ## Debugging
 
-`flywheel build -g` (and `run -g`, `check -g`) emits DWARF line tables for functions, methods, lambdas, and the program body, so native debuggers can set breakpoints by Flywheel source line and show Flywheel locations in backtraces:
+`flywheel --build -g` (and `-g` when running or with `--check`) emits DWARF line tables for functions, methods, lambdas, and the program body, so native debuggers can set breakpoints by Flywheel source line and show Flywheel locations in backtraces:
 
 ```sh
-flywheel build -g app.fw -o app
+flywheel --build -g app.fw -o app
 gdb ./app
 (gdb) break app.fw:12
 (gdb) run
@@ -104,7 +134,7 @@ $1 = "sum"
 
 ## Race detection
 
-`flywheel run --race` (also `build`, and `test`) builds the program with a data race detector. While the program runs, every read and write of an array, map, set, class instance, captured variable, or module global is checked against earlier accesses from other threads. Accesses are ordered by `thread.spawn` and `join`, mutex `lock`/`unlock`, and channel `send`/`receive`. When two threads access the same value, at least one writes, and nothing orders them, the program stops with exit status 66:
+`flywheel --race` (also with `--build` and `--test`) builds the program with a data race detector. While the program runs, every read and write of an array, map, set, class instance, captured variable, or module global is checked against earlier accesses from other threads. Accesses are ordered by `thread.spawn` and `join`, mutex `lock`/`unlock`, and channel `send`/`receive`. When two threads access the same value, at least one writes, and nothing orders them, the program stops with exit status 66:
 
 ```text
 flywheel: data race on global variable 'counter': a read by thread 2 conflicts with an earlier write by thread 1; nothing (a mutex, a channel, or join) orders them
@@ -114,9 +144,9 @@ The detector reports races that happen in the run being checked, without false p
 
 ## Pages: desktop and serve
 
-`return` outside functions ends the program. Under `run` and `build`, it takes an optional integer exit status (`return 2`; a bare `return` is status 0). Pending `finally` blocks run first. Imported modules cannot return at top level.
+`return` outside functions ends the program. When running and with `--build`, it takes an optional integer exit status (`return 2`; a bare `return` is status 0). Pending `finally` blocks run first. Imported modules cannot return at top level.
 
-`flywheel desktop file.fw` and `flywheel serve file.fw` run a program that returns an `element` or `fragment` at top level:
+`flywheel --desktop file.fw` and `flywheel --serve file.fw` run a program that returns an `element` or `fragment` at top level:
 
 ```flywheel
 import html.*
@@ -128,58 +158,60 @@ return <html>
 </html>
 ```
 
-- `desktop` shows the returned markup in a `desktop.window` (960×640) titled by the page's `<title>`, or `Flywheel` without one, and exits with status 0 when the window closes. Event handlers in the markup work as in [desktop windows](desktop.md#events-and-live-updates). The [desktop backend](desktop.md#build-and-run) must be built.
-- `serve` answers `GET /` with the rendered markup, prints `Serving at http://127.0.0.1:8000/`, and serves until interrupted. Other paths answer 404, and Flywheel event handlers in the markup do not run in the browser. `--port N` picks the port (`0` chooses a free one) and `--host H` the address to listen on (default `127.0.0.1`).
+- `--desktop` shows the returned markup in a `desktop.window` (960×640) titled by the page's `<title>`, or `Flywheel` without one, and exits with status 0 when the window closes. Event handlers in the markup work as in [desktop windows](desktop.md#events-and-live-updates). The [desktop backend](desktop.md#build-and-run) must be built.
+- `--serve` answers `GET /` with the rendered markup, prints `Serving at http://127.0.0.1:8000/`, and serves until interrupted. Other paths answer 404, and Flywheel event handlers in the markup do not run in the browser. `--port N` picks the port (`0` chooses a free one) and `--host H` the address to listen on (default `127.0.0.1`).
 
-Both commands accept the options of `run` and pass arguments after `--` to the program. A top-level `return` of an integer still exits with that status, so a program can stop before showing a page. A program that ends without returning markup is an error: at compile time if it has no such `return`, otherwise at run time. `run` and `build` reject a top-level return of markup; `check` and the language server accept it.
+- Both flags at once (`flywheel -ds file.fw`) show the window and serve the page until the window closes.
+
+They accept the options of running and pass program arguments to the program. A top-level `return` of an integer still exits with that status, so a program can stop before showing a page. A program that ends without returning markup is an error: at compile time if it has no such `return`, otherwise at run time. Running without a page flag and `--build` reject a top-level return of markup; `--check` and the language server accept it.
 
 ## Return values: export and debug
 
-`flywheel export file.fw output [arguments...]` runs a program and writes its top-level return value to `output`. Unlike `run`, any value may be returned. Strings are written as they are, and markup as its HTML; every other value is written as JSON (numbers, bools, arrays, maps, class instances, `Result`, `json.value`; see `json.encode` in the [library reference](../stdlib/README.md#json)). Arguments after the output file (or after `--`) are passed to the program. A program that returns nothing is an error, and a program that fails exits with its status without writing the file.
+`flywheel --export file.fw output [arguments...]` runs a program and writes its top-level return value to `output`. Unlike a plain run, any value may be returned. The output file is `-o FILE` or the first argument after the source. Strings are written as they are, and markup as its HTML; every other value is written as JSON (numbers, bools, arrays, maps, class instances, `Result`, `json.value`; see `json.encode` in the [library reference](../stdlib/README.md#json)). Arguments after the output file (or after `--`) are passed to the program. A program that returns nothing is an error, and a program that fails exits with its status without writing the file.
 
 ```sh
-flywheel export report.fw report.html
-flywheel export totals.fw totals.json 2026 november
+flywheel --export report.fw report.html
+flywheel --export totals.fw totals.json 2026 november
 ```
 
-`flywheel debug file.fw` runs a program and then prints its return value, type, and run time (excluding compilation) on one line to standard error:
+`flywheel --debug file.fw` runs a program and then prints its return value, type, and run time (excluding compilation) on one line to standard error:
 
 ```text
-$ flywheel debug totals.fw -- 2026
+$ flywheel --debug totals.fw -- 2026
 [debug] returned map<string,int> {"days":30,"total":412} in 1.84 ms
-$ flywheel debug -s 'throw "Oops" with "bad"'
+$ flywheel --debug -x 'throw "Oops" with "bad"'
 Flywheel runtime error: Oops: bad
 [debug] no return value, exit status 1 in 1.62 ms
 ```
 
-Values longer than 120 characters are shortened. Both commands accept the options of `run`.
+Values longer than 120 characters are shortened. Both accept the options of running.
 
 The [`flywheel` module](../stdlib/README.md#flywheel) does the same from inside a program: `flywheel.run("other.fw")` runs another file and returns its top-level return value instead of exiting.
 
 ## Source code and URLs
 
-`-s CODE` (or `--source CODE`) runs code given on the command line instead of a file, with every command that takes a source file. Imports resolve from the working directory, and diagnostics name the code `<source>`:
+`-x CODE` (or `--source CODE`) runs code given on the command line instead of a file, with every mode that takes a source file. Imports resolve from the working directory, and diagnostics name the code `<source>`:
 
 ```sh
-flywheel run -s 'print 6 * 7'
-flywheel debug -s 'import math
+flywheel -x 'print 6 * 7'
+flywheel --debug -x 'import math
 return math.sqrt(2.0)'
-flywheel export -s 'import html.*
+flywheel --export -x 'import html.*
 return <p>generated</p>' page.html
 ```
 
 The source file may also be a URL: `https://`, `http://`, `ftp://`, `ftps://`, and `sftp://` are downloaded with `curl`; `ssh://[user@]host[:port]/path` and `scp://` read the file with `ssh` (a path starting `/~/` is relative to the remote home directory); `file://` names a local file. `ws://` and `wss://` are rejected: a WebSocket is a stream of messages, not a file. Modules that a program fetched by URL imports are fetched from beside it (`import helpers` in `https://example.com/app/main.fw` loads `https://example.com/app/helpers.fw`), except names of library and native modules and installed packages, which resolve as usual.
 
 ```sh
-flywheel run https://example.com/tools/hello.fw
-flywheel build ssh://me@server/~/projects/app/main.fw -o app
+flywheel https://example.com/tools/hello.fw
+flywheel --build ssh://me@server/~/projects/app/main.fw -o app
 ```
 
 Downloads run on every compile. Only run code from sources you trust: a program fetched by URL runs with your permissions, like a local one.
 
 ## Interactive sessions
 
-`flywheel repl` reads statements, expressions, and declarations. An expression on its own is printed. Multi-line input (such as a function) continues until the block is complete. Each input is added to a session program that is compiled and run again from the start; only output produced by the new input is shown, and inputs that fail are dropped. Because earlier statements run again, side effects such as writing files or reading input repeat. `:show` lists the session, `:reset` clears it, and `:quit` ends it.
+`flywheel --repl` reads statements, expressions, and declarations. An expression on its own is printed. Multi-line input (such as a function) continues until the block is complete. Each input is added to a session program that is compiled and run again from the start; only output produced by the new input is shown, and inputs that fail are dropped. Because earlier statements run again, side effects such as writing files or reading input repeat. `:show` lists the session, `:reset` clears it, and `:quit` ends it.
 
 ```text
 fw> var x = 4
@@ -192,7 +224,7 @@ fw> sq(x)
 
 ## Documentation
 
-`flywheel doc module.fw [-o module.html]` writes an HTML page for a module. The first comment block of the file describes the module; the `#` comment lines directly above a public function, class, interface, enum, constant, field, or method document it. Private declarations are left out. In comments, blank comment lines separate paragraphs, `` `code` `` marks code, and lines between ```` ``` ```` fences are shown as code blocks.
+`flywheel --doc module.fw [-o module.html]` writes an HTML page for a module. The first comment block of the file describes the module; the `#` comment lines directly above a public function, class, interface, enum, constant, field, or method document it. Private declarations are left out. In comments, blank comment lines separate paragraphs, `` `code` `` marks code, and lines between ```` ``` ```` fences are shown as code blocks.
 
 ```flywheel
 # Inventory helpers.
@@ -210,11 +242,11 @@ Packages are managed by [Pulley](../../pulley/README.md) (`pulley`, also `ppm`),
 ```sh
 pulley new app && cd app
 pulley add wednesware.shapes        # adds shapes = "wednesware.shapes=^1.2.0" and installs it
-flywheel run app.fw                 # `import shapes` finds .flywheel-modules/shapes
+flywheel app.fw                 # `import shapes` finds .flywheel-modules/shapes
 pulley install -g wednesware.shapes # for every program of this Flywheel installation
 ```
 
-`flywheel new NAME` runs `pulley new NAME`, and `flywheel new game NAME` runs `pulley new NAME --game`, which starts a game: [Aperture](https://github.com/pmorphia/aperture) as a dependency, a small playable game loop, an `assets/` directory, and a `start` script (`pulley install && pulley run start`).
+`flywheel --new NAME` runs `pulley new NAME`, and `flywheel --new --game NAME` runs `pulley new NAME --game`, which starts a game: [Aperture](https://github.com/pmorphia/aperture) as a dependency, a small playable game loop, an `assets/` directory, and a `start` script (`pulley install && pulley run start`).
 
 The compiler resolves `import name` (after local `.fw`/`.fly` files) in:
 
@@ -225,7 +257,7 @@ and then library and native modules. In a modules directory, a package is a dire
 
 ## Editor integration
 
-`flywheel lsp` is a Language Server Protocol server over standard input and output. It provides:
+`flywheel --lsp` is a Language Server Protocol server over standard input and output. It provides:
 
 - diagnostics on open, change, and save, checking unsaved buffers (including unsaved imported modules that are open in the editor) with the full compiler front end;
 - hover: the declaration's source line and its documentation comment;
@@ -237,4 +269,4 @@ and then library and native modules. In a modules directory, a package is a dire
 
 Navigation uses a syntactic index of each file, so it works while a file has type errors; `obj.member` resolves through the classes that declare a member of that name. The compiler reports the first error it finds, so the server publishes one diagnostic at a time.
 
-The [VS Code extension](https://github.com/pmorphia/vscode-flywheel) starts the server for `.fw` and `.fly` files; its `flywheel.path` setting names the compiler. Other editors can start `flywheel lsp` from a generic LSP client.
+The [VS Code extension](https://github.com/pmorphia/vscode-flywheel) starts the server for `.fw` and `.fly` files; its `flywheel.path` setting names the compiler. Other editors can start `flywheel --lsp` from a generic LSP client.

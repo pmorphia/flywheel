@@ -146,13 +146,13 @@ Comments in a C or C++ source name what it needs, so a native module (or a packa
 | `// flywheel: cflags -DFAST -Ivendor` | extra compiler flags |
 | `// flywheel: ldflags -L/opt/lib` | extra linker flags |
 
-`// flywheel(linux): ...`, `(windows)`, `(macos)`, and `(unix)` apply on that platform only. With `flywheel run` the libraries are linked into the module's shared library; `flywheel build` links them into the executable.
+`// flywheel(linux): ...`, `(windows)`, `(macos)`, and `(unix)` apply on that platform only. When running a program, the libraries are linked into the module's shared library; `flywheel --build` links them into the executable.
 
 Functions with other types (unions, bit fields, structs from included headers, classes, templates, generics), `main`, functions inside C++ namespaces and classes, and functions named like Flywheel keywords are not exposed; only the first of overloaded C++ functions is. Rust functions must be `pub` (or `pub(crate)`) and Zig functions `pub` or `export`; C `static` functions are exposed, since the module is compiled together with its source. Integers are converted from Flywheel's 64-bit `int` with the language's usual casts. Strings are UTF-8; string results are copied.
 
 Failures become catchable `NativeError`s: C++ exceptions (with their `what()` message), Rust panics (with the panic message), and Zig error-union results (`!T`, with the error name). Crashes in native code (null pointers, aborts) end the program.
 
-Each module is compiled once and cached in Flywheel's cache directory (`$XDG_CACHE_HOME/flywheel` or `~/.cache/flywheel`, `%LOCALAPPDATA%\flywheel` on Windows) and recompiled when its source changes. C and C++ use the C++ compiler Flywheel was built with; Rust needs `rustc`, and Zig needs `zig` 0.12 or newer, on `PATH`. `flywheel build` links the native code into the executable; `flywheel check` only reads the sources.
+Each module is compiled once and cached in Flywheel's cache directory (`$XDG_CACHE_HOME/flywheel` or `~/.cache/flywheel`, `%LOCALAPPDATA%\flywheel` on Windows) and recompiled when its source changes. C and C++ use the C++ compiler Flywheel was built with; Rust needs `rustc`, and Zig needs `zig` 0.12 or newer, on `PATH`. `flywheel --build` links the native code into the executable; `flywheel --check` only reads the sources.
 
 ## Public and private declarations
 
@@ -181,5 +181,5 @@ A local module named like a native library takes precedence, so a file `gc.fw` n
 Run the multi-file example with:
 
 ```sh
-build/flywheel run examples/modules/main.fw
+build/flywheel examples/modules/main.fw
 ```

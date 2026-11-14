@@ -1,7 +1,7 @@
 # A game-shaped workload: N particles in an array of structs, moved for F frames with gravity,
 # bouncing off the walls of a 1280x720 box. Prints a checksum and the milliseconds per frame.
 #
-#     flywheel build benchmarks/particles/particles.fw -O3 -o particles && ./particles 50000 600
+#     flywheel --build benchmarks/particles/particles.fw -O3 -o particles && ./particles 50000 600
 import os
 import time
 

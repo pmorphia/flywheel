@@ -250,7 +250,7 @@ def main():
                     command = (
                         [
                             compiler,
-                            "build",
+                            "--build",
                             str(root / "main.fly"),
                             f"-O{opt}",
                             "-o",

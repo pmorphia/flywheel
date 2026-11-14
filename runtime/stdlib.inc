@@ -1179,7 +1179,7 @@ Object *fw_json_encode(Frame *frame, Object *box, int64_t indent) {
 }
 
 // os -------------------------------------------------------------------------------------------
-// The file a top-level `return` records its value in (flywheel export, debug, and the flywheel
+// The file a top-level `return` records its value in (flywheel --export, --debug, and the flywheel
 // module set FW_RETURN_FILE). It is read once and removed from the environment so child
 // processes of the program do not inherit it.
 std::string &returnFile() {
@@ -1746,7 +1746,7 @@ Object *fw_flywheel_invoke(Frame *frame, const char *compiled, Object *command, 
             if (!std::filesystem::exists(record))
                 break;
         }
-        std::vector<std::string> argv = {compiler, command->text};
+        std::vector<std::string> argv = {compiler, "--" + command->text};
         for (auto &slot : itemsOf(options))
             argv.push_back(slot.object->text);
         argv.push_back(file->text);
@@ -1774,7 +1774,7 @@ Object *fw_flywheel_invoke(Frame *frame, const char *compiled, Object *command, 
         auto newline = recorded.find('\n');
         if (newline == std::string::npos) {
             if (status != 0)
-                fail("flywheel " + command->text + " " + file->text + " failed with status " +
+                fail("flywheel --" + command->text + " " + file->text + " failed with status " +
                          std::to_string(status),
                      "ProcessError");
             return fw_json_parse(frame, string(frame, "null"));
