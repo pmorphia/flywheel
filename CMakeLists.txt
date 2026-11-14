@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
-project(Flywheel VERSION 2.22 LANGUAGES C CXX)
+project(Flywheel VERSION 2.23 LANGUAGES C CXX)
 # Pre-release tag of this version; empty for a final release. `flywheel --version` reports both.
-set(FLYWHEEL_PRERELEASE "beta-22")
+set(FLYWHEEL_PRERELEASE "beta-23")
 if(FLYWHEEL_PRERELEASE)
   set(FLYWHEEL_VERSION "${PROJECT_VERSION} (${FLYWHEEL_PRERELEASE})")
 else()
