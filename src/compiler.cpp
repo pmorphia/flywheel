@@ -491,13 +491,14 @@ class Compiler {
                     return unitBinary(op, qa->real ? a : callNamedMethod(a, "__fwu_float", {}),
                                       *converted);
             if (qa->ns == qc->ns &&
-                (op == "+" || op == "-" || op == "/" || comparisons.count(op))) {
+                (op == "+" || op == "-" || op == "%" || op == "/" || comparisons.count(op))) {
                 if (qa->real != qc->real) {
                     a = toReal(a);
                     c = toReal(c);
                 }
-                if (op == "+" || op == "-")
-                    return callNamedMethod(a, op == "+" ? "__fwu_add" : "__fwu_sub", {c});
+                if (op == "+" || op == "-" || op == "%")
+                    return callNamedMethod(
+                        a, op == "+" ? "__fwu_add" : op == "-" ? "__fwu_sub" : "__fwu_mod", {c});
                 if (op == "/")
                     return callNamedMethod(a, "__fwu_ratio", {c});
                 auto order = callNamedMethod(a, "__fwu_cmp", {c});
@@ -521,7 +522,8 @@ class Compiler {
             if (qa->ns != qc->ns)
                 error("cannot use " + op + " on " + both + ": they are in different unit "
                       "namespaces");
-            error("operator " + op + " is not defined for quantities; use + - * / and comparisons");
+            error("operator " + op + " is not defined for quantities; use + - * / % and "
+                  "comparisons");
         }
         auto q = qa ? qa : qc;
         Val amount = qa ? a : c, number = qa ? c : a;
@@ -902,31 +904,50 @@ class Compiler {
         for (auto &f : c.fields) {
             location = f.loc;
             auto t = type(f.type);
-            if (!primitive(t) && !t.structure())
+            if (!primitive(t) && !t.structure() && !quantity(t))
                 error("struct field '" + f.name + "' has type " + displayName(t.name) +
-                      "; struct fields are numbers, bool, char, enums, and other structs "
-                      "(use a class to hold references)");
-            members.push_back(ll(t));
+                      "; struct fields are numbers, quantities, bool, char, enums, and other "
+                      "structs (use a class to hold references)");
+            members.push_back(fieldType(t));
         }
         structsBuilding.erase(name);
         return structTypes[name] =
                    llvm::StructType::create(ctx, members, "struct." + displayName(name));
+    }
+    // A quantity field of a struct is stored inline, like a nested struct: its amount and unit
+    // index, with the quantity class's own two fields as the layout. Reading the field makes the
+    // quantity object again; writing it takes the object apart.
+    llvm::Type *fieldType(Ty t) {
+        return quantity(t) ? structType(t.name) : ll(t);
+    }
+    Val readField(llvm::Value *aggregate, size_t i, Ty t) {
+        auto v = b.CreateExtractValue(aggregate, static_cast<unsigned>(i));
+        if (quantity(t))
+            return {boxStruct({v, t}), t};
+        return {v, t};
+    }
+    llvm::Value *writeField(llvm::Value *aggregate, size_t i, Val x) {
+        auto v = quantity(x.t) ? unboxStruct(b, x.v, x.t) : x.v;
+        return b.CreateInsertValue(aggregate, v, static_cast<unsigned>(i));
     }
     // A struct value as a heap instance of its class, for slots of collections, class fields,
     // closures, and anything else the runtime stores. Nested structs are boxed in turn.
     llvm::Value *boxStruct(Val x) {
         auto &c = *classes.at(x.t.name);
         auto object = newInstance(c).v;
-        for (size_t i = 0; i < c.fields.size(); ++i)
+        for (size_t i = 0; i < c.fields.size(); ++i) {
+            auto ft = type(c.fields[i].type);
             set({object, Ty{"Error"}}, i64(static_cast<int64_t>(i)),
-                {b.CreateExtractValue(x.v, static_cast<unsigned>(i)), type(c.fields[i].type)});
+                quantity(x.t) ? Val{b.CreateExtractValue(x.v, static_cast<unsigned>(i)), ft}
+                              : readField(x.v, i, ft));
+        }
         return object;
     }
     // Reads a boxed struct back into a value, with `builder` (no error checks: the box always
     // has the struct's fields).
     llvm::Value *unboxStruct(llvm::IRBuilder<> &builder, llvm::Value *object, Ty t) {
         auto &c = *classes.at(t.name);
-        llvm::Value *out = llvm::PoisonValue::get(ll(t));
+        llvm::Value *out = llvm::PoisonValue::get(structType(t.name));
         auto slot = [&](const char *function, llvm::Type *result, size_t i) {
             return builder.CreateCall(
                 module.getOrInsertFunction(
@@ -937,7 +958,7 @@ class Compiler {
         for (size_t i = 0; i < c.fields.size(); ++i) {
             auto ft = type(c.fields[i].type);
             llvm::Value *v;
-            if (ft.structure())
+            if (ft.structure() || quantity(ft))
                 v = unboxStruct(builder, slot("fw_get_object", b.getPtrTy(), i), ft);
             else if (ft.real())
                 v = builder.CreateFPCast(slot("fw_get_real", b.getDoubleTy(), i), ll(ft));
@@ -954,6 +975,10 @@ class Compiler {
         llvm::Value *all = b.getTrue();
         for (size_t i = 0; i < c.fields.size(); ++i) {
             auto ft = type(c.fields[i].type);
+            if (quantity(ft)) { // 1m and 100cm are equal
+                all = b.CreateAnd(all, binary("==", readField(x.v, i, ft), readField(y.v, i, ft)).v);
+                continue;
+            }
             Val l{b.CreateExtractValue(x.v, static_cast<unsigned>(i)), ft};
             Val r{b.CreateExtractValue(y.v, static_cast<unsigned>(i)), ft};
             auto same = ft.structure() ? structEqual(l, r)
@@ -1343,7 +1368,7 @@ end
         if (x.t.nullable() && inlineValue(nonNull(x.t)) && inlineValue(to)) {
             if (!explicit_)
                 error("cannot implicitly convert " + x.t.name + " to " + to.name +
-                      "; check for null, use '?\?', or cast explicitly");
+                      "; check for null, use 'otherwise', or cast explicitly");
             return convert(unboxChecked(x), to, true);
         }
         if (explicit_ && x.t.nullable() && x.t.name == to.name + "?") {
@@ -1913,7 +1938,8 @@ end
         std::vector<llvm::Constant *> fields;
         auto null = llvm::ConstantPointerNull::get(ptr);
         llvm::Constant *id = null, *name = null, *names = null;
-        if (t.structure()) {
+        bool inlined = t.structure() || quantity(t).has_value(); // a quantity only as a field
+        if (inlined) {
             auto &c = *classes.at(t.name);
             auto layout = dl.getStructLayout(structType(t.name));
             std::string joined;
@@ -1922,7 +1948,7 @@ end
                 joined += (i ? "," : "") + c.fields[i].name;
                 auto offset = llvm::ConstantInt::get(
                     i64t, layout->getElementOffset(static_cast<unsigned>(i)));
-                fields.push_back(ft.structure()
+                fields.push_back(ft.structure() || quantity(ft)
                                      ? llvm::ConstantStruct::get(
                                            fieldTy, {llvm::ConstantInt::get(i64t, 4), offset,
                                                      flatLayout(ft)})
@@ -1941,9 +1967,9 @@ end
         if (fields.empty()) // a struct without fields still has a fields array
             fields.push_back(llvm::ConstantAggregateZero::get(fieldTy));
         auto array = llvm::ConstantArray::get(llvm::ArrayType::get(fieldTy, fields.size()), fields);
-        auto size = std::max<uint64_t>(dl.getTypeAllocSize(ll(t)), 1);
+        auto size = std::max<uint64_t>(dl.getTypeAllocSize(inlined ? structType(t.name) : ll(t)), 1);
         auto value = llvm::ConstantStruct::getAnon(
-            {llvm::ConstantInt::get(i64t, size), llvm::ConstantInt::get(i64t, t.structure()),
+            {llvm::ConstantInt::get(i64t, size), llvm::ConstantInt::get(i64t, inlined),
              llvm::ConstantInt::get(i64t, count), id, name, names, array});
         auto global = new llvm::GlobalVariable(module, value->getType(), true,
                                                llvm::GlobalValue::PrivateLinkage, value,
@@ -2270,7 +2296,7 @@ end
             return {op == "==" ? eq : b.CreateNot(eq), Ty{"bool"}};
         }
         if ((optionalA || optionalC) && op != "==" && op != "!=")
-            error("operator '" + op + "' requires non-null operands; check for null or use '?\?'");
+            error("operator '" + op + "' requires non-null operands; check for null or use 'otherwise'");
         if ((op == "==" || op == "!=") && classes.count(a.t.name) && classes.count(c.t.name) &&
             !resolveMethod(a.t.name, "equals").empty() &&
             (derives(a.t.name, c.t.name) || derives(c.t.name, a.t.name))) {
@@ -3879,8 +3905,7 @@ Val Compiler::value(Expr &e, Ty expected) {
             return boundMethod(obj, e.text);
         auto [c, i] = field(obj.t, e.text);
         if (obj.t.structure())
-            return {b.CreateExtractValue(obj.v, static_cast<unsigned>(i)),
-                    type(c->fields[i].type)};
+            return readField(obj.v, i, type(c->fields[i].type));
         return get(obj, fieldIndex(obj, e.text, i), type(c->fields[i].type));
     }
     if (e.kind == "member" && e.args[0]->kind == "name" && enums.count(e.args[0]->text) &&
@@ -3964,8 +3989,7 @@ Val Compiler::value(Expr &e, Ty expected) {
             return boundMethod(obj, e.text);
         auto [c, i] = field(obj.t, e.text);
         if (obj.t.structure())
-            return {b.CreateExtractValue(obj.v, static_cast<unsigned>(i)),
-                    type(c->fields[i].type)};
+            return readField(obj.v, i, type(c->fields[i].type));
         return get(obj, fieldIndex(obj, e.text, i), type(c->fields[i].type));
     }
     if (e.kind == "index") {
@@ -5195,7 +5219,7 @@ Val Compiler::invoke(Expr &e, Ty expected) {
                 x = defaultValue(*f.value, t);
             else
                 error("missing field '" + f.name + "' of struct " + name);
-            out = b.CreateInsertValue(out, convert(x, t).v, static_cast<unsigned>(i));
+            out = writeField(out, i, convert(x, t));
         }
         return {out, Ty{name}};
     }
@@ -6301,10 +6325,9 @@ void Compiler::assignStructField(Stmt &s, Val object) {
     Ty target = type(c->fields[i].type);
     auto rhs = value(*s.expr, target);
     if (s.op != "=")
-        rhs = binary(s.op.substr(0, s.op.size() - 1),
-                     {b.CreateExtractValue(object.v, static_cast<unsigned>(i)), target}, rhs);
+        rhs = binary(s.op.substr(0, s.op.size() - 1), readField(object.v, i, target), rhs);
     rhs = convert(rhs, target);
-    Val updated{b.CreateInsertValue(object.v, rhs.v, static_cast<unsigned>(i)), object.t};
+    Val updated{writeField(object.v, i, rhs), object.t};
     scopes.emplace_back();
     auto name = "$sv" + std::to_string(hiddenCount++);
     bind(name, updated, true);
@@ -7891,6 +7914,47 @@ std::optional<Val> Compiler::mathCall(const std::string &name, std::vector<Val> 
         return Val{b.CreateFCmpOLT(magnitude, llvm::ConstantFP::getInfinity(b.getDoubleTy())),
                    Ty{"bool"}};
     }
+    // min, max, clamp and abs also take quantities of one namespace (int and float mixed give
+    // float); the result keeps the unit of the value chosen.
+    bool quantities = false;
+    for (auto &a : args)
+        quantities = quantities || quantity(a.t).has_value();
+    if (quantities && (method == "min" || method == "max" || method == "clamp" || method == "abs")) {
+        if (method == "abs") {
+            count(1);
+            return callNamedMethod(args[0], "__fwu_abs", {});
+        }
+        if (method == "clamp")
+            count(3);
+        else if (args.size() < 2)
+            error(name + " expects at least two values");
+        auto first = quantity(args[0].t);
+        bool real = false;
+        for (auto &a : args) {
+            auto q = quantity(a.t);
+            if (!q)
+                error(name + " cannot mix " + displayName(args[0].t.name) + " and " +
+                      displayName(a.t.name) + "; give every value a unit");
+            if (q->ns != first->ns)
+                error(name + " needs quantities of one namespace, not " +
+                      displayName(args[0].t.name) + " and " + displayName(a.t.name));
+            real = real || q->real;
+        }
+        for (auto &a : args)
+            if (real && !quantity(a.t)->real)
+                a = callNamedMethod(a, "__fwu_float", {});
+        auto pick = [&](const std::string &op, Val x, Val y) {
+            return Val{b.CreateSelect(binary(op, x, y).v, x.v, y.v), x.t};
+        };
+        if (method == "clamp") {
+            guard(binary("<=", args[1], args[2]).v, "math.clamp requires low <= high");
+            return pick(">=", pick("<=", args[0], args[2]), args[1]);
+        }
+        auto best = args[0];
+        for (size_t i = 1; i < args.size(); ++i)
+            best = pick(method == "min" ? "<=" : ">=", best, args[i]);
+        return best;
+    }
     if (method == "abs") {
         count(1);
         auto x = args[0];
@@ -7952,7 +8016,7 @@ std::optional<Val> Compiler::mathCall(const std::string &name, std::vector<Val> 
     }
     return std::nullopt;
 }
-// a ?? b: a's payload when a is not null, otherwise b (evaluated only then).
+// a otherwise b (the "??" node): a's payload when a is not null, else b (evaluated only then).
 // `x if condition else y`: evaluates one branch. The result has the expected type, else the
 // common type of the branches (a numeric widening, a shared base class, or nullable when one
 // branch is null).
@@ -8258,7 +8322,7 @@ void Compiler::checkBounds(const std::string &generic, const std::vector<std::st
         if (bound == "numeric")
             ok = t.numeric();
         else if (bound == "comparable")
-            ok = t.numeric() || t.name == "string" || t.name == "char" ||
+            ok = t.numeric() || t.name == "string" || t.name == "char" || quantity(t) ||
                  (classes.count(t.name) && !resolveMethod(t.name, "operator<").empty());
         else if (bound == "hashable")
             ok = hashable(t);

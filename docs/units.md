@@ -70,6 +70,7 @@ print trip / 30min in kmph       # 25kmph
 | `a < b`, `a == b`, ... (same namespace) | compares the amounts: `1m == 100cm` is `true` |
 | `a * n`, `n * a`, `a / n`, `a // n` | scales the amount; `/` gives a float quantity, `//` keeps `int` |
 | `a / b` (same namespace) | a plain `float` ratio: `100m / 2km` is `0.05` |
+| `a % b` (same namespace) | the remainder in the finer unit, with the dividend's sign: `90s % 1min` is `30s`, `400deg % 360deg` is `40deg` |
 | `-a` | negates the amount |
 | `a * b`, `a / b` (different namespaces) | uses a `unitconv` relation, see below |
 
@@ -78,6 +79,9 @@ print trip / 30min in kmph       # 25kmph
   - Mixing a quantity with a plain number in `+`, `-`, or comparisons: `5s + 1` needs a unit, such as `5s + 1s`.
   - Assigning a plain number to a quantity variable, or a quantity to a number variable. Use `.value` for the number.
 - **Mixed int and float:** mixing `int` and `float` quantities gives a float quantity.
+- **`math.min`, `math.max`, `math.clamp`, `math.abs`:** take quantities of one namespace as well as numbers, and return the chosen value in its own unit: `math.min(3s, 500ms)` is `500ms`, `math.clamp(pitch, 5deg, 70deg)`. A quantity and a plain number cannot be mixed.
+- **Generics:** quantities satisfy `T is comparable`, so `function least<T is comparable>(T a, T b)` works for `float[time]` as for numbers.
+- **Structs:** a struct field can be a quantity (`float[time] life = 800ms`); it is stored inline, so arrays of such structs stay one contiguous block. A nullable quantity (`float[time]?`) cannot be a struct field.
 - **Inexact int addition:** `int` addition needs a whole-number ratio between the units. For example, `1m + 1ft` raises `ValueError`; use `float[length]` for such units.
 
 ## Relations between namespaces
@@ -130,4 +134,4 @@ print 3m * 4m * 2m in l                  # 24000l
 
 ## Implementation
 
-The module loader lowers each module's units once its imports are loaded (see `src/modules.cpp`). Each namespace becomes hidden classes, `int[time]` and `float[time]`, holding the number and the unit's index; tables of unit names and exact conversion ratios are generated as constants (see `src/units.cpp`). Quantities are ordinary heap objects, so arithmetic on them allocates like any other object.
+The module loader lowers each module's units once its imports are loaded (see `src/modules.cpp`). Each namespace becomes hidden classes, `int[time]` and `float[time]`, holding the number and the unit's index; tables of unit names and exact conversion ratios are generated as constants (see `src/units.cpp`). Quantities are ordinary heap objects, so arithmetic on them allocates like any other object. A quantity field of a struct is stored as its amount and unit index, inline like a nested struct, and made into a quantity again when it is read.

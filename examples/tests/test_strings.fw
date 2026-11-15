@@ -13,5 +13,5 @@ end
 
 function test_optional_fallback() returns void
     int? missing = null
-    testing.assert_equal(missing ?? 7, 7)
+    testing.assert_equal(missing otherwise 7, 7)
 end

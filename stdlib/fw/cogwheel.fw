@@ -635,7 +635,7 @@ end
 
 private function markup_source(element e, int depth) returns string
     if e.tag == "cw-heading" do
-        var out = "#".repeat(min_level(depth + 1)) + " " + (e.get_attribute("name") ?? "") + "\n\n"
+        var out = "#".repeat(min_level(depth + 1)) + " " + (e.get_attribute("name") otherwise "") + "\n\n"
         for child in e.children do
             out += markup_source(child, depth + 1)
         end
@@ -645,7 +645,7 @@ private function markup_source(element e, int depth) returns string
         return e.text_content.trim() + "\n\n"
     end
     if e.tag == "cw-conf" do
-        return entry_line(e.get_attribute("key") ?? "", e.get_attribute("value") ?? "") + "\n"
+        return entry_line(e.get_attribute("key") otherwise "", e.get_attribute("value") otherwise "") + "\n"
     end
     string out = ""
     for child in e.children do

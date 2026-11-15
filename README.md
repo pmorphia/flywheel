@@ -99,12 +99,12 @@ for shape in shapes do
 end
 
 int? best = null
-print best ?? 0, "héllo".length, 7.5 // 2, 1 < 2 < 3
+print best otherwise 0, "héllo".length, 7.5 // 2, 1 < 2 < 3
 print Box("generic").value
 print <ul>{shapes.map(function(Shape s) => <li>{s.area()}</li>)}</ul>
 ```
 
-The language has classes with `constructor` and `destructor`, `public`/`private`/`protected`, `static` and `readonly` members, and operator methods; `struct` value types (points, colors, rectangles) that are copied like numbers and never allocated; multiple inheritance (C3 method order, `super.method` and `super.Base.method`), interfaces, function and class decorators, the conditional expression `x if c else y`, `unless`, `spawn` for threads, enums (including enums with data), exhaustive `match` statements and expressions with destructuring, monomorphized generics with constraints and generic methods, nullable values (including `int?`) with `??` and null-check narrowing, `char`, closures that share captured variables, first-class methods and constructors, sets and custom map keys, frozen collections, `defer`, format specs in interpolation, and an iterator protocol. See [language decisions](docs/language.md), [types](docs/types.md), and [collections](docs/collections.md).
+The language has classes with `constructor` and `destructor`, `public`/`private`/`protected`, `static` and `readonly` members, and operator methods; `struct` value types (points, colors, rectangles) that are copied like numbers and never allocated; multiple inheritance (C3 method order, `super.method` and `super.Base.method`), interfaces, function and class decorators, the conditional expression `x if c else y`, `unless`, `spawn` for threads, enums (including enums with data), exhaustive `match` statements and expressions with destructuring, monomorphized generics with constraints and generic methods, nullable values (including `int?`) with `otherwise` fallbacks and null-check narrowing, `char`, closures that share captured variables, first-class methods and constructors, sets and custom map keys, frozen collections, `defer`, format specs in interpolation, and an iterator protocol. See [language decisions](docs/language.md), [types](docs/types.md), and [collections](docs/collections.md).
 
 ```flywheel
 enum Token

@@ -109,7 +109,7 @@ add(P(3, 0))
 var read = function() returns double => total.x
 print total.x, read()
 P? maybe = null
-print maybe == null, maybe ?? P(8, 8)
+print maybe == null, maybe otherwise P(8, 8)
 maybe = P(1, 2)
 if maybe != null do
     print maybe.y
@@ -2070,7 +2070,7 @@ print 1 <= r <= 6, math.random() < 1.0""",
         "nullable_primitives": (
             """int? a = null
 int? b = 5
-print a, b, a ?? 10, b ?? 10
+print a, b, a otherwise 10, b otherwise 10
 print a == null, b == 5, b != 5, a == b
 if b != null do
     print b + 1
@@ -2098,14 +2098,14 @@ end
 print describe(null), describe(4)
 bool? flag = true
 double? d = 2.5
-print flag ?? false, d
+print flag otherwise false, d
 map<string, int?> m = {"x": 1, "y": null}
 print m, int(b), string(a)
 class Opt
     int? value = null
 end
 var o = Opt()
-print o.value ?? -1
+print o.value otherwise -1
 o.value = 3
 print o""",
             'null 5 10 5\ntrue true false false\n6\na missing\n4 null\nnothing got 8\ntrue 2.5\n{"x": 1, "y": null} 5 null\n-1\nOpt(value=3)\n',
@@ -2515,7 +2515,7 @@ POSITIVE.update(
             'import html.*\nstring[] names = ["a", "<b>"]\nelement? none = null\nprint <ul>{names.map(function(string n) => <li>{n}</li>)}{none}</ul>\nprint <p>{[1, 2]}</p>',
             "<ul><li>a</li><li>&lt;b&gt;</li></ul>\n<p>12</p>\n",
         ),
-        "example_types": ('# Classes, interfaces, enums, generics, optional values, and pattern matching.\ninterface Shape\n    function area() returns double\n    function name() returns string\nend\n\nclass Circle implements Shape\n    double radius\n    function area() returns double\n        return 3.14159 * this.radius * this.radius\n    end\n    function name() returns string\n        return "circle"\n    end\nend\n\nclass Rectangle implements Shape\n    double width\n    double height\n    function area() returns double\n        return this.width * this.height\n    end\n    function name() returns string\n        return "rectangle"\n    end\nend\n\nclass Square extends Rectangle\n    constructor(double side)\n        super.constructor(side, side)\n    end\n    function name() returns string\n        return "square"\n    end\nend\n\nenum Verdict\n    Small, Medium, Large\nend\n\nfunction judge(Shape shape) returns Verdict\n    match shape\n        case Square s if s.width > 3.0 do\n            return Verdict.Large\n        case Circle c if c.radius < 1.0 do\n            return Verdict.Small\n        else do\n            return Verdict.Medium\n    end\nend\n\nclass Stack<T>\n    T[] items\n    constructor()\n        this.items = []\n    end\n    function push(T item)\n        this.items.push(item)\n    end\n    function pop() returns T?\n        if this.items.length == 0 do\n            return null\n        end\n        return this.items.pop()\n    end\nend\n\nShape[] shapes = [Circle(0.5), Rectangle(2.0, 3.0), Square(4.0)]\nfor shape in shapes do\n    print shape.name(), shape.area(), judge(shape)\nend\n\nStack<string> names = Stack()\nnames.push("first")\nnames.push("second")\nvar top = names.pop()\nprint top ?? "empty", names.pop() ?? "empty", names.pop() ?? "empty"\n', "circle 0.7853975 Small\nrectangle 6 Medium\nsquare 16 Large\nsecond first empty\n"),
+        "example_types": ('# Classes, interfaces, enums, generics, optional values, and pattern matching.\ninterface Shape\n    function area() returns double\n    function name() returns string\nend\n\nclass Circle implements Shape\n    double radius\n    function area() returns double\n        return 3.14159 * this.radius * this.radius\n    end\n    function name() returns string\n        return "circle"\n    end\nend\n\nclass Rectangle implements Shape\n    double width\n    double height\n    function area() returns double\n        return this.width * this.height\n    end\n    function name() returns string\n        return "rectangle"\n    end\nend\n\nclass Square extends Rectangle\n    constructor(double side)\n        super.constructor(side, side)\n    end\n    function name() returns string\n        return "square"\n    end\nend\n\nenum Verdict\n    Small, Medium, Large\nend\n\nfunction judge(Shape shape) returns Verdict\n    match shape\n        case Square s if s.width > 3.0 do\n            return Verdict.Large\n        case Circle c if c.radius < 1.0 do\n            return Verdict.Small\n        else do\n            return Verdict.Medium\n    end\nend\n\nclass Stack<T>\n    T[] items\n    constructor()\n        this.items = []\n    end\n    function push(T item)\n        this.items.push(item)\n    end\n    function pop() returns T?\n        if this.items.length == 0 do\n            return null\n        end\n        return this.items.pop()\n    end\nend\n\nShape[] shapes = [Circle(0.5), Rectangle(2.0, 3.0), Square(4.0)]\nfor shape in shapes do\n    print shape.name(), shape.area(), judge(shape)\nend\n\nStack<string> names = Stack()\nnames.push("first")\nnames.push("second")\nvar top = names.pop()\nprint top otherwise "empty", names.pop() otherwise "empty", names.pop() otherwise "empty"\n', "circle 0.7853975 Small\nrectangle 6 Medium\nsquare 16 Large\nsecond first empty\n"),
     }
 )
 
@@ -4863,7 +4863,7 @@ POSITIVE.update({
         "var grade = match 87\n    case 90..100 => 'A'\n    case 80..<90 => 'B'\n    else => 'C'\nend\n"
         'double mixed = match x case 3 => 1 else => 2.5 end\n'
         'string? none = match x\n    case 3 => null\n    else => "x"\nend\n'
-        'print grade, mixed, none ?? "none"\n'
+        'print grade, mixed, none otherwise "none"\n'
         'Animal a = Cat("Tom")\n'
         'print match a\n    case Dog d => "dog {d.name}"\n    case Cat c => "cat {c.name}"\n    else => "?"\nend\n'
         'print (match x case 3 => 10 else => 20 end) + 1, [match true case true => "t" case false => "f" end]\n'
@@ -4887,6 +4887,51 @@ NEGATIVE.update({
                                "the cases of a match expression have different types"),
     "unless_bool": ('unless 1 do\n    print 1\nend\n', "'not' requires bool"),
     "unless_identifier": ('var unless = 1\n', "expected identifier"),
+})
+
+
+# `a otherwise b` (formerly `a ?? b`); quantities in math.min/max/clamp/abs, `%`, `comparable`
+# constraints, and struct fields.
+POSITIVE.update({
+    "otherwise_fallback": (
+        'int? a = null\nint? b = 3\nstring? s = null\n'
+        'print a otherwise 10, b otherwise 10, (s otherwise "xy").length, a otherwise b otherwise 7\n'
+        'var n = a otherwise\n    5\nprint n\n'
+        'function first(int[] xs) returns int?\n    return xs[0] if xs.length > 0 else null\nend\n'
+        'var calls = 0\nfunction fallback() returns int\n    calls += 1\n    return -1\nend\n'
+        'print first([4]) otherwise fallback(), first([]) otherwise fallback(), calls\n',
+        '10 3 2 3\n5\n4 -1 1\n'),
+    "quantity_math": (
+        'import time\nimport metric\nimport math\nunitns angle\nunit angle.deg = 1\n'
+        'print math.min(3s, 500ms, 2s), math.max(1m, 30cm), math.clamp(80deg, 5deg, 70deg)\n'
+        'print math.min(2s, 1.5s), math.abs(-3m), math.abs(-2.5s), math.abs(4cm)\n'
+        'print 400deg % 360deg, 7s % 2s, 90s % 1min, 1.5min % 40s, -30deg % 360deg\n'
+        'function least<T is comparable>(T a, T b) returns T\n    return a if a < b else b\nend\n'
+        'print least(3s, 2s), least(4, 1)\n',
+        '500ms 1m 70deg\n1.5s 3m 2.5s 4cm\n40deg 1s 30s 10s -30deg\n2s 1\n'),
+    "quantity_struct_fields": (
+        'import time\nimport metric\n'
+        'struct Spark\n    double x\n    float[time] life = 800ms\n    int[metric.length] height = 2m\nend\n'
+        'var s = Spark(1.0)\ns.life -= 300ms\ns.height += 50cm\nprint s\n'
+        'Spark[] sparks = [Spark(1.0), Spark(2.0, 1s)]\nsparks.push(Spark(3.0, 0.25s, 1km))\n'
+        'sparks[0].life = 2min\n'
+        'print sparks, sparks[0] == Spark(1.0, 120s), sparks[1] == Spark(2.0, 1000ms, 200cm)\n'
+        'Spark copy = sparks[2]\ncopy.life = 0s\nprint sparks[2].life, copy.life\n'
+        'float[time] total = 0s\nfor sp in sparks do\n    total += sp.life\nend\nprint total\n',
+        'Spark(x=1, life=500ms, height=250cm)\n'
+        '[Spark(x=1, life=2min, height=2m), Spark(x=2, life=1s, height=2m), Spark(x=3, life=0.25s, height=1km)] true true\n'
+        '0.25s 0s\n121.25s\n'),
+})
+NEGATIVE.update({
+    "nullish_operator_renamed": ('int? a = null\nprint a ?? 1\n', "'??' was renamed to 'otherwise'"),
+    "otherwise_reserved": ('var otherwise = 1\n', "expected identifier"),
+    "quantity_math_mixed": ('import time\nimport math\nprint math.min(3s, 2)\n',
+                            "math.min cannot mix int[time] and int"),
+    "quantity_math_namespaces": ('import time\nimport metric\nimport math\nprint math.max(3s, 2m)\n',
+                                 "math.max needs quantities of one namespace"),
+    "quantity_mod_number": ('import time\nprint 5s % 2\n', "cannot use % on int[time] and int"),
+    "struct_nullable_quantity": ('import time\nstruct S\n    float[time]? t = null\nend\nprint S()\n',
+                                 "struct fields are numbers, quantities"),
 })
 
 

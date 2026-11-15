@@ -364,7 +364,7 @@ int precedence(const std::string &s) {
         return 4;
     if (s == "as")
         return 9;
-    if (s == "??")
+    if (s == "otherwise")
         return 5;
     if (s == ".." || s == "..<")
         return 6;
@@ -514,11 +514,12 @@ std::vector<Token> lex(const std::string &source) {
                 auto &last = out.back();
                 static const std::set<std::string> joins = {
                     "+",  "-",  "*",  "/",  "//", "%",  "==", "!=", "<=", ">=", "=",  "+=",
-                    "-=", "*=", "/=", "//=", "%=", "..", "..<", ",",  "=>", "??"};
+                    "-=", "*=", "/=", "//=", "%=", "..", "..<", ",",  "=>"};
                 bool wildcard = last.text == "*" && out.size() > 1 &&
                                 (out[out.size() - 2].text == "." || out[out.size() - 2].text == ":");
                 if ((last.kind == "op" && joins.count(last.text) && !wildcard) ||
-                    (last.kind == "id" && (last.text == "and" || last.text == "or"))) {
+                    (last.kind == "id" &&
+                     (last.text == "and" || last.text == "or" || last.text == "otherwise"))) {
                     advance(p + 1);
                     continue;
                 }
@@ -702,7 +703,7 @@ Token Parser::identifier() {
         "finally", "throw",   "this", "attr",  "true",     "false",    "null",
         "void", "weak",  "and",      "or",       "not",
         "enum",    "interface", "extends", "implements", "match", "case", "super", "is", "which",
-        "elements", "defer", "unless"};
+        "elements", "defer", "unless", "otherwise"};
     if (t.kind != "id" || reserved.count(t.text))
         throw Error(t.loc, "expected identifier");
     return t;
@@ -1152,7 +1153,7 @@ EP Parser::prefix() {
         // A quantity literal: a number with a unit right after it, 100m, 0.32km, 15time.s.
         static const std::set<std::string> keywords = {
             "and", "or", "not", "in", "is", "as", "do", "else", "end", "which", "with",
-            "returns", "if", "for", "while", "true", "false", "null"};
+            "returns", "if", "for", "while", "true", "false", "null", "otherwise"};
         if (peek().kind == "id" && !peek().spaced && !keywords.count(peek().text)) {
             auto unit = take().text;
             if (peek().text == "." && !peek().spaced && peek(1).kind == "id" && !peek(1).spaced) {
@@ -1263,7 +1264,7 @@ EP Parser::prefix() {
             "return",   "if",    "else",     "while",  "do",      "for",
             "in",       "end",   "break",     "continue", "try",    "catch",   "finally",
             "throw",    "as",    "void",      "weak",     "and",    "or",      "enum",
-            "interface", "extends", "implements", "case",  "is", "which", "unless"};
+            "interface", "extends", "implements", "case",  "is", "which", "unless", "otherwise"};
         if (structural.count(t.text))
             throw Error(t.loc, "unexpected keyword '" + t.text + "' in expression");
         take();
@@ -1377,6 +1378,8 @@ EP Parser::which(EP sequence) {
     return n;
 }
 EP Parser::operators(EP e, int level) {
+    if (peek().kind == "op" && peek().text == "??")
+        throw Error(peek().loc, "'?\?' was renamed to 'otherwise': write 'a otherwise b'");
     while ((peek().kind == "op" || peek().kind == "id") && precedence(peek().text) > level) {
         if (peek().text == "is" || peek().text == "as") {
             // x is Type tests a runtime class; x as Type is a checked downcast.
@@ -1399,9 +1402,12 @@ EP Parser::operators(EP e, int level) {
             e->args.push_back(expression(precedence(op.text)));
             continue;
         }
-        auto n = node("binary", op.text, op.loc);
+        // `a otherwise b` is the null fallback, internally the binary operator "??".
+        auto n = node("binary", op.text == "otherwise" ? "??" : op.text, op.loc);
         n->args.push_back(std::move(e));
         n->args.push_back(expression(precedence(op.text)));
+        if (peek().kind == "op" && peek().text == "??")
+            throw Error(peek().loc, "'?\?' was renamed to 'otherwise': write 'a otherwise b'");
         e = std::move(n);
     }
     return e;

@@ -12,7 +12,7 @@ This document records implemented provisional choices and current restrictions. 
 | unary | `not` | takes comparison/equality expression, binds above `and` |
 | 3 | `== !=` | chained |
 | 4 | `< <= > >= in is` | chained (`in` and `is` do not chain); strings order by code point |
-| 5 | `??` | left; the right side is evaluated only when needed |
+| 5 | `otherwise` | left; the right side is evaluated only when needed |
 | 6 | `.. ..<` | left (integer endpoints) |
 | 7 | `+ -` | left |
 | 8 | `* / // %` | left |
@@ -153,7 +153,7 @@ function copy_first_line(string from, string to)
     defer input.close()
     var output = io.open(to, "w")
     defer output.close()
-    output.write(input.read_line() ?? "")
+    output.write(input.read_line() otherwise "")
 end
 ```
 

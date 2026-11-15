@@ -695,7 +695,7 @@ class Navigator {
                              "import", "public", "private", "protected", "static", "readonly",
                              "constructor", "destructor", "this", "super", "spawn", "true",
                              "false", "null",
-                             "and", "or", "not", "print", "returns", "break", "continue",
+                             "and", "or", "not", "otherwise", "print", "returns", "break", "continue",
                              "assert", "which", "when", "run", "reactive", "computed", "with",
                              "error", "unitns", "unit", "unitconv"})
             if (seen.insert(keyword).second)

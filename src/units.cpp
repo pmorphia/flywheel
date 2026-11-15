@@ -382,7 +382,8 @@ std::string generate(Program &p, const std::vector<UnitNamespace> &imported, boo
                     << "        end\n"
                     << "        return this.value * m\n"
                     << "    end\n";
-                for (auto [name, op] : {std::pair{"add", "+"}, std::pair{"sub", "-"}})
+                for (auto [name, op] : {std::pair{"add", "+"}, std::pair{"sub", "-"},
+                                        std::pair{"mod", "%"}})
                     out << "    function __fwu_" << name << "(" << C << " o) returns " << C << "\n"
                         << "        var j = " << table("finer") << at(self, "o.__fwu_unit") << "\n"
                         << "        return " << C << "(this.__fwu_exact(j) " << op
@@ -417,7 +418,8 @@ std::string generate(Program &p, const std::vector<UnitNamespace> &imported, boo
                     << "        return " << ns.realClass << "(this.__fwu_real(j), j)\n"
                     << "    end\n";
             } else {
-                for (auto [name, op] : {std::pair{"add", "+"}, std::pair{"sub", "-"}})
+                for (auto [name, op] : {std::pair{"add", "+"}, std::pair{"sub", "-"},
+                                        std::pair{"mod", "%"}})
                     out << "    function __fwu_" << name << "(" << C << " o) returns " << C << "\n"
                         << "        var j = " << table("finer") << at(self, "o.__fwu_unit") << "\n"
                         << "        return " << C << "(this.__fwu_real(j) " << op
@@ -470,7 +472,11 @@ std::string generate(Program &p, const std::vector<UnitNamespace> &imported, boo
                         << "    end\n";
                 }
             }
-            out << "    function __fwu_ratio(" << C << " o) returns double\n"
+            out << "    function __fwu_abs() returns " << C << "\n"
+                << "        return " << C << "(-this.value if this.value < " << (isInt ? "0" : "0.0")
+                << " else this.value, " << self << ")\n"
+                << "    end\n"
+                << "    function __fwu_ratio(" << C << " o) returns double\n"
                 << "        var j = " << table("finer") << at(self, "o.__fwu_unit") << "\n"
                 << "        return this.__fwu_real(j) / o.__fwu_real(j)\n"
                 << "    end\n"

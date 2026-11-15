@@ -74,4 +74,4 @@ Stack<string> names = Stack()
 names.push("first")
 names.push("second")
 var top = names.pop()
-print top ?? "empty", names.pop() ?? "empty", names.pop() ?? "empty"
+print top otherwise "empty", names.pop() otherwise "empty", names.pop() otherwise "empty"
