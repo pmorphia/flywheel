@@ -27,6 +27,28 @@ Programs that cannot afford a pause at an arbitrary statement (games, audio, ani
 | `gc.pending()` | the number of possible roots waiting |
 | `gc.threshold()` / `gc.threshold(n)` | how many possible roots trigger an automatic collection (default 20000); setting it returns the previous value |
 
+A game typically sets a step budget each frame, or pauses during a match and collects between rounds:
+
+```flywheel
+import gc
+gc.pause()          # the match: no collection pauses
+play_round()
+gc.resume()
+gc.collect()        # between rounds, while the score screen shows
+```
+
+## Deep copies
+
+Assigning a class instance or collection aliases it. `deep_copy(value)` instead copies everything the value reaches, in one call, keeping its shape: an object reached twice is copied once, so shared references stay shared and cycles stay cycles inside the copy. It is meant for saving a whole state and going back to it: rollback netcode, replays, undo, and training-mode resets.
+
+```flywheel
+var saved = deep_copy(match)   # match: a class holding fighters, projectiles, a random.Generator, ...
+...
+match = deep_copy(saved)       # back to that moment; `saved` stays as it was
+```
+
+Numbers, bools, chars, enums, and structs are values already and come back as they are. Arrays, maps, sets, tuples, class instances, Results, boxed optionals, errors, and `json.value` documents are copied; flat arrays of structs are copied as one block. Some things are shared rather than copied, because a second copy would be wrong: strings (immutable), closures, markup elements, windows, native resources (files, sockets, threads), and instances of classes with a `destructor` (they own something outside the program, such as a texture, that two instances would free twice). A `weak` reference to an object that was copied points at its copy. A frozen collection stays frozen in the copy. Copy while no other thread changes the state.
+
 `weak<T>` holds a non-owning reference to a class instance, element, or other managed reference type. Assigning a `T` (or calling `weak(x)`) creates one; `get()` returns `T?` and `alive()` reports whether the target still exists. Each referenced object owns a shared cell that is cleared when the object is destroyed, under a lock, and `get()` only takes a reference while the target's count is above zero, so weak reads are safe across threads.
 
 ## Closures and captures

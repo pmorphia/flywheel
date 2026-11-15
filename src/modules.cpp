@@ -13,7 +13,7 @@ const std::set<std::string> native = {"desktop", "core",    "html",        "fs",
                                       "os",      "time",    "json",        "web",  "testing",
                                       "collections", "io",  "net",         "regex", "thread",
                                       "gc",      "svg",     "crypto",      "encoding", "uuid",
-                                      "compress", "sqlite", "toml", "yaml", "flywheel"};
+                                      "compress", "sqlite", "toml", "yaml", "flywheel", "hot"};
 // Types that native modules export, spelled module.type in source.
 const std::map<std::string, std::set<std::string>> nativeTypes = {
     {"json", {"value"}},
@@ -21,7 +21,7 @@ const std::map<std::string, std::set<std::string>> nativeTypes = {
     {"web", {"request", "response"}},
     {"os", {"process", "result"}},
     {"io", {"file"}},
-    {"net", {"socket", "listener"}},
+    {"net", {"socket", "listener", "udp_socket"}},
     {"thread", {"task", "mutex", "channel"}},
     {"time", {"datetime"}},
     {"sqlite", {"database"}}};

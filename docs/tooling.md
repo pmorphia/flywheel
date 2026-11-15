@@ -23,6 +23,7 @@ Every `flywheel` command is a flag. Without a mode flag, the source file is comp
 | `-h`, `--help` | print the usage |
 | `-x CODE`, `--source CODE` | run CODE instead of a file |
 | `-o FILE`, `-O0`..`-O3`, `-g` | output file, optimization level, debug information |
+| `--hot` | reload changed source files while the program runs (see [Hot reload](#hot-reload)) |
 
 Short flags combine and may come before or after the file: `flywheel -bO3 app.fw -o app`, `flywheel app.fw -vt`. `--desktop` and `--serve` together show the page in a window and serve it at the same time (requests are handled one at a time with the window's callbacks, so the served page shows the window's current state). `--update`, `--version`, and `--help` run first and in that order, so
 
@@ -141,6 +142,28 @@ flywheel: data race on global variable 'counter': a read by thread 2 conflicts w
 ```
 
 The detector reports races that happen in the run being checked, without false positives from these synchronizations. It slows programs down and is meant for testing. Without `--race`, collection operations are still atomic and memory-safe; see [concurrency](concurrency.md#shared-state).
+
+## Hot reload
+
+`flywheel --hot game.fw` runs a program that switches to new code while it runs. Edit a function in the program's source files, save, and the next call of `hot.reload()` (from `import hot`) after the recompile finishes makes every later call of that function run the new code. [Aperture](https://github.com/pmorphia/aperture) calls it at the start of every frame, so a game picks up a change within a frame of the recompile.
+
+```flywheel
+import hot
+while running do
+    hot.reload()      # a safe point: nothing half-done
+    update()
+end
+```
+
+What changes and what stays:
+
+- **Functions and methods** of the program's own source files (the entry file and the local files it imports; not packages from `.flywheel-modules` or the built-in library) take the new code, including function values taken before the change. A function running at the moment of the switch finishes in the old code.
+- **State stays:** module variables, objects, and everything on the stack carry on with their values. Top-level statements are not run again, so a changed initial value of a module variable does not apply until the next start. A `const` that another file uses keeps its old value there.
+- **A change that would not fit the running program** is reported and skipped, and the program keeps running the old code: adding, removing, or reordering fields, classes, or enum members; changing a function's parameters or result; changing imports. Restart for those. A compile error is reported the same way, and the next save tries again.
+
+`hot.reload()` returns `true` when it switched to new code; `hot.enabled()` is whether this run reloads at all. Without `--hot`, and in built executables, both return `false` and cost nothing. The source files are checked at most four times a second, and recompiling runs in the background (the whole program is compiled again, but only the changed files' functions are linked in).
+
+Hot reload works with the in-process JIT that `flywheel FILE` uses; where that is unavailable, `--hot` says so and runs without reloading.
 
 ## Pages: desktop and serve
 

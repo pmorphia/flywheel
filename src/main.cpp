@@ -20,6 +20,9 @@
 #include <cstring>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/Support/MemoryBuffer.h>
+#include <atomic>
+#include <mutex>
+#include <thread>
 #include <sys/wait.h>
 #include <unistd.h>
 #ifdef __linux__
@@ -28,6 +31,7 @@
 #endif
 
 namespace fs = std::filesystem;
+extern "C" int64_t (*fw_hot_hook)(int64_t); // runtime/runtime.cpp
 namespace {
 int execute(const std::string &executable, const std::vector<std::string> &args) {
     std::vector<llvm::StringRef> refs;
@@ -92,6 +96,134 @@ std::string desktopPath(const fs::path &runtime) {
     return FW_DESKTOP_BACKEND;
 }
 #ifdef FW_JIT
+// Hot reload (--hot). The first compile records the program in `state`; the program runs in a
+// forked child that still has the compiler, the JIT, and `load`. At each hot.reload() call the
+// child checks whether a source file of the program changed; if so, a background thread
+// recompiles the whole program as a reload (fw::HotReload), and a later hot.reload() links the
+// result into a new JITDylib beside the running code and points the changed functions' slots at
+// the new ones. Nothing else is touched: globals, objects, and the call stack carry on.
+bool hotRequested = false;
+struct HotSession {
+    bool active = false;
+    fw::HotReload state;
+    std::function<fw::Program()> load;
+    fw::Options options;
+    std::string filename;
+    llvm::orc::LLJIT *jit = nullptr;
+    std::map<std::string, fs::file_time_type> stamps;
+    std::chrono::steady_clock::time_point checked;
+    // 0 idle, 1 compiling, 2 compiled, 3 failed (the worker sets 2 and 3)
+    std::atomic<int> status{0};
+    std::string object, failure;
+    fw::HotReload next;
+    std::vector<std::string> changed;
+} hot;
+void reportError(const fw::Error &e, const std::string &filename);
+std::map<std::string, fs::file_time_type> hotStamps() {
+    std::map<std::string, fs::file_time_type> out;
+    for (auto &[prefix, file] : hot.state.files) {
+        std::error_code ec;
+        if (hot.state.prefixes.count(prefix))
+            if (auto time = fs::last_write_time(file, ec); !ec)
+                out[file] = time;
+    }
+    return out;
+}
+void hotCompile() {
+    hot.next = hot.state;
+    hot.next.generation = hot.state.generation + 1;
+    try {
+        auto program = hot.load();
+        auto options = hot.options;
+        options.objectData = &hot.object;
+        options.hot = &hot.next;
+        std::vector<fw::Error> warnings;
+        options.warnings = &warnings; // already reported by the first compile
+        fw::compile(program, hot.filename, options);
+        hot.status = 2;
+    } catch (const fw::Error &e) {
+        std::ostringstream text;
+        auto &file = e.loc.file.empty() ? hot.filename : e.loc.file;
+        text << file << ":" << e.loc.line << ":" << e.loc.column << ": error: " << e.what();
+        hot.failure = text.str();
+        hot.status = 3;
+    } catch (const std::exception &e) {
+        hot.failure = e.what();
+        hot.status = 3;
+    }
+}
+bool hotInstall() {
+    auto generation = std::to_string(hot.next.generation);
+    auto dylib = hot.jit->createJITDylib("hot" + generation);
+    if (!dylib) {
+        hot.failure = llvm::toString(dylib.takeError());
+        return false;
+    }
+    dylib->addToLinkOrder(hot.jit->getMainJITDylib());
+    auto buffer = llvm::MemoryBuffer::getMemBufferCopy(hot.object, "hot" + generation + ".o");
+    if (auto error = hot.jit->addObjectFile(*dylib, std::move(buffer))) {
+        hot.failure = llvm::toString(std::move(error));
+        return false;
+    }
+    std::vector<std::pair<void **, void *>> slots;
+    for (auto &name : hot.next.reloaded) {
+        auto function = hot.jit->lookup(*dylib, name + ".hot" + generation);
+        if (!function) {
+            hot.failure = llvm::toString(function.takeError());
+            return false;
+        }
+        auto slot = hot.jit->lookup(hot.jit->getMainJITDylib(), "hot." + name);
+        if (!slot) {
+            hot.failure = llvm::toString(slot.takeError());
+            return false;
+        }
+        slots.emplace_back(slot->toPtr<void **>(), function->toPtr<void *>());
+    }
+    for (auto &[slot, function] : slots)
+        *slot = function;
+    hot.state.generation = hot.next.generation;
+    return true;
+}
+std::string hotNames(const std::vector<std::string> &files) {
+    std::string out;
+    for (auto &file : files)
+        out += (out.empty() ? "" : ", ") + fs::path(file).filename().string();
+    return out;
+}
+extern "C" int64_t hotPoll(int64_t) {
+    if (hot.status == 2) {
+        hot.status = 0;
+        if (hotInstall())
+            std::cerr << "flywheel: reloaded " << hotNames(hot.changed) << " ("
+                      << hot.next.reloaded.size() << " functions)\n";
+        else
+            std::cerr << "flywheel: cannot reload " << hotNames(hot.changed) << ": "
+                      << hot.failure << "\n";
+        return hot.status == 0 && hot.state.generation == hot.next.generation;
+    }
+    if (hot.status == 3) {
+        hot.status = 0;
+        std::cerr << "flywheel: not reloaded (the program keeps running the old code):\n"
+                  << hot.failure << "\n";
+    }
+    if (hot.status != 0)
+        return 0;
+    auto now = std::chrono::steady_clock::now();
+    if (now - hot.checked < std::chrono::milliseconds(250))
+        return 0;
+    hot.checked = now;
+    auto stamps = hotStamps();
+    if (stamps == hot.stamps)
+        return 0;
+    hot.changed.clear();
+    for (auto &[file, time] : stamps)
+        if (!hot.stamps.count(file) || hot.stamps.at(file) != time)
+            hot.changed.push_back(file);
+    hot.stamps = stamps;
+    hot.status = 1;
+    std::thread(hotCompile).detach();
+    return 0;
+}
 // Runs a compiled object without linking it: the runtime is part of this executable and its fw_*
 // symbols are exported for the JIT. The program runs in a child process, so traps and crashes
 // behave as they would in a built executable. Returns nullopt when the JIT is unavailable.
@@ -117,6 +249,8 @@ std::optional<int> runInProcess(const std::string &object, std::vector<std::stri
         llvm::consumeError(jit.takeError());
     if (!entry)
         return std::nullopt;
+    if (hot.active)
+        hot.jit = jit->get();
     std::cout.flush();
     std::cerr.flush();
     std::fflush(nullptr);
@@ -131,6 +265,11 @@ std::optional<int> runInProcess(const std::string &object, std::vector<std::stri
         if (getppid() != parent)
             _exit(1);
 #endif
+        if (hot.active) {
+            fw_hot_hook = hotPoll;
+            hot.stamps = hotStamps();
+            hot.checked = std::chrono::steady_clock::now();
+        }
         std::vector<char *> argv;
         for (auto &argument : arguments)
             argv.push_back(argument.data());
@@ -188,6 +327,14 @@ int compileProgram(const std::string &command, const std::string &filename,
         auto jit = options;
         jit.objectData = &object;
         auto libraries = fw::buildForeign(program.foreign, true).inputs;
+        if (hotRequested) {
+            hot.state = {};
+            hot.active = true;
+            hot.load = load;
+            hot.options = options;
+            hot.filename = filename;
+            jit.hot = &hot.state;
+        }
         fw::compile(program, filename, jit);
         std::vector<std::string> arguments{filename};
         arguments.insert(arguments.end(), programArguments.begin(), programArguments.end());
@@ -196,6 +343,9 @@ int compileProgram(const std::string &command, const std::string &filename,
         program = load();
     }
 #endif
+    if (hotRequested && runs)
+        std::cerr << "flywheel: --hot needs the in-process JIT, which is not available here; "
+                     "running without hot reload\n";
     auto foreign = fw::buildForeign(program.foreign, false);
     Temp temp;
 #ifdef _WIN32
@@ -753,6 +903,8 @@ int main(int argc, char **argv) {
         "  -O0..-O3             optimization level\n"
         "  -g                   debug information\n"
         "  --race               detect data races\n"
+        "  --hot                reload changed source files while the program runs (at each\n"
+        "                       hot.reload(), which Aperture calls every frame)\n"
         "  --coverage           line coverage (test mode)\n"
         "  --port N, --host H   where --serve listens (default 127.0.0.1:8000)\n"
         "  --emit-ir FILE       write the LLVM IR\n";
@@ -811,6 +963,8 @@ int main(int argc, char **argv) {
                     options.race = true;
                 else if (name == "--coverage" && plain)
                     options.coverage = true;
+                else if (name == "--hot" && plain)
+                    hotRequested = true;
                 else if (name == "--source")
                     cli.source = value();
                 else if (name == "--output")

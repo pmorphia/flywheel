@@ -10,6 +10,7 @@ Libraries are compiler-resolved declarations backed by C++ runtime functions; no
 | `flywheel` | run other Flywheel files and get their return values — [flywheel](#flywheel) |
 | `fs` | files, directories, and paths |
 | `gc` | cycle collection: `collect`, `step`, `pause`, `resume`, `paused`, `pending`, `threshold` — [runtime](../docs/runtime.md#cycle-collection) |
+| `hot` | hot reload under `flywheel --hot`: `reload`, `enabled` — [tooling](../docs/tooling.md#hot-reload) |
 | `html`, `svg` | tag sets (`import html.*`, `import svg.*`), rendering, tree queries — [HTML tools](../docs/html-dom.md) |
 | `io` | stream-style terminal I/O and files — [input and processes](../docs/input-processes.md) |
 | `json` | parsing, querying, encoding, typed decoding, files, `<json>` literals |
@@ -188,8 +189,29 @@ flywheel.export("report.fw", "report.html")
 | `socket.set_timeout(seconds)` | receive/send timeout |
 | `address()`, `peer()` | `"host:port"` of either end (IPv6 hosts in brackets) |
 | `close()` | close the socket; sockets also close when released |
+| `net.udp()`, `net.udp(port)`, `net.udp(host, port)` | a `net.udp_socket` bound to the port (0, the default, picks a free one) on `host` (default `"0.0.0.0"`; `"::"` for IPv6, which also reaches IPv4 peers) |
+| `udp.send_to(data, host, port)` | send one packet; returns whether it went out (`false` when the system dropped it) |
+| `udp.connect(host, port)`, `udp.send(data)` | set the default peer, then send to it |
+| `udp.receive()` | `string?`: the next packet, or null at once when none has arrived |
+| `udp.sender()`, `udp.reply(data)` | `"host:port"` of the last packet's sender; send back to it |
+| `udp.wait(seconds)` | wait up to that long for a packet; returns whether one is ready |
+| `udp.port()`, `udp.address()`, `udp.close()` | as for TCP sockets |
 
-Strings carry arbitrary bytes, so binary protocols work, but `length` counts UTF-8 characters. Failures raise `NetworkError`. Sockets block; combine them with [threads](../docs/concurrency.md) to serve several clients.
+Strings carry arbitrary bytes, so binary protocols work, but `length` counts UTF-8 characters. Failures raise `NetworkError`. TCP sockets block; combine them with [threads](../docs/concurrency.md) to serve several clients.
+
+UDP sockets never block, which suits a game loop: call `receive()` until it returns null once per tick, and send each tick's input with `send` or `send_to`. Packets can be lost, repeated, or reordered, and hold at most 65507 bytes. The last name `send_to` looked up is remembered, so sending to the same host every tick does not resolve it again.
+
+```flywheel
+import net
+var link = net.udp(7000)
+link.connect("192.168.1.20", 7000)
+link.send("input 812 6")
+var packet = link.receive()
+while packet != null do
+    print link.sender(), packet
+    packet = link.receive()
+end
+```
 
 ## os
 
@@ -402,6 +424,15 @@ print random.weighted(["common", "rare"], [9.0, 1.0])
 ```
 
 Invalid ranges, probabilities, weights, and sample counts raise `ValueError`.
+
+`random.Generator(seed = 0)` is a generator with its own state, for simulations that must replay exactly (games with rollback or replays, procedural levels, tests): nothing else moves its sequence, and the same seed gives the same numbers on every Flywheel flavor and machine. It has the functions above as methods (`random`, `integer`, `below`, `uniform`, `chance`, `normal`, `choice`, `weighted`, `shuffle`, `shuffled`, `sample`), plus `reseed(n)`, `copy()` (a second generator at the same point), and `step()` (the raw next value). Its state is six integer fields, so `deep_copy` of a game state saves the generator too, and restoring the copy replays the same numbers. The algorithm is MRG32k3a (period about 2^191); its arithmetic stays exact in 53 bits, which is what makes it the same everywhere.
+
+```flywheel
+import random
+var rng = random.Generator(2026)
+var saved = deep_copy(rng)
+print rng.integer(1, 6) == saved.integer(1, 6)   # true
+```
 
 ### vecmath
 

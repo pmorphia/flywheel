@@ -4934,6 +4934,46 @@ NEGATIVE.update({
                                  "struct fields are numbers, quantities"),
 })
 
+POSITIVE.update({
+    "deep_copy_graph": (
+        'struct P\n    double x = 0\nend\n'
+        'class Node\n    string name\n    Node? next = null\n    weak<Node>? back = null\n    int[] hits = []\nend\n'
+        'class Handle\n    int id\n    destructor()\n        print("free", this.id)\n    end\nend\n'
+        'class State\n    Node[] nodes = []\n    Node? first = null\n    P[] path = []\n    map<string, int> meter = {}\n'
+        '    Handle texture = Handle(5)\nend\n'
+        'var s = State()\nvar a = Node("a")\nvar b = Node("b")\na.next = b\nb.next = a\nb.back = weak(a)\n'
+        's.nodes.push(a)\ns.nodes.push(b)\ns.first = a\ns.path.push(P(1))\ns.meter["super"] = 50\n'
+        'var c = deep_copy(s)\na.hits.push(1)\ns.path[0].x = 9\ns.meter["super"] = 0\n'
+        'var ca = c.nodes[0]\nvar cb = ca.next otherwise ca\nvar back = cb.back otherwise weak(a)\n'
+        'print c.first == ca, ca == a, cb.next == ca, back.get() == ca, ca.hits.length\n'
+        'print c.path[0].x, c.meter["super"], c.texture == s.texture\n'
+        'print deep_copy(3), deep_copy(P(2)).x, deep_copy("hi"), deep_copy([[1], [2]])\n'
+        'int[]? none = null\nprint deep_copy(none)\n',
+        'true false true true 0\n1 50 true\n3 2 hi [[1], [2]]\nnull\nfree 5\n'),
+    "random_generator": (
+        'import random\nvar a = random.Generator(42)\nvar b = random.Generator(42)\n'
+        'int[] xs = []\nint[] ys = []\nfor i in 0..<5 do\n    xs.push(a.integer(1, 100))\n    ys.push(b.integer(1, 100))\nend\n'
+        'print xs.join(",") == ys.join(","), a.step()\n'
+        'var c = a.copy()\nprint a.random() == c.random(), random.Generator(7).step(), random.Generator(-7).step() > 0\n'
+        'var counts = [0, 0, 0]\nvar g = random.Generator(1)\nfor i in 0..<3000 do\n    counts[g.below(3)] += 1\nend\n'
+        'print counts.all(function(int n) => n > 900), g.shuffled([1, 2, 3]).length, g.sample([1, 2, 3], 2).length\n'
+        'var saved = deep_copy(g)\nprint g.integer(0, 1000000) == saved.integer(0, 1000000)\n',
+        'true 1382922524\ntrue 952341680 true\ntrue 3 2\ntrue\n'),
+    "udp_sockets": (
+        'import net\nvar server = net.udp("127.0.0.1", 0)\nvar client = net.udp()\n'
+        'print server.receive() == null\nclient.connect("127.0.0.1", server.port())\n'
+        'print client.send("ping")\nprint server.wait(2.0)\nprint server.receive()\n'
+        'print server.reply("pong")\nprint client.wait(2.0), client.receive()\n'
+        'print client.send_to("again", "127.0.0.1", server.port())\nserver.wait(2.0)\nprint server.receive()\nserver.close()\n',
+        'true\ntrue\ntrue\nping\ntrue\ntrue pong\ntrue\nagain\n'),
+    "hot_without_reload": ('import hot\nprint hot.enabled(), hot.reload()\n', 'false false\n'),
+})
+NEGATIVE.update({
+    "otherwise_needs_nullable": ('var x = 1\nprint x otherwise 2\n', "'otherwise' requires a nullable left operand, not int"),
+    "udp_methods": ('import net\nvar u = net.udp()\nu.accept()\n', "net.udp_socket has send_to"),
+    "hot_functions": ('import hot\nhot.start()\n', "hot has reload and enabled"),
+})
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -300,6 +300,18 @@ EP clone(const Expr &e);
 SP clone(const Stmt &s);
 Function clone(const Function &f);
 Class clone(const Class &c);
+// Hot reload (flywheel -r --hot): the first compile of a program records what is running, and
+// each reload compile checks the new code against it and links only the changed modules'
+// functions (see Compiler::hotTransform in src/compiler.cpp and HotSession in src/main.cpp).
+struct HotReload {
+    std::map<std::string, std::string> files;      // module prefix ($m1$) -> source file
+    std::set<std::string> prefixes;                // the modules whose functions reload
+    std::set<std::string> symbols;                 // functions and globals the program defines
+    std::map<std::string, std::string> signatures; // reloadable function -> its LLVM type
+    std::string layout;                            // classes, fields, enums, and module order
+    int generation = 0;                            // 0: the first compile; n: the nth reload
+    std::vector<std::string> reloaded;             // out: the functions a reload replaces
+};
 struct Options {
     int optimization = 0;
     bool debug = false; // emit DWARF line tables
@@ -318,6 +330,7 @@ struct Options {
     // Receives warnings (such as a `catch "Name"` that nothing throws) when set; otherwise
     // they are printed to stderr as file:line:column: warning: message.
     std::vector<Error> *warnings = nullptr;
+    HotReload *hot = nullptr; // set for hot reload: the first compile, then each reload
 };
 void compile(Program &program, const std::string &filename, const Options &options);
 // Re-indents source by block structure (4 spaces), keeping multi-line tokens unchanged.

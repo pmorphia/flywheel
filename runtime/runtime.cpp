@@ -2361,6 +2361,16 @@ extern "C" Object *fw_try_read(Frame *frame, Object *path) {
     }
 }
 
+// Hot reload: the driver sets the hook when it runs a program with --hot (src/main.cpp).
+extern "C" {
+int64_t (*fw_hot_hook)(int64_t) = nullptr;
+int64_t fw_hot_reload() {
+    return fw_hot_hook ? fw_hot_hook(0) : 0;
+}
+int64_t fw_hot_enabled() {
+    return fw_hot_hook != nullptr;
+}
+}
 #include "stack.inc"
 #include "collections.inc"
 #include "flat.inc"

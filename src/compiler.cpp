@@ -1092,7 +1092,8 @@ class Compiler {
         if (t.numeric() || name == "bool" || name == "char" || name == "string" || name == "void" ||
             name == "element" || name == "fragment" || name == "json.value" ||
             name == "desktop.window" || name == "io.file" || name == "net.socket" ||
-            name == "net.listener" || name == "sqlite.database" || errorTypes.count(name) ||
+            name == "net.listener" || name == "net.udp_socket" || name == "sqlite.database" ||
+            errorTypes.count(name) ||
             classes.count(name) ||
             t.enumeration())
             return t;
@@ -1539,7 +1540,8 @@ end
         Ty base{x.t.name.substr(0, x.t.name.size() - 1)};
         if (classes.count(base.name) || base.name == "element" || base.name == "fragment" ||
             base.name == "desktop.window" || base.name == "io.file" || base.name == "net.socket" ||
-            base.name == "net.listener" || base.name == "sqlite.database")
+            base.name == "net.listener" || base.name == "net.udp_socket" ||
+            base.name == "sqlite.database")
             return convert(x, base, true);
         return x;
     }
@@ -3270,7 +3272,8 @@ end
         static const std::set<std::string> modules = {
             "desktop", "html", "math", "fs",          "os", "json",  "web", "time",
             "testing", "core", "io",   "collections", "net", "regex", "thread", "gc",
-            "svg",     "crypto", "encoding", "uuid", "compress", "sqlite", "toml", "yaml", "flywheel"};
+            "svg",     "crypto", "encoding", "uuid", "compress", "sqlite", "toml", "yaml", "flywheel",
+            "hot"};
         for (auto &[alias, name] : p.imports) {
             if (!modules.count(name))
                 error("module '" + name +
@@ -3468,6 +3471,181 @@ end
             match = b.CreateOr(match, b.CreateICmpEQ(id, classId(c)));
         return match;
     }
+    // Hot reload. The first compile (generation 0) gives each function of a reloadable module
+    // a slot, hot.<name>, and a prologue that jumps to the function the slot holds; it also
+    // exports every named function and global so later code can link to them. A reload compile
+    // keeps only the reloadable modules' functions (renamed, with the same prologue so every
+    // generation forwards to the newest) and turns everything else the running program already
+    // defines into declarations: the new code shares the program's globals, class identities,
+    // and other functions. The driver then links it and points the slots at the new functions.
+    void hotPrologue(llvm::Function &f, const std::string &slotName) {
+        auto slot = module.getOrInsertGlobal(slotName, b.getPtrTy(), [&] {
+            return new llvm::GlobalVariable(module, b.getPtrTy(), false,
+                                            llvm::GlobalValue::ExternalLinkage,
+                                            llvm::ConstantPointerNull::get(b.getPtrTy()), slotName);
+        });
+        auto &entry = f.getEntryBlock();
+        auto check = llvm::BasicBlock::Create(ctx, "hot.check", &f, &entry);
+        auto jump = llvm::BasicBlock::Create(ctx, "hot.jump", &f, &entry);
+        llvm::IRBuilder<> h(check);
+        auto target = h.CreateLoad(b.getPtrTy(), slot);
+        auto elsewhere = h.CreateAnd(
+            h.CreateICmpNE(target, llvm::ConstantPointerNull::get(b.getPtrTy())),
+            h.CreateICmpNE(target, &f));
+        h.CreateCondBr(elsewhere, jump, &entry);
+        // Static allocas stay in the entry block, where later passes expect them.
+        for (auto it = entry.begin(); it != entry.end();) {
+            auto &instruction = *it++;
+            if (auto alloca = llvm::dyn_cast<llvm::AllocaInst>(&instruction);
+                alloca && alloca->isStaticAlloca())
+                alloca->moveBefore(llvm::cast<llvm::Instruction>(target)->getIterator());
+        }
+        h.SetInsertPoint(jump);
+        std::vector<llvm::Value *> args;
+        for (auto &arg : f.args())
+            args.push_back(&arg);
+        auto forward = h.CreateCall(f.getFunctionType(), target, args);
+        forward->setTailCallKind(llvm::CallInst::TCK_Tail);
+        forward->setCallingConv(f.getCallingConv());
+        if (f.getReturnType()->isVoidTy())
+            h.CreateRetVoid();
+        else
+            h.CreateRet(forward);
+    }
+    static std::string typeText(llvm::Type *t) {
+        std::string text;
+        llvm::raw_string_ostream out(text);
+        t->print(out);
+        return text;
+    }
+    void hotTransform(HotReload &hot) {
+        // What the program is made of: if any of it changed, objects already made by the
+        // running program would not fit the new code.
+        std::string layout;
+        std::vector<const Class *> sorted;
+        for (auto &c : p.classes)
+            sorted.push_back(&c);
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const Class *x, const Class *y) { return x->name < y->name; });
+        for (auto c : sorted) {
+            layout += (c->isStruct ? "struct " : "class ") + displayName(c->name) + "(";
+            for (auto &base : c->bases)
+                layout += displayName(base) + ",";
+            layout += ")";
+            for (auto &f : c->fields)
+                layout += " " + f.type + " " + f.name + ";";
+            layout += "\n";
+        }
+        for (auto &e : p.enums) {
+            layout += "enum " + displayName(e.name) + ":";
+            for (auto &m : e.members)
+                layout += " " + m;
+            layout += "\n";
+        }
+        auto prefixOf = [](const std::string &name) -> std::string {
+            if (name.rfind("$m", 0) != 0)
+                return "";
+            auto end = name.find('$', 2);
+            return end == std::string::npos ? "" : name.substr(0, end + 1);
+        };
+        std::map<std::string, std::string> files;
+        for (auto &f : p.functions)
+            if (auto prefix = prefixOf(f.name); !prefix.empty() && !f.loc.file.empty())
+                files.emplace(prefix, f.loc.file);
+        for (auto &c : p.classes)
+            if (auto prefix = prefixOf(c.name); !prefix.empty() && !c.loc.file.empty())
+                files.emplace(prefix, c.loc.file);
+        for (auto &[prefix, file] : files)
+            layout += "module " + prefix + " " + file + "\n";
+        auto reloadable = [&](const std::string &name) {
+            if (name.rfind("fly.", 0) != 0)
+                return false;
+            auto prefix = prefixOf(name.substr(4));
+            return !prefix.empty() && hot.prefixes.count(prefix) > 0;
+        };
+        auto named = [](const llvm::GlobalValue &g) {
+            return g.hasName() && !std::isdigit(static_cast<unsigned char>(g.getName()[0]));
+        };
+        std::vector<llvm::Function *> functionList;
+        for (auto &f : module)
+            if (!f.isDeclaration())
+                functionList.push_back(&f);
+        if (hot.generation == 0) {
+            hot.layout = layout;
+            hot.files = files;
+            // Modules from source files of the program, not the built-in library or packages.
+            for (auto &[prefix, file] : files) {
+                std::error_code ec;
+                if (file.find("/.flywheel-modules/") == std::string::npos &&
+                    file.find("\\.flywheel-modules\\") == std::string::npos &&
+                    std::filesystem::is_regular_file(file, ec))
+                    hot.prefixes.insert(prefix);
+            }
+            for (auto f : functionList) {
+                auto name = f->getName().str();
+                if (name.rfind("fly.", 0) == 0)
+                    f->setLinkage(llvm::GlobalValue::ExternalLinkage);
+                if (reloadable(name) && !f->isPresplitCoroutine()) {
+                    f->addFnAttr(llvm::Attribute::NoInline);
+                    hot.signatures[name] = typeText(f->getFunctionType());
+                    hotPrologue(*f, "hot." + name);
+                }
+            }
+            for (auto &g : module.globals())
+                if (named(g) && !g.isDeclaration() && !g.getName().starts_with("llvm.")) {
+                    g.setLinkage(llvm::GlobalValue::ExternalLinkage);
+                    g.setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::None);
+                }
+            for (auto &f : module)
+                if (!f.isDeclaration() && f.hasExternalLinkage())
+                    hot.symbols.insert(f.getName().str());
+            for (auto &g : module.globals())
+                if (!g.isDeclaration() && g.hasExternalLinkage())
+                    hot.symbols.insert(g.getName().str());
+            return;
+        }
+        if (layout != hot.layout)
+            throw std::runtime_error(
+                "the change needs a restart: hot reload replaces functions, and this one also "
+                "changes classes, fields, enums, or imports");
+        auto suffix = ".hot" + std::to_string(hot.generation);
+        hot.reloaded.clear();
+        for (auto f : functionList) {
+            auto name = f->getName().str();
+            if (name == "main") {
+                f->deleteBody();
+                continue;
+            }
+            if (reloadable(name)) {
+                auto known = hot.signatures.find(name);
+                if (known != hot.signatures.end() &&
+                    known->second != typeText(f->getFunctionType()))
+                    throw std::runtime_error("the change needs a restart: the parameters or "
+                                             "result of " +
+                                             displayName(name.substr(4)) + " changed");
+                f->setName(name + suffix);
+                f->setLinkage(llvm::GlobalValue::ExternalLinkage);
+                f->addFnAttr(llvm::Attribute::NoInline);
+                if (known != hot.signatures.end() && !f->isPresplitCoroutine()) {
+                    hotPrologue(*f, "hot." + name);
+                    hot.reloaded.push_back(name);
+                }
+            } else if (hot.symbols.count(name))
+                f->deleteBody(); // the running program's own
+            else
+                f->setLinkage(llvm::GlobalValue::InternalLinkage);
+        }
+        for (auto &g : module.globals()) {
+            if (!named(g) || g.isDeclaration() || g.getName().starts_with("llvm."))
+                continue;
+            if (hot.symbols.count(g.getName().str())) {
+                g.setInitializer(nullptr);
+                g.setLinkage(llvm::GlobalValue::ExternalLinkage);
+                g.setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::None);
+            } else
+                g.setLinkage(llvm::GlobalValue::InternalLinkage);
+        }
+    }
     void run(const Options &opts) {
         warningSink = opts.warnings;
         collectThrownNames();
@@ -3589,6 +3767,11 @@ end
             dib->finalize();
         if (llvm::verifyModule(module, &llvm::errs()))
             throw std::runtime_error("internal error: LLVM verification failed");
+        if (opts.hot) {
+            hotTransform(*opts.hot);
+            if (llvm::verifyModule(module, &llvm::errs()))
+                throw std::runtime_error("internal error: LLVM verification failed (hot reload)");
+        }
         if (opts.optimization) {
             llvm::PassBuilder pb(machine.get());
             llvm::LoopAnalysisManager lam;
@@ -5422,6 +5605,15 @@ Val Compiler::invoke(Expr &e, Ty expected) {
             error("os.command expects an array of strings");
         return {call("fw_command", b.getInt64Ty(), {args[0].v}), Ty{"i64"}};
     }
+    if (name == "deep_copy" || name == "core.deep_copy") {
+        // A copy of everything the value reaches (runtime/library.inc, fw_deep_copy). Numbers,
+        // bools, chars, enums, and structs are already values, so they are returned as they are.
+        count(1);
+        auto t = args[0].t;
+        if (!t.object())
+            return args[0];
+        return {objectCall("fw_deep_copy", {frame, args[0].v}), t};
+    }
     if (name == "print" || name == "core.print") {
         if (args.empty())
             error("print expects at least one value");
@@ -6620,7 +6812,7 @@ std::optional<Val> Compiler::stdlibCall(const std::string &name, std::vector<Val
     static const std::set<std::string> modules = {
         "fs",     "time",     "regex", "io",       "json",   "os",  "net",
         "gc",     "thread",   "crypto", "encoding", "uuid", "compress", "sqlite", "toml", "yaml",
-        "flywheel"};
+        "flywheel", "hot"};
     if (!modules.count(module))
         return std::nullopt;
     auto arity = [&](size_t low, size_t high) {
@@ -7112,6 +7304,18 @@ std::optional<Val> Compiler::stdlibCall(const std::string &name, std::vector<Val
         }
         return std::nullopt;
     }
+    if (module == "hot") {
+        // hot.reload(): at a safe point, switch to new code of the program's changed source
+        // files (flywheel -r --hot); hot.enabled(): whether this run reloads at all.
+        arity(0, 0);
+        if (function == "reload")
+            return Val{b.CreateICmpNE(call("fw_hot_reload", b.getInt64Ty(), {}), i64(0)),
+                       Ty{"bool"}};
+        if (function == "enabled")
+            return Val{b.CreateICmpNE(call("fw_hot_enabled", b.getInt64Ty(), {}), i64(0)),
+                       Ty{"bool"}};
+        error("hot has reload and enabled");
+    }
     if (module == "gc") {
         if (function == "collect") {
             arity(0, 0);
@@ -7192,6 +7396,14 @@ std::optional<Val> Compiler::stdlibCall(const std::string &name, std::vector<Val
         arity(2, 2);
         return object("fw_net_listen", {str(0), integer(1)}, Ty{"net.listener"});
     }
+    if (function == "udp") {
+        // net.udp(), net.udp(port), net.udp(host, port): a bound, non-blocking UDP socket.
+        arity(0, 2);
+        if (args.size() == 2)
+            return object("fw_net_udp", {str(0), integer(1)}, Ty{"net.udp_socket"});
+        return object("fw_net_udp", {literal("0.0.0.0").v, args.empty() ? i64(0) : integer(0)},
+                      Ty{"net.udp_socket"});
+    }
     return std::nullopt;
 }
 // A value bound to an SQL parameter: numbers, bools, chars, strings, enums (by index), and
@@ -7211,7 +7423,8 @@ std::optional<Val> Compiler::resourceMethod(Val receiver, const std::string &met
     bool generic = t.back() == '>';
     bool task = generic && t.rfind("thread.task<", 0) == 0,
          channel = generic && t.rfind("thread.channel<", 0) == 0;
-    if (t != "io.file" && t != "net.socket" && t != "net.listener" && t != "os.process" &&
+    if (t != "io.file" && t != "net.socket" && t != "net.listener" && t != "net.udp_socket" &&
+        t != "os.process" &&
         t != "thread.mutex" && t != "sqlite.database" && !task && !channel)
         return std::nullopt;
     if (receiver.t.nullable())
@@ -7366,6 +7579,57 @@ std::optional<Val> Compiler::resourceMethod(Val receiver, const std::string &met
     if (method == "port") {
         arity(0, 0);
         return Val{call("fw_net_port", b.getInt64Ty(), {receiver.v}), Ty{"i64"}};
+    }
+    if (t == "net.udp_socket") {
+        auto boolean = [&](llvm::Value *v) { return Val{b.CreateICmpNE(v, i64(0)), Ty{"bool"}}; };
+        if (method == "send_to") {
+            arity(3, 3);
+            return boolean(call("fw_net_udp_send_to", b.getInt64Ty(),
+                                {receiver.v, argument(1, Ty{"string"}), argument(2, Ty{"string"}),
+                                 argument(3, Ty{"i64"})}));
+        }
+        if (method == "send" || method == "reply") {
+            arity(1, 1);
+            return boolean(call("fw_net_udp_send", b.getInt64Ty(),
+                                {receiver.v, argument(1, Ty{"string"}), i64(method == "reply")}));
+        }
+        if (method == "connect") {
+            arity(2, 2);
+            call("fw_net_udp_connect", b.getVoidTy(),
+                 {receiver.v, argument(1, Ty{"string"}), argument(2, Ty{"i64"})});
+            return Val{};
+        }
+        if (method == "receive") {
+            arity(0, 0);
+            return object("fw_net_udp_receive", {receiver.v}, Ty{"string?"});
+        }
+        if (method == "sender") {
+            arity(0, 0);
+            return object("fw_net_udp_sender", {receiver.v}, Ty{"string"});
+        }
+        if (method == "wait") {
+            arity(1, 1);
+            auto seconds = value(*e.args[1]);
+            if (!seconds.t.numeric())
+                error("wait expects seconds");
+            return boolean(call("fw_net_udp_wait", b.getInt64Ty(),
+                                {receiver.v, convert(seconds, Ty{"double"}, true).v}));
+        }
+        if (method == "port") {
+            arity(0, 0);
+            return Val{call("fw_net_port", b.getInt64Ty(), {receiver.v}), Ty{"i64"}};
+        }
+        if (method == "address") {
+            arity(0, 0);
+            return object("fw_net_address", {receiver.v, i64(0)}, Ty{"string"});
+        }
+        if (method == "close") {
+            arity(0, 0);
+            call("fw_net_close", b.getVoidTy(), {receiver.v});
+            return Val{};
+        }
+        error("net.udp_socket has send_to, connect, send, receive, sender, reply, wait, port, "
+              "address, and close");
     }
     if (t == "net.listener") {
         if (method != "accept")
@@ -8140,7 +8404,7 @@ Val Compiler::coalesce(Expr &e, Ty expected) {
     if (a.t.name == "null")
         return value(*e.args[1], expected);
     if (!a.t.nullable())
-        error("'?\?' requires a nullable left operand, not " + a.t.name);
+        error("'otherwise' requires a nullable left operand, not " + displayName(a.t.name));
     auto inner = nonNull(a.t);
     auto present = llvm::BasicBlock::Create(ctx, "coalesce.present", current);
     auto missing = llvm::BasicBlock::Create(ctx, "coalesce.missing", current);

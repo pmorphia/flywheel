@@ -127,3 +127,212 @@ function sample<T>(T[] items, int count) returns T[]
     end
     return out
 end
+
+# A generator with its own state, for simulations that must replay exactly: give each one a
+# seed and nothing else (including the module's functions above) moves its sequence. Two
+# generators made from the same seed produce the same numbers on every Flywheel flavor.
+# Its state is plain fields, so `deep_copy` of a game state saves the generator with it and
+# restoring the copy replays the same numbers.
+#
+#     var rng = random.Generator(42)
+#     var damage = rng.integer(8, 12)
+#
+# The algorithm is MRG32k3a (L'Ecuyer, 1999): period about 2^191, and every step is integer
+# arithmetic whose products stay below 2^53.
+class Generator
+    int s10 = 0
+    int s11 = 0
+    int s12 = 0
+    int s20 = 0
+    int s21 = 0
+    int s22 = 0
+
+    constructor(int seed = 0)
+        this.reseed(seed)
+    end
+
+    # Restarts the sequence from `seed`, as if the generator were new.
+    function reseed(int seed)
+        var h = seed % 2147483647
+        if h < 0 do
+            h += 2147483647
+        end
+        if h == 0 do
+            h = 20170921
+        end
+        int[] states = []
+        for i in 0..<6 do
+            h = h * 48271 % 2147483647
+            states.push(h)
+        end
+        this.s10 = states[0]
+        this.s11 = states[1]
+        this.s12 = states[2]
+        this.s20 = states[3]
+        this.s21 = states[4]
+        this.s22 = states[5]
+        for i in 0..<8 do
+            this.step()
+        end
+    end
+
+    # The next raw value, an integer in [1, 4294967087].
+    function step() returns int
+        var p1 = (1403580 * this.s11 - 810728 * this.s10) % 4294967087
+        if p1 < 0 do
+            p1 += 4294967087
+        end
+        this.s10 = this.s11
+        this.s11 = this.s12
+        this.s12 = p1
+        var p2 = (527612 * this.s22 - 1370589 * this.s20) % 4294944443
+        if p2 < 0 do
+            p2 += 4294944443
+        end
+        this.s20 = this.s21
+        this.s21 = this.s22
+        this.s22 = p2
+        if p1 > p2 do
+            return p1 - p2
+        end
+        return p1 - p2 + 4294967087
+    end
+
+    # A double in [0, 1).
+    function random() returns double
+        return double(this.step() - 1) / 4294967087.0
+    end
+
+    # An integer in the inclusive range [low, high].
+    function integer(int low, int high) returns int
+        if low > high do
+            throw ValueError("Generator.integer requires low <= high")
+        end
+        var span = high - low + 1
+        if span > 0 and span <= 4294967087 do
+            return low + int(math.floor(double(this.step() - 1) / 4294967087.0 * double(span)))
+        end
+        # A wider range: 53 random bits from two steps.
+        var bits = math.floor(this.random() * 4294967296.0) * 2097152.0 + math.floor(this.random() * 2097152.0)
+        return low + int(math.floor(bits / 9007199254740992.0 * (double(high) - double(low) + 1.0)))
+    end
+
+    # An integer in [0, n), for picking an index.
+    function below(int n) returns int
+        if n <= 0 do
+            throw ValueError("Generator.below requires a positive bound")
+        end
+        return this.integer(0, n - 1)
+    end
+
+    # A double in [low, high).
+    function uniform(double low, double high) returns double
+        if low > high do
+            throw ValueError("Generator.uniform requires low <= high")
+        end
+        return low + (high - low) * this.random()
+    end
+
+    # true with probability p (0 to 1).
+    function chance(double p = 0.5) returns bool
+        if p < 0.0 or p > 1.0 do
+            throw ValueError("Generator.chance requires a probability from 0 to 1")
+        end
+        return this.random() < p
+    end
+
+    # A normally distributed double (Box-Muller).
+    function normal(double mean = 0.0, double stddev = 1.0) returns double
+        if stddev < 0.0 do
+            throw ValueError("Generator.normal requires stddev >= 0")
+        end
+        var u = 1.0 - this.random()
+        var v = this.random()
+        return mean + stddev * math.sqrt(-2.0 * math.log(u)) * math.cos(2.0 * math.PI * v)
+    end
+
+    # One item, uniformly.
+    function choice<T>(T[] items) returns T
+        if items.length == 0 do
+            throw IndexError("Generator.choice of an empty array")
+        end
+        return items[this.below(items.length)]
+    end
+
+    # One item, with probability proportional to its weight.
+    function weighted<T>(T[] items, double[] weights) returns T
+        if items.length == 0 or items.length != weights.length do
+            throw ValueError("Generator.weighted needs one weight per item and at least one item")
+        end
+        var total = 0.0
+        for w in weights do
+            if w < 0.0 or not math.is_finite(w) do
+                throw ValueError("Generator.weighted requires finite, non-negative weights")
+            end
+            total += w
+        end
+        if total <= 0.0 do
+            throw ValueError("Generator.weighted requires a positive total weight")
+        end
+        var target = this.random() * total
+        var last = 0
+        for i, w in weights do
+            if w > 0.0 do
+                last = i
+                if target < w do
+                    return items[i]
+                end
+                target -= w
+            end
+        end
+        return items[last]
+    end
+
+    # Shuffles the array in place (Fisher-Yates).
+    function shuffle<T>(T[] items)
+        var i = items.length - 1
+        while i > 0 do
+            var j = this.integer(0, i)
+            var held = items[i]
+            items[i] = items[j]
+            items[j] = held
+            i -= 1
+        end
+    end
+
+    # A shuffled copy; the array is unchanged.
+    function shuffled<T>(T[] items) returns T[]
+        var out = items.copy()
+        this.shuffle(out)
+        return out
+    end
+
+    # `count` items from distinct positions, in random order.
+    function sample<T>(T[] items, int count) returns T[]
+        if count < 0 or count > items.length do
+            throw ValueError("Generator.sample count must be from 0 to the array length")
+        end
+        var pool = items.copy()
+        T[] out = []
+        for i in 0..<count do
+            var j = this.integer(i, pool.length - 1)
+            var held = pool[i]
+            pool[i] = pool[j]
+            pool[j] = held
+            out.push(pool[i])
+        end
+        return out
+    end
+
+    # A second generator at the same point in the sequence; the two then move independently.
+    function copy() returns Generator
+        var other = Generator(0)
+        other.s10 = this.s10
+        other.s11 = this.s11
+        other.s12 = this.s12
+        other.s20 = this.s20
+        other.s21 = this.s21
+        other.s22 = this.s22
+        return other
+    end
+end

@@ -722,7 +722,7 @@ class Navigator {
                       "is_finite", "PI", "TAU", "E", "INF", "NAN"}},
             {"os", {"env", "args", "exit", "run", "process", "pipeline", "shell", "command", "start", "alive", "wait", "kill", "pid"}},
             {"io", {"write", "write_error", "read_line", "read_all", "open"}},
-            {"net", {"resolve", "connect", "listen"}},
+            {"net", {"resolve", "connect", "listen", "udp"}},
             {"thread", {"spawn", "channel", "mutex", "cores"}},
             {"web", {"serve", "route", "static", "tls", "text", "html", "json", "redirect",
                      "workers", "wait", "get", "post", "put", "patch", "delete", "head",
@@ -742,6 +742,7 @@ class Navigator {
             {"toml", {"parse"}},
             {"yaml", {"parse"}},
             {"gc", {"collect", "pending", "pause", "resume", "paused", "step", "threshold"}},
+            {"hot", {"reload", "enabled"}},
             {"collections", {"range"}}};
         auto it = table.find(module);
         return it == table.end() ? std::vector<std::string>{} : it->second;

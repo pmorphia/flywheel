@@ -315,6 +315,139 @@ extern "C" int64_t fw_freeze(Object *p, int64_t freeze) {
     });
 }
 
+// deep_copy: a copy of everything reachable from a value, keeping its shape: an object reached
+// twice is copied once, so shared references and cycles stay shared and cyclic in the copy.
+// Strings are immutable and shared. Things that are not plain data are shared too rather than
+// copied: native resources (files, sockets, ...), closures, markup elements, windows, and
+// instances of classes with a destructor (which own something outside the program, such as a
+// texture, that a second instance would free twice). A weak reference to a copied object
+// points at its copy.
+namespace {
+struct DeepCopier {
+    std::unordered_map<const Object *, Object *> copies;
+    std::vector<std::pair<Object *, const Object *>> weaks; // copy, original
+    static std::shared_ptr<Json> json(const Json &j) {
+        auto out = std::make_shared<Json>();
+        out->kind = j.kind;
+        out->text = j.text;
+        for (auto &item : j.items)
+            out->items.push_back(item ? json(*item) : nullptr);
+        for (auto &[key, value] : j.fields)
+            out->fields[key] = value ? json(*value) : nullptr;
+        return out;
+    }
+    static bool shared(const Object *p) {
+        switch (p->kind) {
+        case Object::String:
+        case Object::Resource:
+        case Object::Closure:
+        case Object::Element:
+        case Object::DesktopWindow:
+            return true;
+        case Object::Instance:
+            return anyDestructors && destructors().count(p->classId);
+        default:
+            return false;
+        }
+    }
+    // A new reference (+1) to the copy of `p`.
+    Object *copy(Object *p) {
+        if (!p)
+            return nullptr;
+        if (auto found = copies.find(p); found != copies.end()) {
+            retain(found->second);
+            return found->second;
+        }
+        if (shared(p)) {
+            retain(p);
+            return p;
+        }
+        auto out = new Object(p->kind);
+        copies[p] = out;
+        out->frozenFlag.store(p->frozenFlag.load(std::memory_order_acquire));
+        out->text = p->text;
+        if (p->json)
+            out->json = json(*p->json);
+        out->objectKeys = p->objectKeys;
+        out->keyKind = p->keyKind;
+        out->errorType = p->errorType;
+        out->typeName = p->typeName;
+        out->fieldList = p->fieldList;
+        out->attributes = p->attributes;
+        out->classId = p->classId;
+        out->leaf = p->leaf;
+        out->code = p->code;
+        if (p->index)
+            out->index = std::make_unique<MapIndex>(*p->index);
+        if (p->extra) {
+            out->more().keyHashes = p->extra->keyHashes;
+            out->more().keyEnum = p->extra->keyEnum;
+            out->more().hashMode = p->extra->hashMode;
+        }
+        if (p->flatLayout) {
+            // Flat elements are numbers and inline structs: the bytes are the copy.
+            out->flatLayout = p->flatLayout;
+            flatReserve(out, p->flatCount);
+            if (p->flatCount)
+                std::memcpy(out->flatData, p->flatData,
+                            p->flatCount * static_cast<size_t>(p->flatLayout->size));
+            out->flatCount = p->flatCount;
+        } else {
+            out->rawSlots.reserve(p->rawSlots.size());
+            for (auto &s : p->rawSlots)
+                out->rawSlots.push_back(slot(s));
+        }
+        out->keys.reserve(p->keys.size());
+        for (auto &s : p->keys)
+            out->keys.push_back(slot(s));
+        if (p->kind == Object::Weak)
+            weaks.emplace_back(out, p);
+        return out;
+    }
+    Slot slot(const Slot &s) {
+        Slot out;
+        out.kind = s.kind;
+        out.integer = s.integer;
+        out.real = s.real;
+        out.object = copy(s.object); // adopted: Slot's destructor releases it
+        return out;
+    }
+    // Weak references: to the copy when the target was copied, else to the same target.
+    void link() {
+        SharedLock lock(weakMutex());
+        for (auto &[out, original] : weaks) {
+            auto target = original->link ? original->link->target : nullptr;
+            if (target) {
+                if (auto found = copies.find(target); found != copies.end())
+                    target = found->second;
+                if (!target->weakCell) {
+                    target->weakCell = std::make_shared<WeakCell>();
+                    target->weakCell->target = target;
+                }
+                out->link = target->weakCell;
+            } else
+                out->link = original->link;
+        }
+    }
+};
+} // namespace
+extern "C" Object *fw_deep_copy(Frame *frame, Object *p) {
+    return nativeBoundary([&]() -> Object * {
+        if (!p)
+            return nullptr;
+        DeepCopier copier;
+        Object *out;
+        {
+            std::unique_lock<std::mutex> lock(flatMutex(), std::defer_lock);
+            if (activeThreads.load(std::memory_order_acquire) != 0)
+                lock.lock();
+            out = copier.copy(p);
+        }
+        copier.link();
+        return own(frame, out);
+    });
+}
+
 // hashing, encodings, secure random numbers, UUIDs ---------------------------------------------
 #if defined(__linux__)
 #include <sys/random.h>

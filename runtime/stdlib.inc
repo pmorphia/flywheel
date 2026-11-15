@@ -680,7 +680,13 @@ Object *processResult(Frame *frame, const ProcessOutcome &outcome) {
 struct SocketResource : NativeResource {
     Socket socket = invalidSocket;
     bool listener = false;
-    std::string buffered; // bytes read past a line by receive_line
+    bool datagram = false; // net.udp_socket
+    std::string buffered;  // bytes read past a line by receive_line
+    // UDP: the sender of the last packet received, the peer set by connect, and the last
+    // address send_to resolved (so sending every tick does not look the name up every time).
+    sockaddr_storage from{}, peer{}, resolved{};
+    socklen_t fromLength = 0, peerLength = 0, resolvedLength = 0;
+    std::string resolvedName;
     ~SocketResource() override {
         if (socket != invalidSocket)
             closeSocket(socket);
@@ -714,7 +720,7 @@ SocketResource &socketOf(Object *p, bool listener) {
     auto resource = p && p->kind == Object::Resource
                         ? dynamic_cast<SocketResource *>(p->nativeResource())
                         : nullptr;
-    if (!resource || resource->listener != listener)
+    if (!resource || resource->listener != listener || resource->datagram)
         fail(listener ? "expected net.listener" : "expected net.socket", "NetworkError");
     if (resource->socket == invalidSocket)
         fail("socket is closed", "NetworkError");
@@ -736,14 +742,17 @@ struct AddressList {
             freeaddrinfo(head);
     }
 };
-void resolveAddresses(AddressList &list, const std::string &host, int64_t port, bool passive) {
+void resolveAddresses(AddressList &list, const std::string &host, int64_t port, bool passive,
+                      int socketType = SOCK_STREAM, int family = AF_UNSPEC) {
     networkReady();
     if (port < 0 || port > 65535)
         fail("port must be in 0..65535", "NetworkError");
     addrinfo hints{};
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_family = family;
+    hints.ai_socktype = socketType;
     hints.ai_flags = passive ? AI_PASSIVE : 0;
+    if (family == AF_INET6)
+        hints.ai_flags |= AI_V4MAPPED;
     auto service = std::to_string(port);
     int status = getaddrinfo(host.empty() ? nullptr : host.c_str(), service.c_str(), &hints,
                              &list.head);
@@ -1641,6 +1650,211 @@ Object *fw_net_receive(Frame *frame, Object *socketValue, int64_t limit, int64_t
         auto text = buffer.substr(0, count);
         buffer.erase(0, count);
         return string(frame, text);
+    });
+}
+// UDP ------------------------------------------------------------------------------------------
+// net.udp_socket: datagrams that never block. receive returns null when nothing has arrived,
+// and a send the system cannot take right away is dropped (reported by its result), as a lost
+// packet would be.
+namespace {
+SocketResource &udpOf(Object *p) {
+    auto resource = p && p->kind == Object::Resource
+                        ? dynamic_cast<SocketResource *>(p->nativeResource())
+                        : nullptr;
+    if (!resource || !resource->datagram)
+        fail("expected net.udp_socket", "NetworkError");
+    if (resource->socket == invalidSocket)
+        fail("socket is closed", "NetworkError");
+    return *resource;
+}
+int socketFamily(Socket s) {
+    sockaddr_storage address{};
+    socklen_t length = sizeof(address);
+    getsockname(s, reinterpret_cast<sockaddr *>(&address), &length);
+    return address.ss_family;
+}
+bool wouldBlock(int code) {
+#ifdef _WIN32
+    return code == WSAEWOULDBLOCK;
+#else
+    return code == EAGAIN || code == EWOULDBLOCK;
+#endif
+}
+// The address of host:port in the socket's family (IPv4 names become mapped addresses on an
+// IPv6 socket).
+void udpAddress(SocketResource &resource, const std::string &host, int64_t port,
+                sockaddr_storage &out, socklen_t &length) {
+    auto name = host + "\n" + std::to_string(port);
+    if (name == resource.resolvedName) {
+        out = resource.resolved;
+        length = resource.resolvedLength;
+        return;
+    }
+    AddressList list;
+    resolveAddresses(list, host, port, false, SOCK_DGRAM, socketFamily(resource.socket));
+    if (!list.head)
+        fail("cannot resolve '" + host + "'", "NetworkError");
+    std::memcpy(&out, list.head->ai_addr, list.head->ai_addrlen);
+    length = static_cast<socklen_t>(list.head->ai_addrlen);
+    resource.resolved = out;
+    resource.resolvedLength = length;
+    resource.resolvedName = name;
+}
+int64_t udpSend(SocketResource &resource, const std::string &data, const sockaddr_storage &to,
+                socklen_t length) {
+    if (data.size() > 65507)
+        fail("a UDP packet holds at most 65507 bytes", "NetworkError");
+    while (true) {
+        auto n = ::sendto(resource.socket, data.data(), static_cast<int>(data.size()), 0,
+                          reinterpret_cast<const sockaddr *>(&to), length);
+        if (n >= 0)
+            return 1;
+        auto code = socketError();
+        if (interrupted())
+            continue;
+        if (wouldBlock(code))
+            return 0;
+#ifndef _WIN32
+        if (code == ECONNREFUSED)
+            return 0;
+#endif
+        fail("send failed: " + socketMessage(code), "NetworkError");
+    }
+}
+} // namespace
+Object *fw_net_udp(Frame *frame, Object *host, int64_t port) {
+    return nativeBoundary([&] {
+        AddressList list;
+        auto &name = requireString(host)->text;
+        resolveAddresses(list, name, port, true, SOCK_DGRAM);
+        int code = 0;
+        for (auto a = list.head; a; a = a->ai_next) {
+            Socket s = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+            if (s == invalidSocket) {
+                code = socketError();
+                continue;
+            }
+            if (a->ai_family == AF_INET6) {
+                int only = 0; // IPv4 peers too
+                setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<const char *>(&only),
+                           sizeof(only));
+            }
+            int on = 1;
+            setsockopt(s, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char *>(&on),
+                       sizeof(on));
+#ifdef _WIN32
+            u_long nonblocking = 1;
+            ioctlsocket(s, FIONBIO, &nonblocking);
+            // Without this, a packet that bounced (ICMP port unreachable) makes the next
+            // receive fail with WSAECONNRESET.
+            BOOL report = FALSE;
+            DWORD returned = 0;
+            WSAIoctl(s, _WSAIOW(IOC_VENDOR, 12), &report, sizeof(report), nullptr, 0, &returned,
+                     nullptr, nullptr);
+#else
+            fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);
+#endif
+            if (bind(s, a->ai_addr, static_cast<int>(a->ai_addrlen)) == 0) {
+                auto object = socketObject(frame, s, false);
+                static_cast<SocketResource *>(object->nativeResource())->datagram = true;
+                object->text = "net.udp_socket";
+                return object;
+            }
+            code = socketError();
+            closeSocket(s);
+        }
+        fail("cannot open UDP on " + name + ":" + std::to_string(port) + ": " +
+                 socketMessage(code),
+             "NetworkError");
+    });
+}
+// Sends to host:port; false when the packet was dropped.
+int64_t fw_net_udp_send_to(Object *socketValue, Object *data, Object *host, int64_t port) {
+    return nativeBoundary([&]() -> int64_t {
+        auto &resource = udpOf(socketValue);
+        sockaddr_storage to{};
+        socklen_t length = 0;
+        udpAddress(resource, requireString(host)->text, port, to, length);
+        return udpSend(resource, requireString(data)->text, to, length);
+    });
+}
+void fw_net_udp_connect(Object *socketValue, Object *host, int64_t port) {
+    nativeBoundary([&] {
+        auto &resource = udpOf(socketValue);
+        udpAddress(resource, requireString(host)->text, port, resource.peer, resource.peerLength);
+    });
+}
+// 0 send (to the connected peer), 1 reply (to the sender of the last packet received)
+int64_t fw_net_udp_send(Object *socketValue, Object *data, int64_t reply) {
+    return nativeBoundary([&]() -> int64_t {
+        auto &resource = udpOf(socketValue);
+        if (reply ? !resource.fromLength : !resource.peerLength)
+            fail(reply ? "reply needs a packet received first"
+                       : "send needs connect(host, port) first; or use send_to",
+                 "NetworkError");
+        return reply ? udpSend(resource, requireString(data)->text, resource.from,
+                               resource.fromLength)
+                     : udpSend(resource, requireString(data)->text, resource.peer,
+                               resource.peerLength);
+    });
+}
+// The next packet, or null when none has arrived.
+Object *fw_net_udp_receive(Frame *frame, Object *socketValue) {
+    return nativeBoundary([&]() -> Object * {
+        auto &resource = udpOf(socketValue);
+        static thread_local std::vector<char> buffer(65536);
+        while (true) {
+            sockaddr_storage from{};
+            socklen_t length = sizeof(from);
+            auto n = ::recvfrom(resource.socket, buffer.data(), static_cast<int>(buffer.size()), 0,
+                                reinterpret_cast<sockaddr *>(&from), &length);
+            if (n >= 0) {
+                resource.from = from;
+                resource.fromLength = length;
+                return string(frame, std::string(buffer.data(), static_cast<size_t>(n)));
+            }
+            auto code = socketError();
+            if (interrupted())
+                continue;
+            if (wouldBlock(code))
+                return nullptr;
+#ifdef _WIN32
+            if (code == WSAECONNRESET || code == WSAEMSGSIZE)
+                continue;
+#else
+            if (code == ECONNREFUSED)
+                continue;
+#endif
+            fail("receive failed: " + socketMessage(code), "NetworkError");
+        }
+    });
+}
+// "host:port" of the last packet's sender ("" before any).
+Object *fw_net_udp_sender(Frame *frame, Object *socketValue) {
+    return nativeBoundary([&] {
+        auto &resource = udpOf(socketValue);
+        return string(frame, resource.fromLength
+                                 ? addressText(reinterpret_cast<sockaddr *>(&resource.from))
+                                 : std::string());
+    });
+}
+// Waits up to `seconds` for a packet; true when one is ready.
+int64_t fw_net_udp_wait(Object *socketValue, double seconds) {
+    return nativeBoundary([&]() -> int64_t {
+        auto &resource = udpOf(socketValue);
+        pollfd entry{};
+        entry.fd = resource.socket;
+        entry.events = POLLIN;
+        auto ms = static_cast<int>(std::max(0.0, seconds) * 1000);
+#ifdef _WIN32
+        return WSAPoll(&entry, 1, ms) > 0;
+#else
+        int ready;
+        do
+            ready = poll(&entry, 1, ms);
+        while (ready < 0 && errno == EINTR);
+        return ready > 0;
+#endif
     });
 }
 void fw_net_timeout(Object *socketValue, double seconds) {
