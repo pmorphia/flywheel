@@ -1119,9 +1119,9 @@ int main(int argc, char **argv) {
     if (!cli.source && !cli.positionals.empty()) {
         auto first = cli.positionals.front();
         std::error_code ec;
-        if ((first == "get" || first == "add" || first == "install") && !fs::exists(first, ec)) {
-            std::cerr << "flywheel: packages are managed by Pulley: use `pulley " << first
-                      << "` (or `ppm " << first << "`)\n";
+        if ((first == "get" || first == "add" || first == "install" || first == "pull") &&
+            !fs::exists(first, ec)) {
+            std::cerr << "flywheel: packages are managed by Pulley: use `pulley pull` (or `ppm pull`)\n";
             return 2;
         }
     }

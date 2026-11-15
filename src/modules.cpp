@@ -626,15 +626,20 @@ class Loader {
                 u.names[s->name] = u.own.at(s->name);
             }
     }
-    Unit &load(const std::string &location) {
+    // `from` is the import statement that names the module; errors about reaching the module
+    // itself (a cycle, an unreadable file, a failed download) point there rather than at the top
+    // of the module.
+    Unit &load(const std::string &location, Location from = {}) {
         bool remote = isUrl(location);
         fs::path path = remote ? fs::path() : fs::path(location);
         auto canonical = remote ? location : fs::weakly_canonical(path).string();
+        if (from.file.empty())
+            from = {1, 1, canonical};
         if (std::find(stack.begin(), stack.end(), canonical) != stack.end()) {
             std::string message = "import cycle: ";
             for (auto &s : stack)
                 message += s + " -> ";
-            throw Error({1, 1, canonical}, message + canonical);
+            throw Error(from, message + canonical);
         }
         if (units.count(canonical))
             return *units.at(canonical);
@@ -647,14 +652,14 @@ class Loader {
             try {
                 text << fetch(location);
             } catch (const std::exception &e) {
-                throw Error({1, 1, canonical}, e.what());
+                throw Error(from, e.what());
             }
         } else if (library)
             text << libraryModules().at(path.stem().string());
         else {
             std::ifstream input(canonical, std::ios::binary);
             if (!input)
-                throw Error({1, 1, canonical}, "cannot read module");
+                throw Error(from, "cannot read module '" + canonical + "'");
             text << input.rdbuf();
         }
         auto owned = std::make_unique<Unit>();
@@ -844,7 +849,7 @@ class Loader {
             if (found.empty() && libraryModules().count(name))
                 found = (libraryDirectory / (name + ".fw")).string();
             if (!found.empty()) {
-                auto &dependency = load(found);
+                auto &dependency = load(found, importLoc);
                 u.modules[alias] = &dependency;
                 u.unitModules.push_back(&dependency);
                 for (auto &family : dependency.program.families)

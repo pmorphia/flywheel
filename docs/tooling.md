@@ -264,17 +264,21 @@ Packages are managed by [Pulley](../../pulley/README.md) (`pulley`, also `ppm`),
 
 ```sh
 pulley new app && cd app
-pulley add wednesware.shapes        # adds shapes = "wednesware.shapes=^1.2.0" and installs it
-flywheel app.fw                 # `import shapes` finds .flywheel-modules/shapes
-pulley install -g wednesware.shapes # for every program of this Flywheel installation
+# in pulley.toml: [dependencies] shapes = "wednesware.shapes=^1.2"
+pulley pull                         # installs it into .flywheel-modules
+flywheel app.fw                     # `import shapes` finds .flywheel-modules/shapes
+pulley pull driveshaft              # polymorphia.driveshaft, for every program of this installation
+pulley pull driveshaft -b           # only its command
 ```
 
-`flywheel --new NAME` runs `pulley new NAME`, and `flywheel --new --game NAME` runs `pulley new NAME --game`, which starts a game: [Aperture](https://github.com/pmorphia/aperture) as a dependency, a small playable game loop, an `assets/` directory, and a `start` script (`pulley install && pulley run start`).
+`pulley pull NAME` never changes a `pulley.toml`. A name without an author is a polymorphia package.
+
+`flywheel --new NAME` runs `pulley new NAME`, and `flywheel --new --game NAME` runs `pulley new NAME --game`, which starts a game: [Aperture](https://github.com/pmorphia/aperture) as a dependency, a small playable game loop, an `assets/` directory, and a `start` script (`pulley pull && pulley run start`).
 
 The compiler resolves `import name` (after local `.fw`/`.fly` files) in:
 
 1. every `.flywheel-modules` directory at or above the importing file, nearest first (a nested project that installs only some packages still sees the enclosing project's, and the nearest directory wins a name), then
-2. the installation-wide `modules` directory: `<install>/modules`, where `<install>` holds `bin/flywheel` (or is the executable's directory when it is not in `bin`), or `$FLYWHEEL_HOME/modules` when `FLYWHEEL_HOME` is set;
+2. the installation-wide `modules` directory (where `pulley pull NAME` links libraries): `<install>/modules`, where `<install>` holds `bin/flywheel` (or is the executable's directory when it is not in `bin`), or `$FLYWHEEL_HOME/modules` when `FLYWHEEL_HOME` is set;
 
 and then library and native modules. In a modules directory, a package is a directory named by its import name, or a `name.link` file containing the path of the package directory (Pulley uses these for path dependencies). `import name` loads the package's main module (`main` in its `pulley.toml`, else `name.fw`, `main.fw`, or `lib.fw`); `import name.part` loads `part.fw` in the package. Packages see each other by import name, because one project's packages share one directory; a package that ships its own `.flywheel-modules` resolves from it first. A module that is not found is reported with the directories that were searched.
 

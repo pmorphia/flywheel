@@ -1,1 +1,361 @@
-print
+# A tour of object-oriented Flywheel: classes, constructors, destructors,
+# visibility, statics, operators, inheritance, multiple inheritance,
+# interfaces, casts, iterators, generics, enums, and pattern matching.
+
+# ── Class decorators: called with the class reference at declaration ──
+string[] registry = []
+function register(function(string, double, double) returns Shape make)
+    registry.push(string(make("probe", 1.0, 1.0)))
+end
+
+# ── Interfaces, and interfaces extending interfaces ──
+interface Named
+    function label() returns string
+end
+
+interface Measurable extends Named
+    function area() returns double
+    function perimeter() returns double
+end
+
+# ── A base class: protected/readonly fields, statics, to_string ──
+class Shape implements Measurable
+    readonly string name
+    protected string color = "plain"
+    static int created = 0
+    static const double PI = 3.14159
+
+    constructor(string name)
+        this.name = name
+        Shape.created += 1
+    end
+
+    function area() returns double
+        return 0.0
+    end
+
+    function perimeter() returns double
+        return 0.0
+    end
+
+    function label() returns string
+        return "{this.color} {this.name}"
+    end
+
+    # Template method: dispatches to the subclass's area()/perimeter()
+    function describe() returns string
+        return "{this.label()}: area {this.area():.2f}, perimeter {this.perimeter():.2f}"
+    end
+
+    function to_string returns string
+        return "Shape({this.name})"
+    end
+end
+
+# ── Inheritance, overriding, super.constructor and super.method ──
+class Circle extends Shape
+    double radius
+
+    constructor(double radius)
+        super.constructor("circle")
+        this.radius = radius
+        this.color = "red"          # protected: visible in subclasses
+    end
+
+    function area() returns double
+        return Shape.PI * this.radius * this.radius
+    end
+
+    function perimeter() returns double
+        return 2.0 * Shape.PI * this.radius
+    end
+
+    function label() returns string
+        return "round " + super.label()
+    end
+end
+
+register class Rect extends Shape
+    double width = 1.0
+    double height = 1.0
+
+    constructor(string name, double width, double height)
+        super.constructor(name)
+        this.width = width
+        this.height = height
+    end
+
+    function area() returns double
+        return this.width * this.height
+    end
+
+    function perimeter() returns double
+        return 2.0 * (this.width + this.height)
+    end
+
+    # Static factory method
+    static function square(double side) returns Rect
+        return Rect("square", side, side)
+    end
+end
+
+# ── Multiple inheritance with C3 linearization ──
+class Timestamped
+    int created_at = 0
+    function describe() returns string
+        return "created at t={this.created_at}"
+    end
+end
+
+class Badge extends Circle, Timestamped
+    string text
+
+    constructor(string text, double radius, int at)
+        super.Circle.constructor(radius)
+        this.text = text
+        this.created_at = at
+    end
+
+    function describe() returns string
+        # super.describe() follows the linearization (Circle → Shape);
+        # super.Timestamped.describe() names a base explicitly
+        return "badge '{this.text}' — " + super.describe() + ", " + super.Timestamped.describe()
+    end
+end
+
+# ── Encapsulation: private state, operators, equals/hash ──
+class Money
+    readonly int cents
+    private static int operations = 0
+
+    function operator +(Money other) returns Money
+        Money.operations += 1
+        return Money(this.cents + other.cents)
+    end
+
+    function operator -(Money other) returns Money
+        Money.operations += 1
+        return Money(this.cents - other.cents)
+    end
+
+    function operator *(int k) returns Money
+        Money.operations += 1
+        return Money(this.cents * k)
+    end
+
+    function operator -() returns Money
+        return Money(-this.cents)
+    end
+
+    function operator ==(Money other) returns bool
+        return this.cents == other.cents
+    end
+
+    function operator <(Money other) returns bool
+        return this.cents < other.cents
+    end
+
+    function hash() returns int
+        return this.cents
+    end
+
+    function equals(Money other) returns bool
+        return this.cents == other.cents
+    end
+
+    static function ops() returns int
+        return Money.operations     # static method may read private statics
+    end
+
+    function to_string returns string
+        var sign = "-" if this.cents < 0 else ""
+        var abs = -this.cents if this.cents < 0 else this.cents
+        return "{sign}${abs // 100}.{abs % 100:02}"
+    end
+end
+
+class Wallet
+    private Money balance = Money(0)
+    private map<string, Money> ledger = {}
+
+    function deposit(string memo, Money amount)
+        this.balance += amount
+        this.ledger[memo] = amount
+    end
+
+    function total() returns Money
+        return this.balance
+    end
+
+    # Indexing operators
+    function operator [](string memo) returns Money
+        return this.ledger[memo]
+    end
+
+    function operator []=(string memo, Money amount)
+        this.balance = this.balance - this.ledger[memo] + amount
+        this.ledger[memo] = amount
+    end
+end
+
+# ── Iterator protocol ──
+class Countdown
+    int n
+    function next() returns int?
+        if this.n == 0 do
+            return null
+        end
+        this.n -= 1
+        return this.n + 1
+    end
+end
+
+# ── Generics: generic classes, constraints, generic methods ──
+class Box<T>
+    T value
+
+    function map<U>(function(T) returns U f) returns Box<U>
+        return Box<U>(f(this.value))
+    end
+
+    function to_string returns string
+        return "Box({this.value})"
+    end
+end
+
+function largest<T is comparable>(T[] items) returns T
+    var best = items[0]
+    for x in items do
+        if x > best do
+            best = x
+        end
+    end
+    return best
+end
+
+function total_area<T implements Measurable>(T[] items) returns double
+    double sum = 0.0
+    for item in items do
+        sum += item.area()
+    end
+    return sum
+end
+
+# ── Destructors ──
+class Connection
+    string host
+    destructor
+        print "  closing {this.host}"
+    end
+end
+
+function use_connection()
+    var c = Connection("db.local")
+    print "  querying {c.host}"
+end
+
+# ── Enums, enums with data, and exhaustive matching ──
+enum Tier
+    Free, Pro
+    Enterprise
+end
+
+enum Event
+    Click(int x, int y)
+    Key(char key)
+    Quit
+end
+
+function handle(Event e) returns string
+    match e
+        case Event.Click(x, y) if x == y do
+            return "diagonal click at {x}"
+        case Event.Click(x, y) do
+            return "click at ({x}, {y})"
+        case Event.Key(k) do
+            return "key '{k}'"
+        case Event.Quit do
+            return "quit"
+    end
+end
+
+function kind(Shape s) returns string
+    match s
+        case Badge b do
+            return "a badge saying {b.text}"
+        case Circle c if c.radius > 5.0 do
+            return "a big circle"
+        case Circle do
+            return "a circle"
+        else do
+            return "some other shape"
+    end
+end
+
+# ═════════════════════════ Demo ═════════════════════════
+
+print "== classes, inheritance, dynamic dispatch =="
+Shape[] shapes = [Circle(1.0), Rect("rect", 2.0, 3.0), Rect.square(4.0), Badge("new", 0.5, 42)]
+for s in shapes do
+    print s.describe()
+end
+print "shapes created:", Shape.created
+print "decorator registry:", registry
+
+print "\n== interfaces =="
+Measurable m = shapes[1]
+Named n = m
+print n.label(), m.area()
+print "total area via constraint: {total_area(shapes):.2f}"
+
+print "\n== type tests and casts =="
+Shape s = shapes[3]
+print s is Circle, s is Timestamped, s is Rect
+if s is Badge do
+    print "narrowed:", s.text, s.created_at    # s is a Badge here
+end
+var maybe_rect = s as Rect?
+print "as Rect?:", maybe_rect
+print "kinds:", shapes.map(kind)
+
+print "\n== operators, equality, hashing =="
+var price = Money(150) + Money(275)
+print price, price * 3, -price, price - Money(25)
+print Money(100) == Money(100), Money(1) < Money(2), Money(5) >= Money(5)
+map<Money, string> names = {Money(100): "a dollar"}
+print names[Money(100)], "ops so far:", Money.ops()
+
+var wallet = Wallet()
+wallet.deposit("rent", Money(90000))
+wallet.deposit("coffee", Money(450))
+wallet["coffee"] = Money(500)
+print "wallet:", wallet.total(), "coffee:", wallet["coffee"]
+
+print "\n== first-class methods and class references =="
+var c = Circle(2.0)
+var get_area = c.area
+print "bound method: {get_area():.2f}"
+function(double) returns Circle make = Circle
+print make(3.0), [1.0, 2.0].map(make).map(function(Circle x) => x.radius)
+
+print "\n== iterators =="
+for i in Countdown(3) do
+    print "  tick", i
+end
+
+print "\n== generics =="
+var b = Box(21)
+print b, b.map(function(int x) => x * 2), b.map(function(int x) => "n{x}")
+print largest([3, 9, 2]), largest(["pear", "apple"]), largest([Money(5), Money(50)])
+
+print "\n== enums =="
+var tier = Tier.Pro
+print tier, tier.value, Tier.values(), Tier.from_name("Enterprise") ?? Tier.Free
+Event[] events = [Event.Click(3, 3), Event.Click(1, 2), Event.Key('q'), Event.Quit]
+for e in events do
+    print "  " + handle(e)
+end
+
+print "\n== destructors =="
+use_connection()
+print "done"

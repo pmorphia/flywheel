@@ -183,7 +183,7 @@ Markup tags come from `import html.*`, `import svg.*`, or declared [element fami
 
 ## Games
 
-[Aperture](aperture/README.md) (`pulley add polymorphia.aperture`) is the 2D and 3D game library: a window, input, batched sprites and shapes, text, cameras, meshes with lighting, render targets, shaders, and sound, on SDL3 and OpenGL.
+[Aperture](aperture/README.md) (`pulley pull aperture`) is the 2D and 3D game library: a window, input, batched sprites and shapes, text, cameras, meshes with lighting, render targets, shaders, and sound, on SDL3 and OpenGL.
 
 ```flywheel
 import aperture as ap

@@ -818,6 +818,32 @@ struct Server {
         return "{\"uri\":" + quote(uriOf(s.file)) + ",\"range\":" +
                range(s.line - 1, start, s.line - 1, start + utf16Column(s.name, static_cast<int>(s.name.size()) + 1)) + "}";
     }
+    // The (line, column) of the import in `path` whose module is `target` or imports it,
+    // directly or through other modules; (1, 1) if none does.
+    std::pair<int, int> importLeadingTo(const std::string &path, const std::string &target) {
+        auto f = navigator.index(path);
+        if (!f)
+            return {1, 1};
+        std::set<std::string> seen = {canonical(path)};
+        std::function<bool(const std::string &)> reaches = [&](const std::string &module) {
+            if (module.empty() || !seen.insert(module).second)
+                return false;
+            if (module == target)
+                return true;
+            auto m = navigator.index(module);
+            if (!m)
+                return false;
+            for (auto &[alias, name] : m->imports)
+                if (reaches(navigator.modulePath(*m, name)))
+                    return true;
+            return false;
+        };
+        for (auto &s : f->globals)
+            if (s.kind == "import" && f->imports.count(s.name) &&
+                reaches(navigator.modulePath(*f, f->imports.at(s.name))))
+                return {s.line, s.column};
+        return {1, 1};
+    }
     void diagnose(const std::string &uri) {
         std::string diagnostics;
         auto path = pathOf(uri);
@@ -845,8 +871,12 @@ struct Server {
         } catch (const Error &e) {
             if (e.loc.file.empty() || canonical(e.loc.file) == canonical(path))
                 add(e.loc.line, e.loc.column, e.what());
-            else
-                add(1, 1, "in " + e.loc.file + ":" + std::to_string(e.loc.line) + ": " + e.what());
+            else {
+                // An error inside an imported module: show it on the import that leads there.
+                auto at = importLeadingTo(path, canonical(e.loc.file));
+                add(at.first, at.second,
+                    "in " + e.loc.file + ":" + std::to_string(e.loc.line) + ": " + e.what());
+            }
         } catch (const std::exception &e) {
             add(1, 1, e.what());
         }
