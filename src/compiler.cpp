@@ -2912,7 +2912,8 @@ end
         return !b.GetInsertBlock()->empty() && b.GetInsertBlock()->back().isTerminator();
     }
     bool borrowable(Expr &e) {
-        if ((e.kind == "element" && p.components.count(e.text)) || e.kind == "lambda")
+        if ((e.kind == "element" && p.components.count(e.text)) || e.kind == "lambda" ||
+            e.kind == "match")
             return false;
         if (e.outer && !e.grouped && (e.kind == "name" || e.kind == "member")) {
             auto name = callable(e);
@@ -3025,6 +3026,7 @@ end
     Val lambda(Expr &e, Ty expected);
     Val coalesce(Expr &e, Ty expected);
     Val ternary(Expr &e, Ty expected);
+    Val matchExpression(Expr &e, Ty expected);
     // Private and protected static members (Class$member) follow the class's access rules.
     void checkStatic(const std::string &name) {
         auto it = p.statics.find(name);
@@ -3906,6 +3908,8 @@ Val Compiler::value(Expr &e, Ty expected) {
     }
     if (e.kind == "ternary")
         return ternary(e, expected);
+    if (e.kind == "match")
+        return matchExpression(e, expected);
     if (e.kind == "spawn")
         return spawnTask(e);
     if (e.kind == "member") {
@@ -8025,6 +8029,34 @@ Val Compiler::ternary(Expr &e, Ty expected) {
     phi->addIncoming(a.v, yesEnd);
     phi->addIncoming(c.v, noEnd);
     return {phi, result};
+}
+// A match expression is a function of no arguments whose body is the match, with a return in
+// every case, called where it is written. The cases' values decide its type as the returns of
+// a lambda do, unless the context expects one.
+Val Compiler::matchExpression(Expr &e, Ty expected) {
+    Expr lambda;
+    lambda.kind = "lambda";
+    lambda.loc = e.loc;
+    lambda.lambda = e.lambda;
+    bool given = expected.name != "void" && !expected.name.empty() && expected.name != "null";
+    Val f;
+    try {
+        f = asFunction(value(lambda, given ? Ty{"function<" + expected.name + ">"} : Ty{}));
+    } catch (const Error &problem) {
+        std::string message = problem.what();
+        if (message == "inconsistent inferred return types")
+            throw Error(problem.loc, "the cases of a match expression have different types; "
+                                     "declare the type the match produces");
+        if (message == "return null requires an explicit nullable return type")
+            throw Error(problem.loc, "a match expression with a null case needs the nullable "
+                                     "type it produces from its context, such as 'string? s = "
+                                     "match ...'");
+        throw;
+    }
+    location = e.loc;
+    if (!f.t.function() || f.t.parts().size() != 1 || f.t.parts()[0].name == "void")
+        error("a match expression needs a value in every case");
+    return callClosure(f, std::vector<Val>{});
 }
 // `spawn call`: thread.spawn of a function running the call.
 Val Compiler::spawnTask(Expr &e) {

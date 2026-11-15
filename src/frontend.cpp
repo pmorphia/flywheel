@@ -702,7 +702,7 @@ Token Parser::identifier() {
         "finally", "throw",   "this", "attr",  "true",     "false",    "null",
         "void", "weak",  "and",      "or",       "not",
         "enum",    "interface", "extends", "implements", "match", "case", "super", "is", "which",
-        "elements", "defer"};
+        "elements", "defer", "unless"};
     if (t.kind != "id" || reserved.count(t.text))
         throw Error(t.loc, "expected identifier");
     return t;
@@ -1252,6 +1252,8 @@ EP Parser::prefix() {
         e = spawn();
     } else if (t.kind == "id" && t.text == "function" && peek(1).text == "(") {
         e = lambda();
+    } else if (t.kind == "id" && t.text == "match") {
+        e = matchExpression();
     } else if (t.kind == "id" && t.text == "weak" && peek(1).text == "(") {
         take();
         e = node("name", "weak", t.loc);
@@ -1261,7 +1263,7 @@ EP Parser::prefix() {
             "return",   "if",    "else",     "while",  "do",      "for",
             "in",       "end",   "break",     "continue", "try",    "catch",   "finally",
             "throw",    "as",    "void",      "weak",     "and",    "or",      "enum",
-            "interface", "extends", "implements", "match", "case",  "is", "which"};
+            "interface", "extends", "implements", "case",  "is", "which", "unless"};
         if (structural.count(t.text))
             throw Error(t.loc, "unexpected keyword '" + t.text + "' in expression");
         take();
@@ -1540,7 +1542,7 @@ std::vector<SP> Parser::runBody() {
             "if",     "else",     "while",   "do",       "for",       "end",
             "break",  "continue", "try",    "catch",   "finally",  "throw",     "match",
             "case",   "defer",  "when",     "reactive", "computed", "assert",
-            "enum",   "interface"};
+            "enum",   "interface", "unless"};
         if (keywords.count(peek().text) && !(peek().text == "function" && peek(1).text == "("))
             throw Error(loc, usage + ", not '" + peek().text + "'");
     }
@@ -1574,7 +1576,7 @@ void Parser::runElse(Stmt &s) {
             finish();
             return;
         }
-        if (peek().text == "if" && peek().kind == "id") {
+        if ((peek().text == "if" || peek().text == "unless") && peek().kind == "id") {
             auto ifPos = pos;
             take();
             bool chained = false;
@@ -1717,9 +1719,16 @@ SP Parser::statement() {
         finish();
         return s;
     }
-    if (accept("if")) {
+    if (peek().kind == "id" && (peek().text == "if" || peek().text == "unless")) {
+        // `unless condition` is `if not (condition)`.
+        bool negated = take().text == "unless";
         s->kind = "if";
         s->expr = expression();
+        if (negated) {
+            auto n = node("unary", "not", s->expr->loc);
+            n->args.push_back(std::move(s->expr));
+            s->expr = std::move(n);
+        }
         if (runs()) {
             s->body = runBody();
             runElse(*s);
@@ -1729,7 +1738,7 @@ SP Parser::statement() {
         finish();
         s->body = block();
         if (accept("else")) {
-            if (peek().text == "if") {
+            if (peek().text == "if" || peek().text == "unless") {
                 s->other.push_back(statement());
                 return s;
             }
@@ -1750,50 +1759,7 @@ SP Parser::statement() {
         s->kind = "match";
         s->expr = expression();
         finish();
-        while (accept("case")) {
-            // A type pattern is `Type name`; anything else is a list of values to compare.
-            auto saved = pos;
-            std::string patternType, binding;
-            try {
-                patternType = type();
-                binding = identifier().text;
-                if (peek().text != "do" && peek().text != "if")
-                    throw Error(peek().loc, "pattern");
-            } catch (const Error &) {
-                pos = saved;
-                patternType.clear();
-                binding.clear();
-            }
-            std::vector<EP> values;
-            if (patternType.empty()) {
-                noTernary = true;
-                try {
-                    do {
-                        values.push_back(expression());
-                    } while (accept(","));
-                } catch (...) {
-                    noTernary = false;
-                    throw;
-                }
-                noTernary = false;
-            }
-            s->catchTypes.push_back(patternType);
-            s->catchNames.push_back(binding);
-            s->patterns.push_back(std::move(values));
-            s->guards.push_back(accept("if") ? expression() : nullptr);
-            expect("do");
-            finish();
-            s->catches.push_back(block());
-        }
-        if (accept("else")) {
-            s->op = "else";
-            expect("do");
-            finish();
-            s->other = block();
-        }
-        if (s->catches.empty() && s->op.empty())
-            throw Error(s->loc, "match requires at least one case");
-        expect("end");
+        matchCases(*s, false);
         finish();
         return s;
     }
@@ -2040,7 +2006,7 @@ EP Parser::spawn() {
     } else {
         static const std::set<std::string> keywords = {
             "import", "var", "const", "class", "return", "if", "else", "while", "do", "for",
-            "end", "break", "continue", "try", "catch", "finally", "throw", "match", "case"};
+            "end", "break", "continue", "try", "catch", "finally", "throw", "match", "case", "unless"};
         if (keywords.count(peek().text))
             throw Error(peek().loc, usage + ", not '" + peek().text + "'");
         target = outer(); // `spawn print "hi"`: parentheses are optional, as in statements
@@ -2062,6 +2028,102 @@ EP Parser::spawn() {
     r->expr = std::move(target);
     f->body.push_back(std::move(r));
     auto e = node("spawn", "", t.loc);
+    e->lambda = std::move(f);
+    return e;
+}
+// The cases of a match, through its `end`. In a match expression (`arrows`) each case is
+// `case pattern => value` and the else `else => value`: each value becomes a return in the
+// body of the function the expression runs.
+void Parser::matchCases(Stmt &s, bool arrows) {
+    auto body = [&]() {
+        std::vector<SP> out;
+        if (!arrows) {
+            expect("do");
+            finish();
+            return block();
+        }
+        expect("=>");
+        auto r = std::make_unique<Stmt>();
+        r->kind = "return";
+        r->loc = peek().loc;
+        r->expr = expression();
+        out.push_back(std::move(r));
+        if (peek().kind == "nl")
+            finish(); // or the next case follows on the same line
+        else if (peek().text != "case" && peek().text != "else" && peek().text != "end")
+            throw Error(peek().loc, "expected the next case or 'end', got '" + peek().text + "'");
+        return out;
+    };
+    const char *opener = arrows ? "=>" : "do";
+    while (accept("case")) {
+        // A type pattern is `Type name`; anything else is a list of values to compare.
+        auto saved = pos;
+        std::string patternType, binding;
+        try {
+            patternType = type();
+            binding = identifier().text;
+            if (peek().text != opener && peek().text != "if")
+                throw Error(peek().loc, "pattern");
+        } catch (const Error &) {
+            pos = saved;
+            patternType.clear();
+            binding.clear();
+        }
+        std::vector<EP> values;
+        if (patternType.empty()) {
+            noTernary = true;
+            try {
+                do {
+                    values.push_back(expression());
+                } while (accept(","));
+            } catch (...) {
+                noTernary = false;
+                throw;
+            }
+            noTernary = false;
+        }
+        s.catchTypes.push_back(patternType);
+        s.catchNames.push_back(binding);
+        s.patterns.push_back(std::move(values));
+        s.guards.push_back(accept("if") ? expression() : nullptr);
+        if (arrows && peek().text == "do")
+            throw Error(peek().loc, "a match expression's cases are 'case pattern => value'; "
+                                    "use a match statement for 'do' blocks");
+        s.catches.push_back(body());
+    }
+    if (accept("else")) {
+        s.op = "else";
+        if (arrows && peek().text == "do")
+            throw Error(peek().loc, "a match expression ends with 'else => value'");
+        s.other = body();
+    }
+    if (s.catches.empty() && s.op.empty())
+        throw Error(s.loc, "match requires at least one case");
+    expect("end");
+}
+// `match subject` ... `end` as an expression: the cases run in a function of no arguments
+// that is called on the spot, so the value of the chosen case is its return value.
+EP Parser::matchExpression() {
+    auto t = expect("match");
+    bodyDepths.push_back(t.depth);
+    auto f = std::make_shared<Function>();
+    f->loc = t.loc;
+    f->name = "lambda";
+    try {
+        auto m = std::make_unique<Stmt>();
+        m->kind = "match";
+        m->loc = t.loc;
+        m->expr = expression();
+        if (peek().kind == "nl")
+            finish(); // the cases may follow on the same line
+        matchCases(*m, true);
+        f->body.push_back(std::move(m));
+    } catch (...) {
+        bodyDepths.pop_back();
+        throw;
+    }
+    bodyDepths.pop_back();
+    auto e = node("match", "", t.loc);
     e->lambda = std::move(f);
     return e;
 }

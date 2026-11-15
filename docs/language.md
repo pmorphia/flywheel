@@ -167,7 +167,18 @@ The block is the enclosing `if`, loop, `try`, or function body, so a `defer` ins
 
 Arrays infer a homogeneous common type, or use the declared element type. Empty arrays require context. Heterogeneous literals infer tuples, with compile-time integer indices. Maps use `{key: value}` literals and sets `{a, b}`; `{}` is an empty map or set, depending on the expected type. See [collections](collections.md). Arrays use shared mutable identity and checked indices; `s[a..b]` and `s[a..<b]` slice strings and sequences.
 
-`if`, `else`, `while`, `for`, and `when` also take a one-call body after `run` (a soft keyword, still usable as a name) in place of `do` ... `end`. The body is a single function call, with no `end`. Its parentheses are optional, as in any call statement: `run main_loop` calls `main_loop()`, `run game.tick` calls `game.tick()`, and `run greet "Ann"` calls `greet("Ann")`. Keyword statements, declarations, and assignments need the block form:
+`unless condition` is `if not (condition)`, with the same forms: `unless c do` ... `else do` ... `end`, `unless c run f()`, and `else unless c` in a chain (`else if` works after an `unless` too). Its condition must be `bool`.
+
+```flywheel
+unless ready do
+    print "not ready yet"
+else do
+    start()
+end
+unless tries > 5 run retry()
+```
+
+`if`, `unless`, `else`, `while`, `for`, and `when` also take a one-call body after `run` (a soft keyword, still usable as a name) in place of `do` ... `end`. The body is a single function call, with no `end`. Its parentheses are optional, as in any call statement: `run main_loop` calls `main_loop()`, `run game.tick` calls `game.tick()`, and `run greet "Ann"` calls `greet("Ann")`. Keyword statements, declarations, and assignments need the block form:
 
 ```flywheel
 if x > 5 run greet("big")

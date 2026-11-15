@@ -182,9 +182,10 @@ std::string format(const std::string &source) {
             // `else run call` ends the chain; `else if condition run call` continues it.
             if (!stack.empty())
                 stack.pop_back();
-            if (first + 1 < line.size() && line[first + 1]->text == "if")
+            if (first + 1 < line.size() &&
+                (line[first + 1]->text == "if" || line[first + 1]->text == "unless"))
                 stack.push_back({"runif", depth});
-        } else if ((keyword == "if" || keyword == "when") && runs)
+        } else if ((keyword == "if" || keyword == "unless" || keyword == "when") && runs)
             stack.push_back({"runif", depth});
         else if ((keyword == "while" || keyword == "for") && runs) {
             // one call, no block
@@ -203,7 +204,7 @@ std::string format(const std::string &source) {
         else if (keyword == "function" && first + 1 < line.size() && line[first + 1]->kind == "id" &&
                  (stack.empty() || stack.back().kind != "interface"))
             stack.push_back({"block", depth});
-        else if (keyword == "if" && line.back()->text == "do")
+        else if ((keyword == "if" || keyword == "unless") && line.back()->text == "do")
             stack.push_back({"block", depth});
         else if (keyword == "when" && line.size() > first + 1 && line.back()->text == "do")
             stack.push_back({"block", depth}); // `when condition do` ... `end`
@@ -212,6 +213,18 @@ std::string format(const std::string &source) {
             stack.push_back({"block", depth}); // `defer when condition do` ... `end`
         else if (keyword == "defer" && first + 1 == line.size())
             stack.push_back({"block", depth}); // `defer` alone opens a block ending in `end`
+        // A match expression later on the line (`string s = match x`, `return match x`) opens
+        // its cases like a match statement, unless its `end` is on the same line.
+        if (!(isKeyword && keyword == "match"))
+            for (size_t i = first + 1; i < line.size(); ++i)
+                if (line[i]->kind == "id" && line[i]->text == "match") {
+                    bool ends = false;
+                    for (size_t k = i + 1; k < line.size(); ++k)
+                        ends = ends || (line[k]->kind == "id" && line[k]->text == "end");
+                    if (!ends)
+                        stack.push_back({"match", line[i]->depth});
+                    break;
+                }
         int lambdaDepth = 0;
         if (!(isKeyword && keyword == "function" && first + 1 < line.size() &&
               line[first + 1]->kind == "id") &&

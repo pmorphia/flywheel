@@ -371,6 +371,30 @@ Any case may add a guard: `case Circle c if c.radius > 1.0 do`. The subject is e
 
 Without `else`, a `match` must be exhaustive. The compiler checks enum members, `true`/`false`, `ok`/`error`, `null` plus a type pattern for nullable values, and every concrete class that can have the subject's static type. Guarded cases do not count toward exhaustiveness. A non-exhaustive match is a compile error naming the missing cases.
 
+### Match expressions
+
+`match` is also an expression: each case is `case pattern => value` and the else is `else => value`, and the match produces the value of the case that matches. Patterns, guards, bindings, and exhaustiveness are those of the statement. The cases may be written on their own lines or share one:
+
+```flywheel
+function area(Shape s) returns double
+    return match s
+        case Shape.Circle(r) => 3.14159 * r * r
+        case Shape.Rect(w, h) => w * h
+        case Shape.Empty => 0.0
+    end
+end
+
+string size = match count
+    case 0 => "none"
+    case 1..9 => "a few"
+    case int n if n < 100 => "{n}, many"
+    else => "lots"
+end
+print match grade case 'A', 'B' => "good" else => "keep going" end
+```
+
+The values of the cases decide the type of the match, as the returns of a lambda do: they must have one type (or one widens to the other), unless the context gives the type, as in `double d = match n case 0 => 1 else => 2.5 end` or `string? s = match ... case ... => null ...`. A case value is a single expression; statements need the `do` blocks of a match statement.
+
 ## Generics
 
 Classes and top-level functions can declare type parameters:

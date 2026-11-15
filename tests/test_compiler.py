@@ -3926,6 +3926,21 @@ print web.route("POST", "/echo", echo, 0, "::1")
             "if true do\n    if a run f()\n    # note\n    else if b run g()\n    else run h()\n"
             "    for i in xs run f(i)\n    while c run g()\n    when d run h()\n    f()\nend\n",
         )
+        # `unless` opens blocks like `if`; a match expression opens its cases unless it ends on
+        # its line.
+        messy.write_text(
+            "unless a do\nf()\nelse do\ng()\nend\nunless b run g()\nelse run h()\n"
+            "string s = match x\ncase 1 => \"a\"\nelse => \"b\"\nend\n"
+            "print match x case 1 => 2 else => 3 end\nf()\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(self.command("--format", messy).returncode, 0)
+        self.assertEqual(
+            messy.read_text(encoding="utf-8"),
+            "unless a do\n    f()\nelse do\n    g()\nend\nunless b run g()\nelse run h()\n"
+            "string s = match x\n    case 1 => \"a\"\n    else => \"b\"\nend\n"
+            "print match x case 1 => 2 else => 3 end\nf()\n",
+        )
         # A line opening with a delimiter is not a continuation line.
         messy.write_text("print 1\n[int, int] p = [1, 2]\n(print)(p)\n", encoding="utf-8")
         self.assertEqual(self.command("--format", "--check", messy).returncode, 0)
@@ -4819,6 +4834,59 @@ NEGATIVE.update({
     "markup_implicit_close_not_void": (
         'import html.*\nprint <div><p>text</div>\n',
         "<p> needs a closing tag </p>"),
+})
+
+
+# `unless c` is `if not (c)`; a match expression produces the value of its chosen case.
+POSITIVE.update({
+    "unless_statement": (
+        'bool ok = false\nint x = 3\n'
+        'unless ok do\n    print "not ok"\nelse do\n    print "ok"\nend\n'
+        'unless x > 5 run print("small")\n'
+        'unless x == 3 do\n    print "no"\nelse unless x == 4 do\n    print "three"\nend\n'
+        'unless ok or x == 3 run print("skipped")\nelse run print("else run")\n'
+        'unless x == 3 do\n    print "a"\nelse if x == 3 do\n    print "b"\nend\n',
+        'not ok\nsmall\nthree\nelse run\nb\n'),
+    "match_expression": (
+        'enum Shape\n    Circle(double radius)\n    Rect(double width, double height)\n    Empty\nend\n'
+        'class Animal\n    string name\nend\nclass Dog extends Animal\nend\nclass Cat extends Animal\nend\n'
+        'function area(Shape s) returns double\n'
+        '    return match s\n        case Shape.Circle(r) => 3.0 * r * r\n'
+        '        case Shape.Rect(w, h) => w * h\n        case Shape.Empty => 0.0\n    end\nend\n'
+        'print area(Shape.Rect(2.0, 3.0)), area(Shape.Circle(1.0)), area(Shape.Empty)\n'
+        'int x = 3\n'
+        'string s = match x\n    case 1 => "one"\n    case 2, 3 => "two or three"\n    else => "other"\nend\n'
+        'print s\n'
+        'for n in [0, 5, 15, 42] do\n'
+        '    print match n case 0 => "zero" case 1..9 => "small" case int k if k < 20 => "teen {k}" else => "big" end\n'
+        'end\n'
+        "var grade = match 87\n    case 90..100 => 'A'\n    case 80..<90 => 'B'\n    else => 'C'\nend\n"
+        'double mixed = match x case 3 => 1 else => 2.5 end\n'
+        'string? none = match x\n    case 3 => null\n    else => "x"\nend\n'
+        'print grade, mixed, none ?? "none"\n'
+        'Animal a = Cat("Tom")\n'
+        'print match a\n    case Dog d => "dog {d.name}"\n    case Cat c => "cat {c.name}"\n    else => "?"\nend\n'
+        'print (match x case 3 => 10 else => 20 end) + 1, [match true case true => "t" case false => "f" end]\n'
+        'var i = 0\nwhile (match i case 3 => false else => true end) do\n    i += 1\nend\n'
+        'var f = function(int n) => match n case 0 => "z" else => "nz" end\n'
+        'Result<int, string> res = Result.error("bad")\n'
+        'print i, f(0), f(2), match res case ok v => "ok {v}" case error e => "error {e}" end\n'
+        'class Counter\n    private int count = 0\n    function bump()\n        this.count += 1\n    end\n'
+        '    function label() returns string\n        return match this.count\n'
+        '            case 0 => "none"\n            case 1 => "one"\n            else => "many"\n        end\n    end\nend\n'
+        'var c = Counter()\nprint c.label()\nc.bump()\nprint c.label()\n',
+        '6 3 0\ntwo or three\nzero\nsmall\nteen 15\nbig\nB 1 none\ncat Tom\n11 ["t"]\n3 z nz error bad\nnone\none\n'),
+})
+NEGATIVE.update({
+    "match_expression_exhaustive": ('print match 3\n    case 1 => "a"\nend\n', "match is not exhaustive"),
+    "match_expression_do": ('print match 3\n    case 1 do\n        print "a"\nend\n',
+                            "a match expression's cases are 'case pattern => value'"),
+    "match_expression_else_do": ('print match 3 case 1 => "a" else do "b" end\n',
+                                 "a match expression ends with 'else => value'"),
+    "match_expression_types": ('var q = match 3 case 1 => "a" else => 2 end\n',
+                               "the cases of a match expression have different types"),
+    "unless_bool": ('unless 1 do\n    print 1\nend\n', "'not' requires bool"),
+    "unless_identifier": ('var unless = 1\n', "expected identifier"),
 })
 
 

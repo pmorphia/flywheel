@@ -267,6 +267,9 @@ class Parser {
     bool modifierAhead();    // public/private/protected/static (soft keywords) start a declaration
     std::vector<EP> decorators(); // `memoize function f` / `register class C`: the decorators
     EP spawn();              // `spawn call`: the call on a new thread (a thread.task)
+    EP matchExpression();    // `match x` / `case p => value` / `else => value` / `end`
+    // The cases of a match; `arrows` parses `=> value` bodies (a match expression).
+    void matchCases(Stmt &s, bool arrows);
     int temporaries = 0;
     // `function name(...)`; in a class also `constructor(...)` and `destructor`, which `keyword`
     // names when the caller has seen it.
