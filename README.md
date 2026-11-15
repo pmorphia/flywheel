@@ -2,7 +2,7 @@
 
 A C++20 compiler that turns Flywheel source into LLVM IR, native object files, and executables. Native markup and components become compiled element construction with escaped HTML serialization. Programs require neither Python nor a runtime interpreter.
 
-Flywheel is currently in its **beta** phase: version **2.23 (beta-23)** (`flywheel --version`).
+Flywheel is currently in its **beta** phase: version **2.24 (beta-24)** (`flywheel --version`).
 
 ## Build
 
