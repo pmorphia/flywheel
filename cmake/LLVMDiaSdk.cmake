@@ -1,0 +1,141 @@
+# LLVM's exported targets (LLVMDebugInfoPDB) name diaguids.lib, from the DIA SDK that ships with
+# Visual Studio, by its absolute path on the machine that built LLVM. conda-forge's llvmdev, for
+# example, records "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/DIA SDK/lib/amd64/diaguids.lib".
+# Anywhere that file is missing, linking fails with "LNK1181: cannot open input file 'diaguids.lib'".
+# Include this after find_package(LLVM): it points every such stale path at the DIA SDK of the
+# Visual Studio installation doing this build. FLYWHEEL_DIA_SDK_DIR overrides where that SDK is.
+
+set(FLYWHEEL_DIA_SDK_DIR "" CACHE PATH "DIA SDK directory for LLVM's diaguids.lib (empty: the active Visual Studio's)")
+
+function(_flywheel_is_stale_diaguids item out)
+  set(${out} FALSE PARENT_SCOPE)
+  if(item MATCHES "^\\$<LINK_ONLY:(.*)>$")
+    set(item "${CMAKE_MATCH_1}")
+  endif()
+  string(TOLOWER "${item}" lower)
+  # A bare "diaguids.lib" is searched for on LIB, so only a full path can be stale.
+  if(lower MATCHES "(^|[/\\\\])diaguids\\.lib$" AND (item MATCHES "^[A-Za-z]:[/\\\\]" OR IS_ABSOLUTE "${item}")
+     AND NOT EXISTS "${item}")
+    set(${out} TRUE PARENT_SCOPE)
+  endif()
+endfunction()
+
+# Sets `out` to the diaguids.lib of the active Visual Studio, or to "" if none is found.
+function(_flywheel_find_diaguids out)
+  # The DIA SDK keeps x64 libraries in lib/amd64, ARM64 in lib/arm64, and x86 in lib itself.
+  set(arch "${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}")
+  if(arch MATCHES "^[Aa][Rr][Mm]64")
+    set(subdir "lib/arm64")
+  elseif(arch MATCHES "^[Xx]86$" OR CMAKE_SIZEOF_VOID_P EQUAL 4)
+    set(subdir "lib")
+  else()
+    set(subdir "lib/amd64")
+  endif()
+
+  set(sdks "")
+  if(FLYWHEEL_DIA_SDK_DIR)
+    list(APPEND sdks "${FLYWHEEL_DIA_SDK_DIR}")
+  else()
+    # The active installation, most specific first: the one whose compiler or linker this build
+    # uses, then the developer prompt's, then the one a Visual Studio generator picked.
+    set(roots "")
+    foreach(tool IN ITEMS "${CMAKE_CXX_COMPILER}" "${CMAKE_LINKER}")
+      file(TO_CMAKE_PATH "${tool}" tool)
+      if(tool MATCHES "^(.+)/[Vv][Cc]/[Tt]ools/")
+        list(APPEND roots "${CMAKE_MATCH_1}")
+      endif()
+    endforeach()
+    foreach(root IN ITEMS "$ENV{VSINSTALLDIR}" "${CMAKE_GENERATOR_INSTANCE}")
+      if(root)
+        file(TO_CMAKE_PATH "${root}" root)
+        list(APPEND roots "${root}")
+      endif()
+    endforeach()
+    # Last resort: the newest installation with the C++ tools, as the Flywheel installer finds it.
+    set(vswhere "$ENV{ProgramFiles\(x86\)}/Microsoft Visual Studio/Installer/vswhere.exe")
+    if(EXISTS "${vswhere}")
+      execute_process(
+        COMMAND "${vswhere}" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64
+                -property installationPath
+        OUTPUT_VARIABLE root OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+      if(root)
+        file(TO_CMAKE_PATH "${root}" root)
+        list(APPEND roots "${root}")
+      endif()
+    endif()
+    foreach(root IN LISTS roots)
+      string(REGEX REPLACE "/+$" "" root "${root}")
+      list(APPEND sdks "${root}/DIA SDK")
+    endforeach()
+  endif()
+
+  foreach(sdk IN LISTS sdks)
+    file(TO_CMAKE_PATH "${sdk}" sdk)
+    if(EXISTS "${sdk}/${subdir}/diaguids.lib")
+      set(${out} "${sdk}/${subdir}/diaguids.lib" PARENT_SCOPE)
+      return()
+    endif()
+  endforeach()
+  set(${out} "" PARENT_SCOPE)
+endfunction()
+
+function(flywheel_fix_llvm_diaguids)
+  get_property(targets DIRECTORY PROPERTY IMPORTED_TARGETS)
+  set(properties INTERFACE_LINK_LIBRARIES IMPORTED_LINK_INTERFACE_LIBRARIES)
+  foreach(config IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL NOCONFIG)
+    list(APPEND properties IMPORTED_LINK_INTERFACE_LIBRARIES_${config})
+  endforeach()
+
+  set(replacement "")
+  set(searched FALSE)
+  set(fixed "")
+  foreach(target IN LISTS targets)
+    foreach(property IN LISTS properties)
+      get_target_property(libs ${target} ${property})
+      if(NOT libs)
+        continue()
+      endif()
+      set(changed FALSE)
+      set(result "")
+      foreach(item IN LISTS libs)
+        _flywheel_is_stale_diaguids("${item}" stale)
+        if(stale)
+          if(NOT searched)
+            _flywheel_find_diaguids(replacement)
+            set(searched TRUE)
+            if(replacement)
+              message(STATUS "LLVM's diaguids.lib: ${replacement}")
+            else()
+              message(WARNING
+                "LLVM links diaguids.lib from a path that does not exist here:\n  ${item}\n"
+                "and no DIA SDK was found in the active Visual Studio installation, so the reference "
+                "is dropped. If linking then reports unresolved DIA symbols, install the C++ workload "
+                "of Visual Studio or set FLYWHEEL_DIA_SDK_DIR to a directory containing the DIA SDK.")
+            endif()
+          endif()
+          set(changed TRUE)
+          if(replacement)
+            if(item MATCHES "^\\$<LINK_ONLY:")
+              list(APPEND result "$<LINK_ONLY:${replacement}>")
+            else()
+              list(APPEND result "${replacement}")
+            endif()
+          endif()
+        else()
+          list(APPEND result "${item}")
+        endif()
+      endforeach()
+      if(changed)
+        set_property(TARGET ${target} PROPERTY ${property} "${result}")
+        list(APPEND fixed ${target})
+      endif()
+    endforeach()
+  endforeach()
+  list(REMOVE_DUPLICATES fixed)
+  if(fixed)
+    list(JOIN fixed ", " fixed)
+    message(STATUS "Fixed stale diaguids.lib references in: ${fixed}")
+  endif()
+endfunction()
+
+flywheel_fix_llvm_diaguids()

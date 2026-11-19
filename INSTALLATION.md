@@ -88,5 +88,6 @@ On Windows, run the script with `-Help` to see its uninstall option.
 |---|---|
 | `flywheel: command not found` | Open a new terminal so the updated `PATH` takes effect |
 | `flywheel --build` cannot find a linker (Windows) | Run it from `flywheel-shell` |
+| Building reports `LNK1181: cannot open input file 'diaguids.lib'` (Windows) | Configure from a Visual Studio developer prompt so CMake finds that installation's DIA SDK, or pass `-DFLYWHEEL_DIA_SDK_DIR="<Visual Studio>\DIA SDK"` |
 | HTTPS requests fail with "no trusted root certificates" | Install your distribution's `ca-certificates` package, or set `SSL_CERT_FILE` to a CA bundle |
 | `DesktopError` when opening a window | Install the GTK/WebKitGTK packages (Linux) or the WebView2 runtime (Windows), then run the installer again |
