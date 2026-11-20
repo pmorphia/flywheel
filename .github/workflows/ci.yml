@@ -18,6 +18,7 @@ jobs:
           environment-name: flywheel
           create-args: >-
             llvmdev=21.1.8
+            zlib
             cmake
             ninja
             python=3.12

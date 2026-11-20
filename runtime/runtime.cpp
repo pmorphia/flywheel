@@ -239,9 +239,13 @@ int64_t Object::keyEnum() const {
 // Threads spawned by thread.spawn or web.workers. While none run, only the main thread
 // touches objects, so the runtime skips its cross-thread locks. The count rises before a
 // thread starts, so the spawning thread never races with it.
+// Defined outside the unnamed namespace: inside it, the name has internal linkage even with
+// extern "C" (GCC 15 then never exports it), and generated code could not find it.
+} // namespace
 extern "C" {
 std::atomic<int64_t> fw_active_threads{0}; // generated code reads it before touching flat arrays
 }
+namespace {
 std::atomic<int64_t> &activeThreads = fw_active_threads;
 // Locks `m` only while other threads exist.
 struct SharedLock {
