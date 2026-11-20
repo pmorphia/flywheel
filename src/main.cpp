@@ -96,6 +96,8 @@ std::string desktopPath(const fs::path &runtime) {
         return fs::absolute(installed).string();
     return FW_DESKTOP_BACKEND;
 }
+// --hot was given; without the in-process JIT the program runs without hot reload.
+bool hotRequested = false;
 #ifdef FW_JIT
 // Hot reload (--hot). The first compile records the program in `state`; the program runs in a
 // forked child that still has the compiler, the JIT, and `load`. At each hot.reload() call the
@@ -103,7 +105,6 @@ std::string desktopPath(const fs::path &runtime) {
 // recompiles the whole program as a reload (fw::HotReload), and a later hot.reload() links the
 // result into a new JITDylib beside the running code and points the changed functions' slots at
 // the new ones. Nothing else is touched: globals, objects, and the call stack carry on.
-bool hotRequested = false;
 struct HotSession {
     bool active = false;
     fw::HotReload state;
