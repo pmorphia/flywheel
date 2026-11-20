@@ -142,7 +142,7 @@ print testing.live_objects()==base
             )
             executable = root / "desktop"
             compiled = subprocess.run(
-                [str(compiler), "build", str(source), "-O3", "-o", str(executable)],
+                [str(compiler), "--build", str(source), "-O3", "-o", str(executable)],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -262,7 +262,7 @@ print "closed", count
             encoding="utf-8",
         )
         result = subprocess.run(
-            [str(compiler), "run", str(source)],
+            [str(compiler), "--run", str(source)],
             capture_output=True,
             text=True,
             timeout=60,
@@ -327,7 +327,7 @@ window.run()
             encoding="utf-8",
         )
         result = subprocess.run(
-            [str(compiler), "run", str(source)],
+            [str(compiler), "--run", str(source)],
             capture_output=True,
             text=True,
             timeout=60,
@@ -391,7 +391,7 @@ print "closed", frames, total >= 0.0
             encoding="utf-8",
         )
         result = subprocess.run(
-            [str(compiler), "run", str(source)],
+            [str(compiler), "--run", str(source)],
             capture_output=True,
             text=True,
             timeout=60,

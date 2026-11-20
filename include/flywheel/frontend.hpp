@@ -5,6 +5,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace fw {
@@ -241,6 +242,9 @@ struct Program {
 };
 class Parser {
     std::vector<Token> tokens;
+    // Every name written after `function`, `class` or `struct` in the tokens: such a name followed
+    // by a sign or a spaced bracket starts an outer call (see outer). Collected once, up front.
+    std::unordered_set<std::string> declaredCallables;
     size_t pos = 0;
     std::vector<int> bodyDepths;
     size_t index(size_t n);

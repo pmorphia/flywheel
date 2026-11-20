@@ -331,6 +331,7 @@ wallet.deposit("coffee", Money(450))
 wallet["coffee"] = Money(500)
 print "wallet:", wallet.total(), "coffee:", wallet["coffee"]
 
+
 print "\n== first-class methods and class references =="
 var c = Circle(2.0)
 var get_area = c.area
@@ -350,7 +351,7 @@ print largest([3, 9, 2]), largest(["pear", "apple"]), largest([Money(5), Money(5
 
 print "\n== enums =="
 var tier = Tier.Pro
-print tier, tier.value, Tier.values(), Tier.from_name("Enterprise") ?? Tier.Free
+print tier, tier.value, Tier.values(), Tier.from_name("Enterprise") otherwise Tier.Free
 Event[] events = [Event.Click(3, 3), Event.Click(1, 2), Event.Key('q'), Event.Quit]
 for e in events do
     print "  " + handle(e)

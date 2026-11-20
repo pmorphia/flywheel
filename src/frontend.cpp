@@ -1492,12 +1492,7 @@ EP Parser::outer() {
         return e;
     }
     // A known callable followed by a unary sign starts an outer call, not subtraction.
-    bool callable = peek().text == "print";
-    for (size_t i = 0; i + 1 < tokens.size(); ++i)
-        if ((tokens[i].text == "function" || tokens[i].text == "class" ||
-             tokens[i].text == "struct") &&
-            tokens[i + 1].text == peek().text)
-            callable = true;
+    bool callable = peek().text == "print" || declaredCallables.count(peek().text) > 0;
     EP e;
     // `name[i]` (no space before '[') indexes; `print [1, 2]` passes an array.
     // A sign starts an argument only when attached to it: `f -7` calls, `n - 7` subtracts.
@@ -2407,6 +2402,9 @@ Function Parser::function(const std::string &owner, bool signatureOnly,
     return f;
 }
 Parser::Parser(std::vector<Token> t) : tokens(std::move(t)), voidComponents(ambientVoidComponents) {
+    for (size_t i = 0; i + 1 < tokens.size(); ++i)
+        if (tokens[i].text == "function" || tokens[i].text == "class" || tokens[i].text == "struct")
+            declaredCallables.insert(tokens[i + 1].text);
     for (size_t i = 0; i + 2 < tokens.size(); ++i)
         if (tokens[i].kind == "id" && tokens[i].text == "void" && tokens[i + 1].kind == "id" &&
             tokens[i + 1].text == "component" && tokens[i + 2].kind == "id")
