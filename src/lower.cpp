@@ -26,6 +26,7 @@
 // A `when` or `computed` inside a block unregisters its watchers when the block ends; at the top
 // level they stay registered for the whole program.
 #include "flywheel/frontend.hpp"
+#include <deque>
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -91,7 +92,8 @@ void addOnce(std::vector<std::string> &list, const std::string &item) {
 }
 
 class Lowerer {
-    std::vector<std::map<std::string, Binding>> scopes;
+    // A deque so references into a scope stay valid while inner scopes open (see compiler.cpp).
+    std::deque<std::map<std::string, Binding>> scopes;
     int counter = 0;
     // Names that a `when` condition or `computed` expression reads. A plain variable with one of
     // these names is made reactive, so `when delay == 10s do` works on `int[time] delay`.

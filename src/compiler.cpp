@@ -252,7 +252,7 @@ Ty nonNull(const Ty &t) {
 }
 // A lambda being compiled. Enclosing locals it reads are copied into its environment.
 struct LambdaContext {
-    std::vector<std::map<std::string, Var>> *outerScopes = nullptr;
+    std::deque<std::map<std::string, Var>> *outerScopes = nullptr;
     llvm::Function *function = nullptr;
     llvm::Value *frame = nullptr, *env = nullptr;
     llvm::Instruction *initPoint = nullptr;
@@ -273,7 +273,10 @@ class Compiler {
     std::unique_ptr<llvm::TargetMachine> machine;
     llvm::Function *current = nullptr;
     llvm::Value *frame = nullptr;
-    std::vector<std::map<std::string, Var>> scopes;
+    // A deque, not a vector: code holds a Var & across expressions that open scopes, and a
+    // vector that grows copies its maps on MSVC (std::map's move is not noexcept there), so the
+    // reference would point into a freed map. A deque never relocates its elements.
+    std::deque<std::map<std::string, Var>> scopes;
     std::map<std::string, Var> globals;
     std::map<std::string, Signature> functions;
     std::map<std::string, Class *> classes;
@@ -287,7 +290,7 @@ class Compiler {
     std::map<std::string, int> classStates; // 1 while flattening, 2 when complete
     std::map<std::string, llvm::Constant *> classIds;
     std::vector<std::pair<llvm::BasicBlock *, llvm::BasicBlock *>> loops;
-    std::vector<std::map<std::string, Val>> attrs;
+    std::deque<std::map<std::string, Val>> attrs;
     std::set<std::string> componentStack;
     std::vector<std::string> componentNames;
     std::map<std::string, std::map<std::string, Ty>> componentTypes;
@@ -783,9 +786,9 @@ class Compiler {
         bool borrowed, infer, top;
         llvm::Function *current;
         llvm::Value *frame;
-        std::vector<std::map<std::string, Val>> attrs;
+        std::deque<std::map<std::string, Val>> attrs;
         std::vector<std::string> componentNames;
-        std::vector<std::map<std::string, Var>> scopes;
+        std::deque<std::map<std::string, Var>> scopes;
         std::vector<Handler> handlers;
         std::vector<Finalizer> finalizers;
         std::vector<size_t> loopScopes;
