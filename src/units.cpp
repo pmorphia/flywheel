@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <compare>
 #include <cstdint>
 #include <cstdio>
 #include <map>
@@ -25,24 +26,92 @@
 
 namespace fw {
 namespace {
-using i128 = __int128;
+// A non-negative 128-bit integer for exact ratios. MSVC has no __int128, and one type on every
+// compiler gives every platform the same unit tables.
+struct u128 {
+    uint64_t hi = 0, lo = 0; // hi first: the defaulted comparison orders by it
+    constexpr u128(uint64_t v = 0) : lo(v) {}
+    constexpr u128(uint64_t h, uint64_t l) : hi(h), lo(l) {}
+    explicit operator bool() const {
+        return hi || lo;
+    }
+    friend auto operator<=>(const u128 &, const u128 &) = default;
+    u128 operator<<(int n) const {
+        if (n == 0)
+            return *this;
+        if (n >= 64)
+            return {lo << (n - 64), 0};
+        return {(hi << n) | (lo >> (64 - n)), lo << n};
+    }
+    friend u128 operator+(u128 a, u128 b) {
+        uint64_t l = a.lo + b.lo;
+        return {a.hi + b.hi + (l < a.lo), l};
+    }
+    friend u128 operator-(u128 a, u128 b) {
+        return {a.hi - b.hi - (a.lo < b.lo), a.lo - b.lo};
+    }
+    u128 &operator+=(u128 b) {
+        return *this = *this + b;
+    }
+    // Long division, one bit at a time; b must not be 0.
+    static u128 divide(u128 a, u128 b, u128 &rest) {
+        u128 q;
+        rest = 0;
+        for (int i = 127; i >= 0; --i) {
+            rest = rest << 1;
+            rest.lo |= (i >= 64 ? a.hi >> (i - 64) : a.lo >> i) & 1;
+            if (rest >= b) {
+                rest = rest - b;
+                (i >= 64 ? q.hi : q.lo) |= uint64_t(1) << (i % 64);
+            }
+        }
+        return q;
+    }
+    friend u128 operator/(u128 a, u128 b) {
+        u128 rest;
+        return divide(a, b, rest);
+    }
+    friend u128 operator%(u128 a, u128 b) {
+        u128 rest;
+        divide(a, b, rest);
+        return rest;
+    }
+    u128 &operator/=(u128 b) {
+        return *this = *this / b;
+    }
+};
+// The full product of two 64-bit numbers.
+u128 wide(uint64_t a, uint64_t b) {
+    uint64_t a0 = a & 0xffffffff, a1 = a >> 32, b0 = b & 0xffffffff, b1 = b >> 32;
+    uint64_t p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;
+    uint64_t mid = (p00 >> 32) + (p01 & 0xffffffff) + (p10 & 0xffffffff);
+    return {p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32), (p00 & 0xffffffff) | (mid << 32)};
+}
 // A positive rational number, exact when both parts fit; `value` always holds the double.
 struct Ratio {
-    i128 num = 1, den = 1;
+    u128 num = 1, den = 1;
     bool exact = true;
     double value = 1;
 };
-i128 gcd(i128 a, i128 b) {
+u128 gcd(u128 a, u128 b) {
     while (b) {
         auto t = a % b;
         a = b;
         b = t;
     }
-    return a < 0 ? -a : a;
+    return a;
 }
-const i128 limit = static_cast<i128>(1) << 120;
-bool multiply(i128 a, i128 b, i128 &out) {
-    return !__builtin_mul_overflow(a, b, &out) && out < limit && out > -limit;
+const u128 limit = u128(1) << 120;
+// out = a * b, false when the product reaches 2^120.
+bool multiply(u128 a, u128 b, u128 &out) {
+    if (a.hi && b.hi)
+        return false;
+    u128 cross = wide(a.hi, b.lo) + wide(a.lo, b.hi); // one of the two is 0
+    u128 low = wide(a.lo, b.lo);
+    if (cross.hi || low.hi + cross.lo < low.hi)
+        return false;
+    out = {low.hi + cross.lo, low.lo};
+    return out < limit;
 }
 // A decimal literal (60, 0.01, 2.5e3) as an exact ratio when it fits.
 std::optional<Ratio> decimal(const std::string &text) {
@@ -52,7 +121,7 @@ std::optional<Ratio> decimal(const std::string &text) {
     } catch (...) {
         return std::nullopt;
     }
-    i128 mantissa = 0;
+    u128 mantissa = 0;
     int exponent = 0;
     size_t i = 0;
     bool point = false;
@@ -66,13 +135,13 @@ std::optional<Ratio> decimal(const std::string &text) {
             r.exact = false;
             return r;
         }
-        mantissa += text[i] - '0';
+        mantissa += static_cast<uint64_t>(text[i] - '0');
         if (point)
             --exponent;
     }
     if (i < text.size() && (text[i] == 'e' || text[i] == 'E'))
         exponent += std::stoi(text.substr(i + 1));
-    i128 scale = 1;
+    u128 scale = 1;
     for (int k = 0; k < std::abs(exponent); ++k)
         if (!multiply(scale, 10, scale)) {
             r.exact = false;
@@ -123,8 +192,18 @@ Ratio factor(const std::string &text, Location loc) {
         throw Error(loc, "a unit's factor must be a positive number");
     return divide(*top, *bottom);
 }
-double toDouble(i128 v) {
-    return static_cast<double>(v);
+// v as the nearest double: the top 64 bits, with a sticky bit for any dropped below them, round
+// as the whole value would.
+double toDouble(u128 v) {
+    if (!v.hi)
+        return static_cast<double>(v.lo);
+    int shift = 64;
+    while (!(v.hi >> (shift - 1)))
+        --shift;
+    uint64_t top = shift == 64 ? v.hi : (v.hi << (64 - shift)) | (v.lo >> shift);
+    if (v.lo << (64 - shift))
+        top |= 1;
+    return std::ldexp(static_cast<double>(top), shift);
 }
 // A double as a Flywheel floating-point literal.
 std::string real(double v) {
@@ -329,8 +408,8 @@ std::string generate(Program &p, const std::vector<UnitNamespace> &imported, boo
                     num += sep + real(r.value);
                     den += std::string(sep) + "1.0";
                 }
-                bool whole = r.exact && r.den == 1 && r.num <= static_cast<i128>(INT64_MAX);
-                mul += sep + (whole ? std::to_string(static_cast<long long>(r.num)) : "0");
+                bool whole = r.exact && r.den == 1 && r.num <= u128(INT64_MAX);
+                mul += sep + (whole ? std::to_string(static_cast<long long>(r.num.lo)) : "0");
             }
         }
         out << "const " << table("names") << " = [" << names << "]\n";
