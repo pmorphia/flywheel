@@ -21,6 +21,12 @@ struct Token {
     Location loc;
     int depth = 0; // open delimiters before the token; newlines inside lambdas use it
     bool spaced = true; // whitespace (or the start of input) precedes the token
+    int endLine = 0, endColumn = 0; // just past the token's last byte
+};
+// The source range of an expression or statement: from sline:scol up to (not including)
+// eline:ecol, in bytes from column 1; eline is 0 when unknown. Tracebacks underline it.
+struct Span {
+    int sline = 0, scol = 0, eline = 0, ecol = 0;
 };
 std::vector<Token> lex(const std::string &source);
 struct Function;
@@ -31,6 +37,7 @@ struct Expr {
     // element's closing tag. Only void tags and components may be; see hoistVoidChildren.
     bool implicitClose = false;
     Location loc;
+    Span span;
     std::vector<std::unique_ptr<Expr>> args;
     std::vector<std::string> names;
     std::shared_ptr<Function> lambda;
@@ -41,6 +48,7 @@ struct Stmt {
     // declare: the negated alias of a bool (`bool enabled/disabled = true` names `disabled`).
     std::string alias;
     Location loc;
+    Span span; // the statement's first line (a block's header)
     EP expr, target;
     std::vector<std::unique_ptr<Stmt>> body, other, finalizer;
     std::vector<std::string> catchTypes, catchNames;
@@ -254,6 +262,8 @@ class Parser {
     EP which(EP sequence);
     int whichDepth = 0; // inside a `which` condition, `.name` and a leading comparison use the item
     EP prefix();
+    EP prefixInner();
+    SP statementInner();
     EP outer();
     EP markup();
     EP stringExpr(const Token &t);
@@ -279,6 +289,7 @@ class Parser {
 
   public:
     explicit Parser(std::vector<Token> t);
+    void spanFrom(Expr &e, int line, int column); // e covers line:column to the last token taken
     // Names declared `void component` in this source (and in the source an embedded
     // expression's parser belongs to): `<Name>` needs no closing tag.
     std::set<std::string> voidComponents;

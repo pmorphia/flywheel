@@ -10,6 +10,10 @@ import unittest
 from pathlib import Path
 
 COMPILER = str(Path(sys.argv.pop(1)).resolve()) if len(sys.argv) > 1 else "flywheel"
+# Diagnostics are compared without color, and last-error records (--error) stay out of $HOME.
+for _name in ("FORCE_COLOR", "CLICOLOR_FORCE"):
+    os.environ.pop(_name, None)
+os.environ["XDG_STATE_HOME"] = tempfile.mkdtemp(prefix="flywheel-test-state-")
 
 POSITIVE = {
     "struct_values": (
@@ -3692,6 +3696,69 @@ class CompilerTests(unittest.TestCase):
                     result = self.command("--run", self.source, opt)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(message, result.stderr)
+
+    def test_tracebacks(self):
+        # Uncaught errors print a traceback with source excerpts; --error prints the last one
+        # without them.
+        self.source.write_text(
+            "function divide(int a, int b) returns int\n    return a // b\nend\n"
+            "function total(int[] xs) returns int\n    int sum = 0\n    for x in xs do\n"
+            "        sum += divide(100, x)\n    end\n    return sum\nend\n"
+            'print "value {total([1, 0])}"\n',
+            encoding="utf-8",
+        )
+        none = self.command("--error", self.source)
+        self.assertEqual(none.returncode, 1)
+        self.assertIn("no error recorded", none.stderr)
+        for opt in ("-O0", "-O3"):
+            with self.subTest(optimization=opt):
+                result = self.command(self.source, opt)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(
+                    "Flywheel runtime error: NumericError: integer division by zero\n"
+                    "  at case.fly:2:14 in divide\n"
+                    "     2 | return a // b\n"
+                    "       |        ~~^^~~\n"
+                    "  at case.fly:7:16 in total\n"
+                    "     7 | sum += divide(100, x)\n"
+                    "       |        ^^^^^^^^^^^^^^\n"
+                    "  at case.fly:11:15 in <module>\n"
+                    '    11 | print "value {total([1, 0])}"\n'
+                    "       |               ^^^^^^^^^^^^^\n",
+                    result.stderr,
+                )
+        last = self.command("-E", self.source)
+        self.assertEqual(last.returncode, 0, last.stderr)
+        self.assertIn(
+            "Flywheel runtime error: NumericError: integer division by zero\n"
+            "  at case.fly:2:14 in divide\n  at case.fly:7:16 in total\n"
+            "  at case.fly:11:15 in <module>\n",
+            last.stderr,
+        )
+        self.assertNotIn("return a // b", last.stderr)
+        # methods, rethrown errors, and folded recursion
+        self.source.write_text(
+            "class Account\n    int balance = 0\n    function take(int n)\n"
+            '        throw "Short" with "need {n}"\n    end\nend\n'
+            "function down(int n) returns int\n    if n == 0 do\n        Account().take(5)\n    end\n"
+            "    return down(n - 1)\nend\n"
+            "try\n    down(50)\ncatch Error e\n    throw e\nend\n",
+            encoding="utf-8",
+        )
+        result = self.command(self.source)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Flywheel runtime error: Short: need 5\n  at case.fly:4:9 in Account.take\n", result.stderr)
+        self.assertIn("  at case.fly:9:9 in down\n", result.stderr)
+        self.assertIn("  ... the same call 47 more times ...\n  at case.fly:14:5 in <module>\n", result.stderr)
+        # a rethrow keeps where the error was thrown, then adds where it was thrown again
+        self.assertIn("  at case.fly:16:5 in <module>\n    16 | throw e\n", result.stderr)
+        # compile errors: the line, the column marked, and the record
+        self.source.write_text("int count = 1\nprint count + missing\n", encoding="utf-8")
+        result = self.command("--check", self.source)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("case.fly:2:15: error:", result.stderr)
+        self.assertIn("    2 | print count + missing\n      |               ^^^^^^^\n", result.stderr)
+        self.assertIn("case.fly:2:15: error:", self.command("--error", self.source).stderr)
 
     def test_http(self):
         import http.client

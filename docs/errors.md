@@ -40,7 +40,7 @@ end
 - **Other types with `with`:**
   - **Builtin error types:** `throw ValueError with "nope"`.
   - **Classes:** any class with a `string message` field.
-- **Uncaught errors:** an uncaught error reports its type and message: `Flywheel runtime error: HttpFailure: upstream down`.
+- **Uncaught errors:** an uncaught error reports its type and message, `Flywheel runtime error: HttpFailure: upstream down`, followed by its [traceback](tooling.md#errors-and-tracebacks).
 
 Prefer declared error types to string names: a misspelled type in `catch` is a compile error, and the error can carry fields.
 
@@ -85,7 +85,7 @@ There is no `raise` keyword; use `throw`.
 
 Errors propagate across native generated function calls, out of callbacks (sort comparators, desktop handlers, web handlers, map key `hash`/`equals`), and from a thread task to the thread that calls `join`. `finally` executes on normal completion, handled or unhandled errors, returns, and loop exits. A new return, throw, break, or continue from a finalizer supersedes the pending exit. A finalizer cannot see locals declared inside its try or catch bodies. Return expressions are evaluated before finalization and their referenced objects remain alive until the return completes or is abandoned.
 
-Generated code checks a thread-local error channel after fallible native/runtime calls. C++ runtime exceptions are caught at the C ABI boundary and do not unwind through generated functions. Failed paths release crossed lexical scopes and temporary references; function propagation drops the ownership frame. Uncaught errors print to stderr and exit with status 1. Unbounded or too-deep recursion overflows the native stack; this is reported as `Flywheel runtime error: stack overflow` and exits with status 1, but it cannot be caught. Process termination and resource-exhaustion failures are not a recoverability guarantee.
+Generated code checks a thread-local error channel after fallible native/runtime calls. C++ runtime exceptions are caught at the C ABI boundary and do not unwind through generated functions. Failed paths release crossed lexical scopes and temporary references; function propagation drops the ownership frame. Uncaught errors print to stderr with a [traceback](tooling.md#errors-and-tracebacks) and exit with status 1; `flywheel --error FILE` prints the last one again. Unbounded or too-deep recursion overflows the native stack; this is reported as `Flywheel runtime error: stack overflow` and exits with status 1, but it cannot be caught. Process termination and resource-exhaustion failures are not a recoverability guarantee.
 
 ## Result<T,E>
 

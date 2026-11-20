@@ -299,6 +299,15 @@ class Compiler {
     int64_t servePort = 0;
     bool pageReturned = false;
     std::string method; // name of the function or method being emitted
+    // Tracebacks: the function as a traceback names it ("" for internal helpers, which add no
+    // frame), the expression or statement being emitted, and one constant per check site.
+    std::string traceName;
+    struct TraceAt {
+        Location loc;
+        Span span;
+    } traceAt;
+    std::map<std::string, llvm::Constant *> traceSites;
+    friend struct TraceScope;
     // Coverage: one counter per executed source line, keyed (file, line).
     bool coverage = false, race = false;
     std::map<std::pair<std::string, int>, llvm::GlobalVariable *> coverageCounters;
@@ -792,6 +801,8 @@ class Compiler {
         llvm::DebugLoc debug;
         std::string method;
         std::set<std::string> reassigned;
+        std::string traceName;
+        TraceAt traceAt;
     };
     FunctionState saveFunction() {
         FunctionState s{b.saveIP(),
@@ -817,7 +828,10 @@ class Compiler {
                         std::move(cells),
                         b.getCurrentDebugLocation(),
                         method,
-                        std::move(reassigned)};
+                        std::move(reassigned),
+                        traceName,
+                        traceAt};
+        traceName.clear();
         b.SetCurrentDebugLocation(llvm::DebugLoc());
         borrowed = false;
         attrs.clear();
@@ -857,6 +871,8 @@ class Compiler {
         cells = std::move(s.cells);
         reassigned = std::move(s.reassigned);
         method = s.method;
+        traceName = s.traceName;
+        traceAt = s.traceAt;
         b.restoreIP(s.ip);
         b.SetCurrentDebugLocation(s.debug);
     }
@@ -1148,6 +1164,40 @@ class Compiler {
     llvm::ConstantInt *i64(int64_t x) {
         return b.getInt64(x);
     }
+    // A constant naming the current location for the traceback (FwTraceSite in the runtime).
+    llvm::Constant *traceSite() {
+        auto &loc = traceAt.loc;
+        auto file = loc.file.empty() ? mainFileName : loc.file;
+        auto &sp = traceAt.span;
+        auto key = file + '\n' + traceName + '\n' + std::to_string(loc.line) + ':' +
+                   std::to_string(loc.column) + ':' + std::to_string(sp.sline) + ':' +
+                   std::to_string(sp.scol) + ':' + std::to_string(sp.eline) + ':' + std::to_string(sp.ecol);
+        auto &site = traceSites[key];
+        if (!site) {
+            auto text = [&](const std::string &value) {
+                auto data = llvm::ConstantDataArray::getString(ctx, value);
+                auto g = new llvm::GlobalVariable(module, data->getType(), true,
+                                                  llvm::GlobalValue::PrivateLinkage, data, "fw.trace.text");
+                g->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+                return g;
+            };
+            auto i32 = b.getInt32Ty();
+            auto type = llvm::StructType::get(ctx, {b.getPtrTy(), b.getPtrTy(), i32, i32, i32, i32, i32, i32});
+            auto num = [&](int v) { return llvm::ConstantInt::get(i32, v); };
+            auto value = llvm::ConstantStruct::get(
+                type, {text(file), text(traceName), num(loc.line), num(loc.column), num(sp.sline),
+                       num(sp.scol), num(sp.eline), num(sp.ecol)});
+            site = new llvm::GlobalVariable(module, type, true, llvm::GlobalValue::PrivateLinkage, value,
+                                            "fw.trace.site");
+        }
+        return site;
+    }
+    // Where an error passes through (about to be handled or returned): one traceback frame.
+    void trace() {
+        if (traceName.empty() || infer)
+            return;
+        call("fw_trace", b.getVoidTy(), {traceSite()});
+    }
     Handler errorHandler() {
         return handlers.empty() ? Handler{failure, 0} : handlers.back();
     }
@@ -1169,6 +1219,7 @@ class Compiler {
         auto cleanup = llvm::BasicBlock::Create(ctx, "error.cleanup", current);
         b.CreateCondBr(b.CreateICmpNE(status, i64(0)), cleanup, ok);
         b.SetInsertPoint(cleanup);
+        trace();
         releaseProtected(handler.depth);
         if (handler.target != failure)
             releaseScopes(handler.depth);
@@ -1292,7 +1343,7 @@ end
             "fw_gc_pause",      "fw_gc_resume",     "fw_gc_paused",     "fw_gc_threshold",
             "fw_quantity_register", "fw_register_destructor", "fw_thread_wait_all",
             "fw_thread_detach", "fw_build_begin", "fw_build_text", "fw_build_int",
-            "fw_build_real",    "fw_build_string"};
+            "fw_build_real",    "fw_build_string",  "fw_trace"};
         if (!safe.count(name))
             checkError();
         return resultValue;
@@ -2613,6 +2664,8 @@ end
     bool attributeAllowed(const TagRules &rules, const std::string &name);
     Val invoke(Expr &e, Ty expected = Ty{});
     Val value(Expr &e, Ty expected = Ty{});
+    Val valueOf(Expr &e, Ty expected);
+    void statementOf(Stmt &s);
     Val defaultValue(Expr &e, Ty expected) {
         auto saved = std::move(scopes);
         auto savedAttrs = std::move(attrs);
@@ -3703,6 +3756,7 @@ end
         failure = llvm::BasicBlock::Create(ctx, "propagate.error", current);
         scopes.emplace_back();
         top = true;
+        traceName = "<module>";
         returnType = Ty{"void"};
         for (auto &[name, en] : enums) {
             std::string names;
@@ -3925,7 +3979,28 @@ Val Compiler::explicitCast(Val source, Ty target) {
         return convert(source, target, true);
     return collectionCast(source, target);
 }
+// The expression being emitted is the traceback location while it is, and its parent's again
+// after it.
+struct TraceScope {
+    Compiler::TraceAt &at;
+    Compiler::TraceAt saved;
+    TraceScope(Compiler::TraceAt &a, const Location &loc, const Span &span) : at(a), saved(a) {
+        at.loc = loc;
+        at.span = span;
+    }
+    ~TraceScope() {
+        at = saved;
+    }
+};
 Val Compiler::value(Expr &e, Ty expected) {
+    TraceScope scope(traceAt, e.loc, e.span);
+    return valueOf(e, expected);
+}
+void Compiler::statement(Stmt &s) {
+    TraceScope scope(traceAt, s.loc, s.span);
+    statementOf(s);
+}
+Val Compiler::valueOf(Expr &e, Ty expected) {
     location = e.loc;
     debugLocation();
     if (e.kind == "name")
@@ -5888,7 +5963,7 @@ Val Compiler::invoke(Expr &e, Ty expected) {
     }
     error("unknown or unimplemented callable '" + name + "'");
 }
-void Compiler::statement(Stmt &s) {
+void Compiler::statementOf(Stmt &s) {
     location = s.loc;
     if (s.kind != "declare" || s.expr)
         countLine(s.loc);
@@ -5953,6 +6028,7 @@ void Compiler::statement(Stmt &s) {
                   "throw BadInput with \"message\"");
         auto payload = objectCall("fw_error_named", {frame, name.v, message.v});
         call("fw_throw", b.getVoidTy(), {b.CreateGlobalString("Error"), payload});
+        trace();
         auto target = errorHandler();
         releaseProtected(target.depth);
         if (target.target != failure)
@@ -5973,6 +6049,7 @@ void Compiler::statement(Stmt &s) {
             payload = box.v;
         }
         call("fw_throw", b.getVoidTy(), {b.CreateGlobalString(x.t.name), payload});
+        trace();
         auto target = errorHandler();
         releaseProtected(target.depth);
         if (target.target != failure)
@@ -6654,6 +6731,8 @@ void Compiler::buildFunction(Signature &sig, bool inference) {
     owner = sig.ast->owner;
     staticOwner = sig.ast->staticOf;
     method = sig.ast->name;
+    traceName = displayName((owner.empty() ? "" : owner + ".") +
+                            (!owner.empty() && sig.ast->name == "init" ? "constructor" : sig.ast->name));
     top = false;
     infer = inference;
     returnType = inference ? Ty{"void"} : sig.result;
@@ -9609,6 +9688,7 @@ Ty Compiler::lambdaBody(Function &f, const std::vector<Ty> &params, Ty result, b
         llvm::GlobalValue::InternalLinkage, "fly.lambda." + std::to_string(lambdaCount++), module);
     b.SetInsertPoint(llvm::BasicBlock::Create(ctx, "entry", current));
     location = f.loc;
+    traceName = "lambda";
     if (!inference)
         debugFunction(current, "lambda", f.loc);
     frame = objectCall("fw_frame", {});

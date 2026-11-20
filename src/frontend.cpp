@@ -486,6 +486,8 @@ std::vector<Token> lex(const std::string &source) {
         bool spaced = p == 0 || std::isspace(static_cast<unsigned char>(source[p - 1]));
         out.push_back({std::move(text), std::move(kind), loc, group, spaced});
         advance(end);
+        out.back().endLine = loc.line;
+        out.back().endColumn = loc.column;
     };
     while (p < source.size()) {
         char c = source[p];
@@ -850,6 +852,33 @@ bool Parser::typedDeclaration() {
         return false;
     }
 }
+namespace {
+// Expressions inside a string or markup are parsed from that text alone: their positions are
+// moved to where the text sits in the file.
+void relocate(Expr &e, int lines, int columns) {
+    if (e.loc.line == 1)
+        e.loc.column += columns;
+    e.loc.line += lines;
+    if (e.span.eline) {
+        if (e.span.sline == 1)
+            e.span.scol += columns;
+        if (e.span.eline == 1)
+            e.span.ecol += columns;
+        e.span.sline += lines;
+        e.span.eline += lines;
+    }
+    for (auto &a : e.args)
+        if (a)
+            relocate(*a, lines, columns);
+}
+// `n` covers `first` through the last token taken.
+void spanAfter(Parser &parser, Expr &n, const Expr &first) {
+    if (first.span.eline)
+        parser.spanFrom(n, first.span.sline, first.span.scol);
+    else
+        parser.spanFrom(n, first.loc.line, first.loc.column);
+}
+} // namespace
 EP Parser::stringExpr(const Token &t) {
     auto result = node("interpolate", "", t.loc);
     std::string text;
@@ -945,6 +974,16 @@ EP Parser::stringExpr(const Token &t) {
             auto value = sub.expression();
             if (sub.peek().kind != "eof")
                 throw Error(t.loc, "invalid interpolation expression");
+            {
+                // string literals keep their raw text: the expression's place in the file
+                int line = t.loc.line, column = t.loc.column + 1 + static_cast<int>(p + 1);
+                for (size_t q = 0; q <= p; ++q)
+                    if (t.text[q] == '\n') {
+                        ++line;
+                        column = static_cast<int>(p - q) + 1;
+                    }
+                relocate(*value, line - 1, column - 1);
+            }
             if (!spec.empty() || inner.size() < e - p - 1) {
                 auto formatted = node("format", spec, t.loc);
                 formatted->args.push_back(std::move(value));
@@ -992,6 +1031,15 @@ EP Parser::markup() {
         auto value = sub.expression();
         if (sub.peek().kind != "eof")
             throw Error(token.loc, "invalid markup interpolation");
+        {
+            int line = token.loc.line, column = token.loc.column + static_cast<int>(p + 1);
+            for (size_t q = 0; q <= p; ++q)
+                if (s[q] == '\n') {
+                    ++line;
+                    column = static_cast<int>(p - q) + 1;
+                }
+            relocate(*value, line - 1, column - 1);
+        }
         p = end + 1;
         return value;
     };
@@ -1125,7 +1173,22 @@ EP Parser::markup() {
         throw Error(token.loc, "unexpected text after markup");
     return e;
 }
+void Parser::spanFrom(Expr &e, int line, int column) {
+    if (pos == 0)
+        return;
+    auto &last = tokens[pos - 1];
+    if (last.kind == "nl" || last.kind == "eof" || !last.endLine)
+        return;
+    e.span = {line, column, last.endLine, last.endColumn};
+}
 EP Parser::prefix() {
+    auto t = peek();
+    auto e = prefixInner();
+    if (e && !e->span.eline)
+        spanFrom(*e, t.loc.line, t.loc.column);
+    return e;
+}
+EP Parser::prefixInner() {
     auto t = peek();
     EP e;
     if (t.kind == "markup")
@@ -1273,6 +1336,8 @@ EP Parser::prefix() {
         e = node("name", t.text + typeArguments(builtinGenerics.count(t.text) > 0), t.loc);
     } else
         throw Error(t.loc, "expected expression, got '" + t.text + "'");
+    if (e && !e->span.eline)
+        spanFrom(*e, t.loc.line, t.loc.column);
     while (true) {
         if (accept(".")) {
             auto m = identifier();
@@ -1297,6 +1362,7 @@ EP Parser::prefix() {
             e = std::move(n);
         } else
             break;
+        spanFrom(*e, t.loc.line, t.loc.column);
     }
     return e;
 }
@@ -1322,8 +1388,10 @@ std::string Parser::typeArguments(bool allowSpace) {
 // every other operator and chains left to right: `xs which > 1 which < 9`.
 EP Parser::expression(int level) {
     auto e = operators(prefix(), level);
-    while (level == 0 && peek().kind == "id" && peek().text == "which")
+    while (level == 0 && peek().kind == "id" && peek().text == "which") {
         e = which(std::move(e));
+        spanAfter(*this, *e, *e->args[0]);
+    }
     // `x if condition else y`: the lowest precedence, right associative.
     if (level == 0 && !noTernary && peek().kind == "id" && peek().text == "if") {
         auto t = take();
@@ -1343,6 +1411,7 @@ EP Parser::expression(int level) {
         n->args.push_back(std::move(condition));
         n->args.push_back(std::move(e));
         n->args.push_back(expression());
+        spanAfter(*this, *n, *n->args[1]);
         e = std::move(n);
     }
     return e;
@@ -1386,6 +1455,7 @@ EP Parser::operators(EP e, int level) {
             auto op = take();
             auto n = node(op.text, type(), op.loc);
             n->args.push_back(std::move(e));
+            spanAfter(*this, *n, *n->args[0]);
             e = std::move(n);
             continue;
         }
@@ -1400,12 +1470,14 @@ EP Parser::operators(EP e, int level) {
             }
             e->names.push_back(op.text);
             e->args.push_back(expression(precedence(op.text)));
+            spanAfter(*this, *e, *e);
             continue;
         }
         // `a otherwise b` is the null fallback, internally the binary operator "??".
         auto n = node("binary", op.text == "otherwise" ? "??" : op.text, op.loc);
         n->args.push_back(std::move(e));
         n->args.push_back(expression(precedence(op.text)));
+        spanAfter(*this, *n, *n->args[0]);
         if (peek().kind == "op" && peek().text == "??")
             throw Error(peek().loc, "'?\?' was renamed to 'otherwise': write 'a otherwise b'");
         e = std::move(n);
@@ -1603,6 +1675,24 @@ void Parser::runElse(Stmt &s) {
     finish();
 }
 SP Parser::statement() {
+    auto first = peek();
+    size_t start = pos;
+    auto s = statementInner();
+    // a statement's range is its first line (a block's header)
+    if (s && !s->span.eline) {
+        const Token *last = nullptr;
+        for (size_t i = start; i < pos && i < tokens.size(); ++i) {
+            if (tokens[i].kind == "nl" && tokens[i].loc.line >= first.loc.line)
+                break;
+            if (tokens[i].kind != "eof" && tokens[i].kind != "nl")
+                last = &tokens[i];
+        }
+        if (last && last->endLine)
+            s->span = {first.loc.line, first.loc.column, last->endLine, last->endColumn};
+    }
+    return s;
+}
+SP Parser::statementInner() {
     auto s = std::make_unique<Stmt>();
     s->loc = peek().loc;
     if (accept("throw")) {
@@ -2941,6 +3031,7 @@ EP clone(const Expr &e) {
     out->outer = e.outer;
     out->implicitClose = e.implicitClose;
     out->loc = e.loc;
+    out->span = e.span;
     out->names = e.names;
     for (auto &a : e.args)
         out->args.push_back(a ? clone(*a) : nullptr);
@@ -2970,6 +3061,7 @@ SP clone(const Stmt &s) {
     out->type = s.type;
     out->op = s.op;
     out->loc = s.loc;
+    out->span = s.span;
     out->expr = s.expr ? clone(*s.expr) : nullptr;
     out->target = s.target ? clone(*s.target) : nullptr;
     out->body = cloneBody(s.body);

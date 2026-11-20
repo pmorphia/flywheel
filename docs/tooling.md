@@ -111,6 +111,39 @@ The compiler's own regression suite (Python, in `tests/`) runs with `flywheel --
 
 The formatter only changes indentation and trailing whitespace. Lines that start inside a multi-line string or markup literal are left exactly as written, so formatting never changes program output.
 
+## Errors and tracebacks
+
+An uncaught error prints its type and message, then a traceback: where it was thrown, then each call that led there, innermost first. Every location shows its source line with the failing range marked: `^` under the operator, call, or member that failed and `~` under the rest of its expression. Recursion is folded:
+
+```text
+$ flywheel totals.fw
+Flywheel runtime error: NumericError: integer division by zero
+  at totals.fw:2:14 in divide
+    2 | return a // b
+      |        ~~^^~~
+  at totals.fw:8:18 in compute
+    8 | total += divide(100, x)
+      |          ^^^^^^^^^^^^^^
+  at totals.fw:13:7 in <module>
+   13 | print compute([1, 2, 0])
+      |       ^^^^^^^^^^^^^^^^^^
+```
+
+Compile errors show their line the same way, with `^` under the column. Output is colored when standard error is a terminal; `NO_COLOR=1` turns color off and `FORCE_COLOR=1` turns it on. Paths inside the working directory are shown relative to it.
+
+`flywheel --error SOURCE` (`-E`) prints the last error SOURCE stopped with, compile or runtime, and when it happened, for example after a program cleared the terminal or ran in a window:
+
+```text
+$ flywheel -E totals.fw
+last error of totals.fw, 2026-11-20 14:03:12:
+Flywheel runtime error: NumericError: integer division by zero
+  at totals.fw:2:14 in divide
+  at totals.fw:8:18 in compute
+  at totals.fw:13:7 in <module>
+```
+
+The record keeps the message and locations only, never source lines: it lives in `$XDG_STATE_HOME/flywheel/errors` (by default `~/.local/state`; `%LOCALAPPDATA%` on Windows), one file per source file, replaced by its next error. Code given with `-x`, standard input, and URLs are not recorded, and a program built with `--build` keeps nothing when it runs on its own. [Flywheel Lite](https://github.com/pmorphia/flywheel-lite) (`fwl -E`) and flywheel.js (`flywheel-js -E`) print the same tracebacks and keep their own records.
+
 ## Debugging
 
 `flywheel --build -g` (and `-g` when running or with `--check`) emits DWARF line tables for functions, methods, lambdas, and the program body, so native debuggers can set breakpoints by Flywheel source line and show Flywheel locations in backtraces:
@@ -204,6 +237,9 @@ $ flywheel --debug totals.fw -- 2026
 [debug] returned map<string,int> {"days":30,"total":412} in 1.84 ms
 $ flywheel --debug -x 'throw "Oops" with "bad"'
 Flywheel runtime error: Oops: bad
+  at <source>:1:1 in <module>
+    1 | throw "Oops" with "bad"
+      | ^^^^^^^^^^^^^^^^^^^^^^^
 [debug] no return value, exit status 1 in 1.62 ms
 ```
 

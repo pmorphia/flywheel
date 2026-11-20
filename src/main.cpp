@@ -1,3 +1,4 @@
+#include "flywheel/diagnostic.hpp"
 #include "flywheel/frontend.hpp"
 #include <algorithm>
 #include <chrono>
@@ -411,12 +412,41 @@ std::string &sourceFile() {
     static std::string path;
     return path;
 }
+// The --source code itself, for excerpts.
+std::string &sourceText() {
+    static std::string text;
+    return text;
+}
+// Where the last error of the source file being compiled is kept (`flywheel --error`), or ""
+// for code that is not a local file (--source, standard input, URLs).
+std::string &errorRecord() {
+    static std::string path;
+    return path;
+}
+std::string &errorSource() {
+    static std::string path;
+    return path;
+}
+// A compile error: its location and message, then the source line with the column marked.
 void reportError(const fw::Error &e, const std::string &filename) {
     auto file = e.loc.file.empty() ? filename : e.loc.file;
-    if (!sourceFile().empty() && file == sourceFile())
+    fw::diag::Sources sources;
+    if (!sourceFile().empty() && file == sourceFile()) {
         file = "<source>";
-    std::cerr << file << ':' << e.loc.line << ':' << e.loc.column << ": error: " << e.what()
-              << '\n';
+        sources.files["<source>"] = sourceText();
+    }
+    fw::diag::Report r;
+    r.kind = fw::diag::Report::Compile;
+    r.message = e.what();
+    fw::diag::Frame f;
+    f.file = file;
+    f.line = e.loc.line;
+    f.col = e.loc.column;
+    r.frames.push_back(f);
+    std::cout.flush();
+    std::cerr << fw::diag::render(r, fw::diag::color(), &sources) << std::flush;
+    if (!errorRecord().empty())
+        fw::diag::writeRecord(errorRecord(), errorSource(), r);
 }
 // Decodes a JSON string literal ("a\nb" -> a, newline, b); nullopt if the text is not one.
 std::optional<std::string> jsonString(const std::string &json) {
@@ -821,6 +851,7 @@ struct Cli {
     bool update = false, version = false, help = false, game = false, formatCheck = false;
     std::string output, returnFile;
     std::optional<std::string> source; // -x / --source CODE
+    bool lastError = false;            // -E / --error FILE
     std::vector<std::string> positionals, programArguments;
 };
 int64_t portNumber(const std::string &value) {
@@ -891,6 +922,8 @@ int main(int argc, char **argv) {
         "      --repl           interactive session\n"
         "      --lsp            language server\n"
         "      --selftest       run the compiler's test suite\n"
+        "  -E, --error SOURCE   print the last error SOURCE stopped with: its message and\n"
+        "                       locations, without the source lines\n"
         "\n"
         "Run first, in this order:\n"
         "  -u, --update         reinstall from flywheel.polymorphia.dev\n"
@@ -959,6 +992,8 @@ int main(int argc, char **argv) {
                     cli.help = true;
                 else if (name == "--game" && plain)
                     cli.game = true;
+                else if (name == "--error" && plain)
+                    cli.lastError = true;
                 else if (name == "--race" && plain)
                     options.race = true;
                 else if (name == "--coverage" && plain)
@@ -999,6 +1034,8 @@ int main(int argc, char **argv) {
                     cli.help = true;
                 else if (c == 'g')
                     options.debug = true;
+                else if (c == 'E')
+                    cli.lastError = true;
                 else if (c == 'O') {
                     if (k + 1 >= arg.size() || arg[k + 1] < '0' || arg[k + 1] > '3')
                         throw std::runtime_error("-O expects a level 0..3 (-O2)");
@@ -1059,6 +1096,21 @@ int main(int argc, char **argv) {
         return 2;
     } else if (cli.modes.size() == 1)
         mode = *cli.modes.begin();
+    if (cli.lastError) {
+        // the record is per source file: `flywheel -E app/` reads app/source.fw's
+        if (cli.positionals.size() != 1 || !cli.modes.empty() || cli.source) {
+            std::cerr << "usage: flywheel --error SOURCE\n";
+            return 2;
+        }
+        auto file = cli.positionals.front();
+        std::error_code ec;
+        if (fs::is_directory(file, ec))
+            file = (fs::path(file) / "source.fw").string();
+        if (fw::diag::showRecord(file))
+            return 0;
+        std::cerr << "flywheel: no error recorded for " << cli.positionals.front() << '\n';
+        return 1;
+    }
     if (mode == "selftest") {
         auto python = llvm::sys::findProgramByName("python3");
         if (!python)
@@ -1195,10 +1247,27 @@ int main(int argc, char **argv) {
             return 2;
         }
         std::map<std::string, std::string> overlay;
+        std::optional<Temp> sourceCopy;
         if (source) {
             filename = "[source].fw";
             sourceFile() = fs::weakly_canonical(fs::absolute(filename)).string();
+            sourceText() = *source;
             overlay[sourceFile()] = *source;
+            // the program's traceback shows <source> lines from a copy of the code
+            sourceCopy.emplace();
+            auto copy = sourceCopy->path / "source.fw";
+            std::ofstream(copy, std::ios::binary) << *source;
+            setEnvironment("FLYWHEEL_SOURCE_FILE", sourceFile());
+            setEnvironment("FLYWHEEL_SOURCE_TEXT", copy.string());
+        } else if (filename != "-" && filename.find("://") == std::string::npos) {
+            // a local file: its last error is kept for `flywheel --error` (a built executable
+            // runs without the compiler and keeps nothing)
+            errorRecord() = fw::diag::recordPath(filename);
+            errorSource() = filename;
+            if (!errorRecord().empty()) {
+                setEnvironment("FLYWHEEL_ERROR_RECORD", errorRecord());
+                setEnvironment("FLYWHEEL_ERROR_SOURCE", fw::diag::absolute(filename));
+            }
         }
         auto load = [&] {
             auto program = source ? fw::loadProgram(filename, overlay) : fw::loadProgram(filename);

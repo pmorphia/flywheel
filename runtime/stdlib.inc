@@ -1208,6 +1208,7 @@ std::string &returnFile() {
 }
 void fw_set_args(int64_t count, char **values) {
     returnFile();
+    errorSettings();
     guardStack(true);
     auto &arguments = programArguments();
     arguments.clear();

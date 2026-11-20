@@ -27,6 +27,16 @@
 #include <utility>
 #include <vector>
 
+#include "flywheel/diagnostic.hpp"
+
+// Where generated code saw an error and passed it on: one constant per check site (see
+// Compiler::traceSite). The sites an error passes through, innermost first, are its traceback.
+struct FwTraceSite {
+    const char *file;
+    const char *function;
+    int32_t line, col, sline, scol, eline, ecol;
+};
+
 namespace {
 struct NativeFailure {
     std::string type, message;
@@ -203,6 +213,8 @@ static_assert(sizeof(std::atomic<bool>) == 1 && sizeof(std::atomic<size_t>) == 8
 // threads), and the hashing state of maps with tuple, class, or enum keys.
 struct ObjectExtra {
     std::unique_ptr<NativeResource> resource;
+    // A caught error value: where it was thrown, so rethrowing it keeps its traceback.
+    std::vector<const FwTraceSite *> trace;
     std::vector<ElementEvent> events;
     std::vector<uint8_t *> retired; // flat blocks replaced while other threads ran
     // Maps with tuple keys (1, structural) or class keys (2, user hash/equals) keep each key's
@@ -571,10 +583,19 @@ void release(Object *p) {
 // Mirrors whether this thread has a pending error. It is trivially initialized, so the
 // check generated code runs after almost every call needs no thread-local init guard.
 thread_local constinit bool errorPending = false;
+// The traceback of the pending error: the check sites it has passed, innermost first.
+constexpr size_t traceLimit = 1 << 20;
+thread_local std::vector<const FwTraceSite *> errorTrace;
+thread_local size_t errorTraceDropped = 0;
 struct PendingError {
     std::string type;
     Object *value = nullptr;
     void clear() {
+        // a caught value keeps its traceback for a rethrow
+        if (value && !errorTrace.empty())
+            value->more().trace = std::move(errorTrace);
+        errorTrace.clear();
+        errorTraceDropped = 0;
         release(value);
         value = nullptr;
         errorPending = false;
@@ -586,6 +607,8 @@ struct PendingError {
         type = t;
         value = v;
         errorPending = v != nullptr;
+        if (v && v->extra && !v->extra->trace.empty())
+            errorTrace = v->extra->trace;
     }
     ~PendingError() {
         clear();
@@ -597,6 +620,10 @@ void runDestructors(Object *p) {
     p->finalized = true;
     auto savedType = std::move(pendingError.type);
     auto savedValue = pendingError.value;
+    auto savedTrace = std::move(errorTrace);
+    auto savedDropped = errorTraceDropped;
+    errorTrace.clear();
+    errorTraceDropped = 0;
     pendingError.value = nullptr;
     pendingError.type.clear();
     errorPending = false;
@@ -613,6 +640,8 @@ void runDestructors(Object *p) {
     pendingError.type = std::move(savedType);
     pendingError.value = savedValue;
     errorPending = savedValue != nullptr;
+    errorTrace = std::move(savedTrace);
+    errorTraceDropped = savedDropped;
 }
 void recordFailure(const std::string &type, const std::string &message) {
     auto p = new Object(Object::ErrorValue);
@@ -2227,6 +2256,34 @@ std::string shownErrorType(const std::string &type) {
     }
     return out;
 }
+// What `flywheel` tells the program it runs about its uncaught errors, read once at startup
+// and removed from the environment so programs it starts do not inherit them:
+// FLYWHEEL_ERROR_RECORD/_SOURCE (where to keep the error for `flywheel --error`, and the source
+// file it belongs to) and FLYWHEEL_SOURCE_FILE/_TEXT (the virtual file of --source code, shown as
+// <source>, and a file holding its text).
+struct ErrorSettings {
+    std::string record, source, sourceFile, sourceText;
+};
+const ErrorSettings &errorSettings() {
+    static const ErrorSettings settings = [] {
+        ErrorSettings out;
+        std::pair<const char *, std::string *> names[] = {{"FLYWHEEL_ERROR_RECORD", &out.record},
+                                                          {"FLYWHEEL_ERROR_SOURCE", &out.source},
+                                                          {"FLYWHEEL_SOURCE_FILE", &out.sourceFile},
+                                                          {"FLYWHEEL_SOURCE_TEXT", &out.sourceText}};
+        for (auto &[name, value] : names)
+            if (auto v = std::getenv(name)) {
+                *value = v;
+#ifdef _WIN32
+                _putenv_s(name, "");
+#else
+                unsetenv(name);
+#endif
+            }
+        return out;
+    }();
+    return settings;
+}
 } // namespace
 
 extern "C" {
@@ -2243,15 +2300,60 @@ void fw_throw(const char *type, Object *value) {
     } else
         pendingError.set(type, value);
 }
+// Generated code calls this where it passes an error on (see Compiler::checkError).
+void fw_trace(const FwTraceSite *site) {
+    if (errorTrace.size() < traceLimit)
+        errorTrace.push_back(site);
+    else
+        ++errorTraceDropped;
+}
+// An uncaught error: its message and traceback, each location with its source line, kept for
+// `flywheel --error` when the compiler ran the program (see errorSettings).
 void fw_error_report() {
     if (pendingError.value) {
         bool hasMessage = true;
         auto text = thrownText(pendingError.value, &hasMessage);
-        std::cerr << "Flywheel runtime error: " << shownErrorType(pendingError.type);
-        if (hasMessage && pendingError.value->kind == Object::Instance && text.empty())
-            std::cerr << '\n'; // `error Name` thrown without a message
-        else
-            std::cerr << ": " << (text.empty() ? "exception" : text) << '\n';
+        fw::diag::Report r;
+        r.type = shownErrorType(pendingError.type);
+        // `error Name` thrown without a message prints only the name
+        r.bare = hasMessage && pendingError.value->kind == Object::Instance && text.empty();
+        r.message = text.empty() ? "exception" : text;
+        fw::diag::Sources sources;
+        auto &settings = errorSettings();
+        auto frame = [&](const FwTraceSite *site) {
+            fw::diag::Frame f;
+            f.file = site->file ? site->file : "";
+            if (!settings.sourceFile.empty() && f.file == settings.sourceFile) {
+                f.file = "<source>";
+                sources.alias["<source>"] = settings.sourceText;
+            }
+            f.function = site->function ? site->function : "?";
+            f.line = site->line, f.col = site->col, f.sline = site->sline, f.scol = site->scol;
+            f.eline = site->eline, f.ecol = site->ecol;
+            return f;
+        };
+        // a deep stack keeps its innermost and outermost frames
+        constexpr size_t keep = 64, outer = 16;
+        auto n = errorTrace.size();
+        for (size_t i = 0; i < n; ++i) {
+            if (n > keep && i >= keep - outer && i < n - outer) {
+                if (!r.omitted)
+                    r.omittedAt = r.frames.size();
+                ++r.omitted;
+                continue;
+            }
+            r.frames.push_back(frame(errorTrace[i]));
+        }
+        if (errorTraceDropped) {
+            if (!r.omitted)
+                r.omittedAt = r.frames.size();
+            r.omitted += errorTraceDropped;
+        }
+        std::cout.flush();
+        std::fflush(stdout);
+        std::cerr << fw::diag::render(r, fw::diag::color(), &sources) << std::flush;
+        if (!settings.record.empty() && !settings.source.empty())
+            fw::diag::writeRecord(settings.record, settings.source, r);
         pendingError.clear();
     }
 }
