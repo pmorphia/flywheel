@@ -1,6 +1,7 @@
 """Black-box tests: build and execute native artifacts, with independent expected results."""
 
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -9,7 +10,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-COMPILER = str(Path(sys.argv.pop(1)).resolve()) if len(sys.argv) > 1 else "flywheel"
+# Programs print UTF-8. On Windows, text pipes and files otherwise default to the ANSI code page
+# (cp1252), so the suite reruns itself in UTF-8 mode.
+if os.name == "nt" and not sys.flags.utf8_mode:
+    sys.exit(subprocess.call([sys.executable, "-X", "utf8", *sys.argv]))
+
+COMPILER =str(Path(sys.argv.pop(1)).resolve()) if len(sys.argv) > 1 else "flywheel"
 # Diagnostics are compared without color, and last-error records (--error) stay out of $HOME.
 for _name in ("FORCE_COLOR", "CLICOLOR_FORCE"):
     os.environ.pop(_name, None)
@@ -4650,7 +4656,11 @@ print web.static("/assets", "public", {port})
     def test_vecmath_and_reexports(self):
         self.source.write_text('import vecmath.*\nimport math\nvar a = Vec3(1, 2, 3)\nprint a + Vec3(1, 1, 1) * 2, 2 * a, a.cross(Vec3(0, 1, 0)), a.dot(a)\nvar m = Mat4.translation(Vec3(10, 0, 0)) * Mat4.rotation(Vec3(0, 1, 0), 90)\nprint m.transform_point(Vec3(1, 0, 0))\nvar inv = m.inverted()\nprint inv.transform_point(m.transform_point(a))\nprint (m * inv) == Mat4()\nvar q = Quat.from_axis_angle(Vec3(0, 1, 0), 90)\nprint q.rotate(Vec3(1, 0, 0)), q.to_matrix().transform_direction(Vec3(1, 0, 0))\nprint q.slerp(Quat(), 0.5).angle(), q.angle(), q.axis()\nprint Quat.between(Vec3(1, 0, 0), Vec3(0, 0, 1)).rotate(Vec3(1, 0, 0))\nvar p = Mat4.perspective(60, 16 / 9.0, 0.1, 100) * Mat4.look_at(Vec3(0, 0, 5), Vec3(0, 0, 0), Vec3(0, 1, 0))\nprint p.transform_point(Vec3(0, 0, 0)).z\nprint Vec2(3, 4).length(), Vec2.from_angle(90), m.at(0, 3), m.values().length\nprint Mat4().determinant(), Mat4.scaling(Vec3(2, 3, 4)).determinant()\n', encoding="utf-8")
         result = subprocess.run([COMPILER, "--run", self.source], capture_output=True, text=True, timeout=180)
-        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, 'Vec3(x=3, y=4, z=5) Vec3(x=2, y=4, z=6) Vec3(x=-3, y=0, z=1) 14\nVec3(x=10, y=0, z=-1)\nVec3(x=1, y=2, z=3)\ntrue\nVec3(x=2.22044604925031e-16, y=0, z=-1) Vec3(x=2.22044604925031e-16, y=0, z=-1)\n45 90 Vec3(x=0, y=1, z=0)\nVec3(x=2.22044604925031e-16, y=0, z=1)\n0.961961961961962\n5 Vec2(x=6.12323399573677e-17, y=1) 10 16\n1 24\n', ""))
+        # Rotations leave rounding noise near 1e-16 whose sign depends on the C library's sin and
+        # cos (MSVC's differ from glibc's in the last bit); such values compare as 0.
+        noise = lambda text: re.sub(r"-?\d\.\d+e-1[5-7]", "0", text)
+        result.stdout = noise(result.stdout)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, noise('Vec3(x=3, y=4, z=5) Vec3(x=2, y=4, z=6) Vec3(x=-3, y=0, z=1) 14\nVec3(x=10, y=0, z=-1)\nVec3(x=1, y=2, z=3)\ntrue\nVec3(x=2.22044604925031e-16, y=0, z=-1) Vec3(x=2.22044604925031e-16, y=0, z=-1)\n45 90 Vec3(x=0, y=1, z=0)\nVec3(x=2.22044604925031e-16, y=0, z=1)\n0.961961961961962\n5 Vec2(x=6.12323399573677e-17, y=1) 10 16\n1 24\n'), ""))
         # `public import name.*` makes a module's names part of the importing module's.
         (self.root / "shapes.fw").write_text("public import vecmath.*\nfunction origin() returns Vec2\n"
                                             "    return Vec2(0, 0)\nend\n", encoding="utf-8")

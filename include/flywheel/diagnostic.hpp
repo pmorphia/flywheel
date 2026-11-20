@@ -211,11 +211,22 @@ inline std::string shownPath(const std::string &path) {
     auto cwd = std::filesystem::current_path(ec);
     if (ec)
         return path;
-    auto rel = std::filesystem::path(path).lexically_relative(cwd);
-    auto text = rel.generic_string();
-    if (rel.empty() || text.rfind("..", 0) == 0)
-        return path;
-    return rel.make_preferred().string();
+    auto inside = [&](const std::filesystem::path &directory, std::string &out) {
+        auto rel = std::filesystem::path(path).lexically_relative(directory);
+        if (rel.empty() || rel.generic_string().rfind("..", 0) == 0)
+            return false;
+        out = rel.make_preferred().string();
+        return true;
+    };
+    // Source paths are canonical; the working directory may not be (a symlink, or a Windows
+    // short name such as C:\Users\RUNNER~1), so it is compared canonicalized too.
+    std::string out;
+    if (inside(cwd, out))
+        return out;
+    auto canonical = std::filesystem::weakly_canonical(cwd, ec);
+    if (!ec && canonical != cwd && inside(canonical, out))
+        return out;
+    return path;
 }
 
 // Reads source files for excerpts; `alias` maps a shown name (<source>) to the file holding it.

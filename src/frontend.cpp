@@ -439,6 +439,16 @@ std::string entities(const std::string &text, Location l) {
 }
 } // namespace
 std::vector<Token> lex(const std::string &source) {
+    // CRLF line ends (files saved on Windows) read as LF, so multi-line strings and markup
+    // text hold "\n" wherever the file was written. Lines and columns stay the same.
+    if (source.find("\r\n") != std::string::npos) {
+        std::string lf;
+        lf.reserve(source.size());
+        for (size_t i = 0; i < source.size(); ++i)
+            if (!(source[i] == '\r' && i + 1 < source.size() && source[i + 1] == '\n'))
+                lf += source[i];
+        return lex(lf);
+    }
     auto voids = scanVoidComponents(source);
     struct Restore {
         const std::set<std::string> *saved;

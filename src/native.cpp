@@ -1223,7 +1223,12 @@ void scanDirectives(const std::string &text, ForeignModule &m) {
         while (words >> word) {
             if (verb == "link")
 #ifdef _MSC_VER
-                m.linkFlags.push_back(word + ".lib");
+            {
+                // The C runtime holds what Unix splits into libm, libpthread, libdl and librt.
+                static const std::set<std::string> inRuntime{"c", "m", "pthread", "dl", "rt"};
+                if (!inRuntime.count(word))
+                    m.linkFlags.push_back(word + ".lib");
+            }
 #else
                 m.linkFlags.push_back("-l" + word);
 #endif
@@ -1405,6 +1410,8 @@ ForeignBuild buildForeign(const std::vector<ForeignModule> &modules, bool shared
             args = {"/nologo",     "/O2",
                     "/MD",         "/EHsc",
                     "/c",          cxx ? "/TP" : "/TC",
+                    // MSVC defaults to C++14 and C89-era C; the shim needs std::string_view.
+                    cxx ? "/std:c++17" : "/std:c11",
                     "/D" + rename, "/I" + fs::path(m.source).parent_path().string()};
             args.insert(args.end(), compileFlags.begin(), compileFlags.end());
             args.insert(args.end(), {shim.string(), "/Fo:" + partial});

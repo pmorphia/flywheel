@@ -47,8 +47,15 @@ std::vector<std::string> unitNames(const std::string &ns) {
         out.push_back("__fwu_" + ns + "__" + suffix);
     return out;
 }
-// Embedded library modules load from this virtual directory.
-const fs::path libraryDirectory = fs::path("/") / "<flywheel>" / "lib";
+// Embedded library modules load from this virtual directory. Their paths are always written
+// with '/' and never canonicalized, so they read the same on Windows ("/<flywheel>/lib/x.fw").
+const std::string libraryDirectory = "/<flywheel>/lib/";
+std::string libraryPath(const std::string &name) {
+    return libraryDirectory + name + ".fw";
+}
+bool isLibraryPath(const std::string &location) {
+    return fs::path(location).generic_string().rfind(libraryDirectory, 0) == 0;
+}
 // The URL's directory, with a trailing '/': "https://x.org/a/b.fw" -> "https://x.org/a/".
 std::string urlDirectory(const std::string &url) {
     auto end = url.find_first_of("?#");
@@ -247,7 +254,7 @@ class Loader {
             for (auto &ns : other->unitExports)
                 if (where.empty() &&
                     std::find(ns.units.begin(), ns.units.end(), unit) != ns.units.end())
-                    where = path.rfind((libraryDirectory / "").string(), 0) == 0
+                    where = path.rfind(libraryDirectory, 0) == 0
                                 ? fs::path(path).stem().string()
                                 : path;
         if (where == "_time")
@@ -558,7 +565,11 @@ class Loader {
         return it->second;
     }
     static std::string canonicalLocation(const std::string &location) {
-        return isUrl(location) ? location : fs::weakly_canonical(fs::path(location)).string();
+        if (isUrl(location))
+            return location;
+        if (isLibraryPath(location))
+            return fs::path(location).generic_string();
+        return fs::weakly_canonical(fs::path(location)).string();
     }
     // Lowers the module's units once its imports are loaded: imported namespaces become visible
     // by name (int[time]), and unitconv may relate them.
@@ -632,7 +643,7 @@ class Loader {
     Unit &load(const std::string &location, Location from = {}) {
         bool remote = isUrl(location);
         fs::path path = remote ? fs::path() : fs::path(location);
-        auto canonical = remote ? location : fs::weakly_canonical(path).string();
+        auto canonical = canonicalLocation(location);
         if (from.file.empty())
             from = {1, 1, canonical};
         if (std::find(stack.begin(), stack.end(), canonical) != stack.end()) {
@@ -644,7 +655,7 @@ class Loader {
         if (units.count(canonical))
             return *units.at(canonical);
         std::ostringstream text;
-        bool library = !remote && path.parent_path() == libraryDirectory;
+        bool library = !remote && isLibraryPath(location);
         if (auto it = overlay ? overlay->find(canonical) : decltype(overlay->end()){};
             overlay && it != overlay->end())
             text << it->second;
@@ -847,7 +858,7 @@ class Loader {
                     throw Error(importLoc, "package '" + head + "' has no module '" + name + "'");
             }
             if (found.empty() && libraryModules().count(name))
-                found = (libraryDirectory / (name + ".fw")).string();
+                found = libraryPath(name);
             if (!found.empty()) {
                 auto &dependency = load(found, importLoc);
                 u.modules[alias] = &dependency;
@@ -872,7 +883,7 @@ class Loader {
                 u.builtins[alias] = qualified;
                 // `import time` also brings the time unit namespace (stdlib/fw/_time.fw).
                 if (name == "time")
-                    u.unitModules.push_back(&load((libraryDirectory / "_time.fw").string()));
+                    u.unitModules.push_back(&load(libraryPath("_time")));
                 merged.imports[qualified] = name;
                 if (name == "html" && u.program.wildcards.count(alias))
                     u.html = true;

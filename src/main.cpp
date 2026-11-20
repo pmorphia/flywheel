@@ -45,6 +45,15 @@ int execute(const std::string &executable, const std::vector<std::string> &args)
         std::cerr << error << '\n';
     return result < 0 ? 1 : result;
 }
+#ifdef _WIN32
+// Runs the program the way execute does, tied to this process: ending flywheel (a terminal
+// closing, a test harness killing it) ends the program too. Defined at the end of the file.
+int executeTied(const std::string &executable, const std::vector<std::string> &args);
+#else
+int executeTied(const std::string &executable, const std::vector<std::string> &args) {
+    return execute(executable, args);
+}
+#endif
 struct Temp {
     fs::path path;
     Temp() {
@@ -405,7 +414,7 @@ int compileProgram(const std::string &command, const std::string &filename,
     if (linked)
         return linked;
     if (runs)
-        return timed([&] { return execute(binary.string(), programArguments); });
+        return timed([&] { return executeTied(binary.string(), programArguments); });
     return 0;
 }
 // The virtual file holding --source code; diagnostics name it <source>.
@@ -763,6 +772,16 @@ int repl(const char *argv0) {
         };
         output = read(out);
         errors = read(err);
+#ifdef _WIN32
+        // The child's text-mode output ends lines with "\r\n"; std::cout adds the '\r' back.
+        for (auto *text : {&output, &errors}) {
+            std::string lf;
+            for (size_t i = 0; i < text->size(); ++i)
+                if (!((*text)[i] == '\r' && i + 1 < text->size() && (*text)[i + 1] == '\n'))
+                    lf += (*text)[i];
+            *text = std::move(lf);
+        }
+#endif
         auto at = output.find(sentinel + "\n");
         output = at == std::string::npos ? "" : output.substr(at + sentinel.size() + 1);
         // Report locations relative to the input rather than the generated file.
@@ -1341,3 +1360,43 @@ int main(int argc, char **argv) {
         return 1;
     }
 }
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+namespace {
+int executeTied(const std::string &executable, const std::vector<std::string> &args) {
+    // The program joins a job that is killed when its last handle (ours) closes. Processes the
+    // program starts break away from it, so ones meant to outlive it still do.
+    static HANDLE job = [] {
+        HANDLE h = CreateJobObjectW(nullptr, nullptr);
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+        limits.BasicLimitInformation.LimitFlags =
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
+        if (h && !SetInformationJobObject(h, JobObjectExtendedLimitInformation, &limits,
+                                          sizeof limits)) {
+            CloseHandle(h);
+            h = nullptr;
+        }
+        return h;
+    }();
+    std::vector<llvm::StringRef> refs;
+    refs.emplace_back(executable);
+    for (auto &a : args)
+        refs.emplace_back(a);
+    std::string error;
+    bool failed = false;
+    auto started = llvm::sys::ExecuteNoWait(executable, refs, std::nullopt, {}, 0, &error, &failed);
+    if (failed) {
+        std::cerr << error << '\n';
+        return 1;
+    }
+    if (job)
+        AssignProcessToJobObject(job, started.Process);
+    auto finished = llvm::sys::Wait(started, std::nullopt, &error);
+    if (!error.empty())
+        std::cerr << error << '\n';
+    return finished.ReturnCode < 0 ? 1 : finished.ReturnCode;
+}
+} // namespace
+#endif
