@@ -25,7 +25,7 @@ log.close()
 
 ## Program arguments and exit
 
-`os.args()` returns the program's arguments (excluding the program name). `flywheel app.fw -- one two` passes `one` and `two`. `os.exit(code = 0)` flushes output and ends the program immediately; `finally` blocks do not run.
+`os.args()` returns the program's arguments (excluding the program name). The built-in name `__args__` is the same list without an import (see [built-in names](language.md#built-in-names)). `flywheel app.fw -- one two` passes `one` and `two`. `os.exit(code = 0)` flushes output and ends the program immediately; `finally` blocks do not run.
 
 ## Running processes with captured output
 

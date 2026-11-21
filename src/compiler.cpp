@@ -1362,6 +1362,69 @@ end
                             i64(static_cast<int64_t>(s.size()))}),
                 Ty{"string"}};
     }
+    // Built-in names (docs/language.md#built-in-names): facts about the program and the
+    // implementation running it. They are found after variables, imports, and functions, so a
+    // program's own declaration of the same name wins. All but __args__ are constants.
+    std::optional<Val> builtinName(const Expr &e) {
+        auto &name = e.text;
+        if (name.size() < 5 || name.rfind("__", 0) != 0 || name.compare(name.size() - 2, 2, "__"))
+            return std::nullopt;
+        auto sourceFile = [&] {
+            auto file = e.loc.file.empty() ? mainFileName : e.loc.file;
+            // <source> (-x CODE), <stdin>, and URLs are shown as they are.
+            if (file.empty() || file[0] == '<' || file.find("://") != std::string::npos)
+                return file;
+            // -x CODE is compiled as [source].fw in the working directory (src/main.cpp).
+            if (std::filesystem::path(file).filename() == "[source].fw")
+                return std::string("<source>");
+            std::error_code error;
+            auto full = std::filesystem::weakly_canonical(std::filesystem::path(file), error);
+            return error ? file : full.string();
+        };
+        if (name == "__file__")
+            return literal(sourceFile());
+        if (name == "__dir__") {
+            auto file = sourceFile();
+            if (file.empty() || file[0] == '<' || file.find("://") != std::string::npos)
+                return literal(std::filesystem::current_path().string());
+            return literal(std::filesystem::path(file).parent_path().string());
+        }
+        if (name == "__line__")
+            return Val{i64(e.loc.line), Ty{"i64"}};
+        if (name == "__args__")
+            return Val{objectCall("fw_os_args", {frame}), Ty{"string[]"}};
+        if (name == "__version__" || name == "__flywheel__")
+            return literal(FW_VERSION_NUMBER);
+        if (name == "__impl__")
+            return literal("flywheel");
+        if (name == "__os__") {
+#if defined(_WIN32)
+            return literal("windows");
+#elif defined(__APPLE__)
+            return literal("macos");
+#elif defined(__linux__)
+            return literal("linux");
+#else
+            return literal("unix");
+#endif
+        }
+        if (name == "__arch__") {
+#if defined(__x86_64__) || defined(_M_X64)
+            return literal("x86_64");
+#elif defined(__aarch64__) || defined(_M_ARM64)
+            return literal("arm64");
+#elif defined(__i386__) || defined(_M_IX86)
+            return literal("x86");
+#elif defined(__arm__) || defined(_M_ARM)
+            return literal("arm");
+#elif defined(__riscv) && __riscv_xlen == 64
+            return literal("riscv64");
+#else
+            return literal("unknown");
+#endif
+        }
+        return std::nullopt;
+    }
     void guard(llvm::Value *condition, const std::string &message,
                const std::string &errorType = "NumericError") {
         auto ok = llvm::BasicBlock::Create(ctx, "checked", current);
@@ -4146,6 +4209,8 @@ Val Compiler::valueOf(Expr &e, Ty expected) {
             auto &sig = signature(e.text);
             return {sig.function, Ty{"fn:" + e.text}};
         }
+        if (auto v = builtinName(e))
+            return *v;
         error("undeclared identifier '" + e.text + "'; declarations require var, const, or a type");
     }
     if (e.kind == "attr") {

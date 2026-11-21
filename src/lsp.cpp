@@ -700,6 +700,11 @@ class Navigator {
                              "error", "unitns", "unit", "unitconv"})
             if (seen.insert(keyword).second)
                 out.push_back({keyword, "keyword"});
+        // Built-in names (Compiler::builtinName in compiler.cpp).
+        for (auto name : {"__file__", "__dir__", "__line__", "__args__", "__version__",
+                          "__flywheel__", "__impl__", "__os__", "__arch__"})
+            if (seen.insert(name).second)
+                out.push_back({name, "constant"});
         return out;
     }
     static std::vector<std::string> nativeMembers(const std::string &module) {

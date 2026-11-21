@@ -163,6 +163,33 @@ The block is the enclosing `if`, loop, `try`, or function body, so a `defer` ins
 
 `return` outside functions ends the program after running pending `finally` blocks. `return` alone exits with status 0 and `return n` with integer status `n`. Under `flywheel --desktop` and `flywheel --serve`, the main file returns an `element` or `fragment` to display; see [pages](tooling.md#pages-desktop-and-serve). `flywheel --export` and `flywheel --debug` (and the `flywheel` module) accept a top-level return of any value; see [return values](tooling.md#return-values-export-and-debug). Only the main file may return at top level, not imported modules.
 
+## Built-in names
+
+These names are available everywhere, with no import. They tell a program about itself and the implementation running it:
+
+| Name | Type | Value |
+|---|---|---|
+| `__file__` | `string` | Absolute path of the source file the name is written in (an imported module gives its own path). `<source>` for `-x CODE`; URLs as given |
+| `__dir__` | `string` | Directory of `__file__`; the working directory for `-x CODE` and URLs |
+| `__line__` | `int` | Line the name is written on |
+| `__args__` | `string[]` | The program's arguments, like `os.args()` |
+| `__version__` | `string` | Version of the running implementation, without the pre-release tag: `"2.28"` |
+| `__flywheel__` | `string` | Flywheel version the implementation follows. Same as `__version__` for the compiler. Flywheel Lite and flywheel.js have their own version numbers |
+| `__impl__` | `string` | `"flywheel"` (the compiler), `"lite"` (Flywheel Lite), or `"js"` (flywheel.js) |
+| `__os__` | `string` | `"linux"`, `"windows"`, `"macos"`, or `"unix"`; `"browser"` for flywheel.js in a browser |
+| `__arch__` | `string` | `"x86_64"`, `"arm64"`, `"x86"`, `"arm"`, `"riscv64"`, or `"unknown"` |
+
+```flywheel
+import fs
+var config = fs.join(__dir__, "config.toml")    # next to this source file, wherever it runs from
+if __impl__ == "js" do
+    print "running in flywheel.js {__version__}, following Flywheel {__flywheel__}"
+end
+print "{__file__}:{__line__}: {__args__.length} arguments on {__os__}/{__arch__}"
+```
+
+All except `__args__` are constants fixed when the program is compiled. A program built with `--build` keeps the path, version, and platform it was built with. These names come after the program's own names: a variable, function, or import called `__os__` hides the built-in one.
+
 ## Collections and control flow
 
 Arrays infer a homogeneous common type, or use the declared element type. Empty arrays require context. Heterogeneous literals infer tuples, with compile-time integer indices. Maps use `{key: value}` literals and sets `{a, b}`; `{}` is an empty map or set, depending on the expected type. See [collections](collections.md). Arrays use shared mutable identity and checked indices; `s[a..b]` and `s[a..<b]` slice strings and sequences.

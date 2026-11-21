@@ -69,7 +69,7 @@ if(NOT MSVC AND NOT FLYWHEEL_LINKER STREQUAL "default")
   endif()
 endif()
 message(STATUS "flywheel --build links with: ${FW_CXX_PATH} ${FW_LINKER_FLAG}")
-target_compile_definitions(flywheel PRIVATE FW_VERSION="${FLYWHEEL_VERSION}" FW_CXX="${FW_CXX_PATH}" FW_LINKER_FLAG="${FW_LINKER_FLAG}" FW_RUNTIME="$<TARGET_FILE:flywheel_runtime>" FW_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests")
+target_compile_definitions(flywheel PRIVATE FW_VERSION="${FLYWHEEL_VERSION}" FW_VERSION_NUMBER="${PROJECT_VERSION}" FW_CXX="${FW_CXX_PATH}" FW_LINKER_FLAG="${FW_LINKER_FLAG}" FW_RUNTIME="$<TARGET_FILE:flywheel_runtime>" FW_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests")
 add_dependencies(flywheel flywheel_runtime)
 # Running (`flywheel app.fw`) JIT-loads the program and resolves runtime calls against a copy of the runtime
 # linked into the compiler. Other platforms link a temporary executable instead.

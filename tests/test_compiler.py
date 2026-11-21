@@ -5044,6 +5044,16 @@ POSITIVE.update({
         'print client.send_to("again", "127.0.0.1", server.port())\nserver.wait(2.0)\nprint server.receive()\nserver.close()\n',
         'true\ntrue\ntrue\nping\ntrue\ntrue pong\ntrue\nagain\n'),
     "hot_without_reload": ('import hot\nprint hot.enabled(), hot.reload()\n', 'false false\n'),
+    # Built-in names: the values depend on the implementation and machine, so this checks shapes.
+    "builtin_names": (
+        'print __file__.length > __dir__.length, __file__.starts_with(__dir__), __dir__ != ""\n'
+        'print __line__\nprint __args__.length\n'
+        'print __impl__ in ["flywheel", "lite", "js"], __os__ != "", __arch__ != ""\n'
+        'print __version__.split(".").length >= 2, __flywheel__.split(".").length >= 2\n'
+        'function where() returns int\n    return __line__\nend\nprint where()\n'
+        'function shadowed() returns string\n    string __os__ = "mine"\n    return __os__\nend\n'
+        'print shadowed()\nvar f = function() => __line__\nprint f()\n',
+        'true true true\n2\n0\ntrue true true\ntrue true\n7\nmine\n15\n'),
 })
 NEGATIVE.update({
     "otherwise_needs_nullable": ('var x = 1\nprint x otherwise 2\n', "'otherwise' requires a nullable left operand, not int"),
