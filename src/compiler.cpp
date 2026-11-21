@@ -313,6 +313,7 @@ class Compiler {
     friend struct TraceScope;
     // Coverage: one counter per executed source line, keyed (file, line).
     bool coverage = false, race = false;
+    bool relocatable = false; // Options::relocatable
     std::map<std::pair<std::string, int>, llvm::GlobalVariable *> coverageCounters;
     // Warnings go to Options::warnings, or to stderr.
     std::vector<Error> *warningSink = nullptr;
@@ -1364,7 +1365,8 @@ end
     }
     // Built-in names (docs/language.md#built-in-names): facts about the program and the
     // implementation running it. They are found after variables, imports, and functions, so a
-    // program's own declaration of the same name wins. All but __args__ are constants.
+    // program's own declaration of the same name wins. All but __args__ are constants, and so
+    // are __file__ and __dir__ except in --build executables (Options::relocatable).
     std::optional<Val> builtinName(const Expr &e) {
         auto &name = e.text;
         if (name.size() < 5 || name.rfind("__", 0) != 0 || name.compare(name.size() - 2, 2, "__"))
@@ -1381,11 +1383,38 @@ end
             auto full = std::filesystem::weakly_canonical(std::filesystem::path(file), error);
             return error ? file : full.string();
         };
-        if (name == "__file__")
-            return literal(sourceFile());
+        auto pseudo = [](const std::string &file) {
+            return file.empty() || file[0] == '<' || file.find("://") != std::string::npos;
+        };
+        // --build: found from the executable's location when the program starts, so a moved
+        // executable sees where it is now. Files below the main file's directory keep their
+        // relative place; the rest (and -x CODE, URLs) use the executable's directory.
+        auto located = [&](int64_t which, const std::string &file) {
+            std::string relative;
+            if (!pseudo(file) && !pseudo(mainFileName)) {
+                std::error_code error;
+                auto main = std::filesystem::weakly_canonical(mainFileName, error);
+                auto rel = std::filesystem::path(file).lexically_relative(main.parent_path());
+                if (!error && std::filesystem::path(file) != main && !rel.empty() &&
+                    *rel.begin() != "..")
+                    relative = rel.generic_string();
+            }
+            return Val{objectCall("fw_program_location",
+                                  {frame, i64(which), b.CreateGlobalString(relative),
+                                   i64(static_cast<int64_t>(relative.size()))}),
+                       Ty{"string"}};
+        };
+        if (name == "__file__") {
+            auto file = sourceFile();
+            if (relocatable && !pseudo(file))
+                return located(0, file);
+            return literal(file);
+        }
         if (name == "__dir__") {
             auto file = sourceFile();
-            if (file.empty() || file[0] == '<' || file.find("://") != std::string::npos)
+            if (relocatable)
+                return located(1, pseudo(file) ? std::string() : file);
+            if (pseudo(file))
                 return literal(std::filesystem::current_path().string());
             return literal(std::filesystem::path(file).parent_path().string());
         }
@@ -3775,6 +3804,7 @@ end
         servePort = opts.servePort;
         coverage = opts.coverage;
         race = opts.race;
+        relocatable = opts.relocatable;
         if (opts.debug) {
             dib = std::make_unique<llvm::DIBuilder>(module);
             mainFile = module.getModuleIdentifier();

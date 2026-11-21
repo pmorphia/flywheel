@@ -4653,6 +4653,37 @@ print web.static("/assets", "public", {port})
         self.assertEqual(result.stdout, "side effect\n30 null\n5\nfailed\nstill running\n", result.stderr)
         self.assertEqual(json.loads((self.root / "out.json").read_text()), {"sum": 5, "count": 1})
 
+    def test_built_program_locates_itself(self):
+        # --build finds __file__ and __dir__ from the executable at run time, so a moved
+        # executable reports where it is now; imports keep their place relative to it.
+        project = self.root / "project"
+        (project / "lib").mkdir(parents=True)
+        (project / "lib" / "util.fw").write_text(
+            'public function where() returns string\n    return "{__file__}|{__dir__}"\nend\n',
+            encoding="utf-8")
+        main = project / "main.fw"
+        main.write_text('import "lib/util.fw"\nprint __file__\nprint __dir__\nprint util.where()\n',
+                        encoding="utf-8")
+        result = self.command("--run", main)
+        here = main.resolve()
+        self.assertEqual(result.stdout.splitlines(),
+                         [here.as_posix(), here.parent.as_posix(),
+                          f"{(here.parent / 'lib/util.fw').as_posix()}|{(here.parent / 'lib').as_posix()}"],
+                         result.stderr)
+        name = "app.exe" if os.name == "nt" else "app"
+        result = self.command("--build", main, "-o", project / name)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        moved = self.root / "moved"
+        moved.mkdir()
+        shutil.move(str(project / name), str(moved / name))
+        exe = (moved / name).resolve()
+        result = subprocess.run([str(exe)], cwd=tempfile.gettempdir(), capture_output=True,
+                                text=True, encoding="utf-8", timeout=45)
+        self.assertEqual(result.stdout.splitlines(),
+                         [exe.as_posix(), exe.parent.as_posix(),
+                          f"{(exe.parent / 'lib/util.fw').as_posix()}|{(exe.parent / 'lib').as_posix()}"],
+                         result.stderr)
+
     def test_vecmath_and_reexports(self):
         self.source.write_text('import vecmath.*\nimport math\nvar a = Vec3(1, 2, 3)\nprint a + Vec3(1, 1, 1) * 2, 2 * a, a.cross(Vec3(0, 1, 0)), a.dot(a)\nvar m = Mat4.translation(Vec3(10, 0, 0)) * Mat4.rotation(Vec3(0, 1, 0), 90)\nprint m.transform_point(Vec3(1, 0, 0))\nvar inv = m.inverted()\nprint inv.transform_point(m.transform_point(a))\nprint (m * inv) == Mat4()\nvar q = Quat.from_axis_angle(Vec3(0, 1, 0), 90)\nprint q.rotate(Vec3(1, 0, 0)), q.to_matrix().transform_direction(Vec3(1, 0, 0))\nprint q.slerp(Quat(), 0.5).angle(), q.angle(), q.axis()\nprint Quat.between(Vec3(1, 0, 0), Vec3(0, 0, 1)).rotate(Vec3(1, 0, 0))\nvar p = Mat4.perspective(60, 16 / 9.0, 0.1, 100) * Mat4.look_at(Vec3(0, 0, 5), Vec3(0, 0, 0), Vec3(0, 1, 0))\nprint p.transform_point(Vec3(0, 0, 0)).z\nprint Vec2(3, 4).length(), Vec2.from_angle(90), m.at(0, 3), m.values().length\nprint Mat4().determinant(), Mat4.scaling(Vec3(2, 3, 4)).determinant()\n', encoding="utf-8")
         result = subprocess.run([COMPILER, "--run", self.source], capture_output=True, text=True, timeout=180)

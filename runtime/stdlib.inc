@@ -10,6 +10,9 @@
 #include <signal.h>
 #include <netdb.h>
 #endif
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 namespace {
 Slot integerSlot(int64_t value) {
@@ -313,6 +316,47 @@ void encodeSlot(const Slot &slot, std::string &out, int indent, int depth,
 std::vector<std::string> &programArguments() {
     static std::vector<std::string> arguments;
     return arguments;
+}
+// argv[0] made absolute at startup, the fallback when the OS cannot name the executable.
+std::filesystem::path &programInvocation() {
+    static std::filesystem::path invocation;
+    return invocation;
+}
+// Absolute path of the running executable, found once.
+const std::filesystem::path &executablePath() {
+    static const std::filesystem::path path = [] {
+        std::error_code ec;
+        std::filesystem::path found;
+#if defined(_WIN32)
+        std::wstring buffer(MAX_PATH, L'\0');
+        for (;;) {
+            auto n = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+            if (n == 0)
+                break;
+            if (n < buffer.size()) {
+                buffer.resize(n);
+                found = buffer;
+                break;
+            }
+            buffer.resize(buffer.size() * 2);
+        }
+#elif defined(__APPLE__)
+        uint32_t size = 0;
+        _NSGetExecutablePath(nullptr, &size);
+        std::string buffer(size, '\0');
+        if (_NSGetExecutablePath(buffer.data(), &size) == 0)
+            found = buffer.c_str();
+#else
+        found = std::filesystem::read_symlink("/proc/self/exe", ec);
+        if (ec)
+            found.clear();
+#endif
+        if (found.empty())
+            found = programInvocation();
+        auto canonical = std::filesystem::weakly_canonical(found, ec);
+        return ec ? found : canonical;
+    }();
+    return path;
 }
 struct ProcessRequest {
     std::vector<std::vector<std::string>> stages; // more than one stage forms a pipeline
@@ -1249,9 +1293,30 @@ void fw_set_args(int64_t count, char **values) {
     arguments.clear();
     for (int64_t i = 1; i < count; ++i)
         arguments.emplace_back(values[i]);
+    if (count > 0 && values[0]) {
+        std::error_code ec;
+        auto invocation = std::filesystem::absolute(
+            std::filesystem::path(std::u8string(reinterpret_cast<const char8_t *>(values[0]))),
+            ec);
+        programInvocation() = ec ? std::filesystem::path() : invocation;
+    }
 }
 Object *fw_os_args(Frame *frame) {
     return nativeBoundary([&] { return stringArray(frame, programArguments()); });
+}
+// __file__ (which 0) and __dir__ (which 1) of a --build executable. `relative` is the source
+// file's path relative to the main file's directory ("" for the main file and for files outside
+// it), so modules keep their place in the tree around the executable.
+Object *fw_program_location(Frame *frame, int64_t which, const char *relative, int64_t length) {
+    return nativeBoundary([&] {
+        auto &executable = executablePath();
+        auto directory = executable.parent_path();
+        if (length == 0)
+            return string(frame, fsText(which ? directory : executable));
+        auto file = directory / std::filesystem::path(std::u8string(
+                                    reinterpret_cast<const char8_t *>(relative), length));
+        return string(frame, fsText(which ? file.parent_path() : file));
+    });
 }
 void fw_os_exit(int64_t code) {
     std::cout.flush();

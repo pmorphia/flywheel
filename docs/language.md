@@ -169,8 +169,8 @@ These names are available everywhere, with no import. They tell a program about 
 
 | Name | Type | Value |
 |---|---|---|
-| `__file__` | `string` | Absolute path of the source file the name is written in (an imported module gives its own path). `<source>` for `-x CODE`; URLs as given |
-| `__dir__` | `string` | Directory of `__file__`; the working directory for `-x CODE` and URLs |
+| `__file__` | `string` | Absolute path of the source file the name is written in (an imported module gives its own path). `<source>` for `-x CODE`; URLs as given. In a `--build` executable, found when it runs: see below |
+| `__dir__` | `string` | Directory of `__file__`; the working directory for `-x CODE` and URLs. In a `--build` executable, found when it runs: see below |
 | `__line__` | `int` | Line the name is written on |
 | `__args__` | `string[]` | The program's arguments, like `os.args()` |
 | `__version__` | `string` | Version of the running implementation, without the pre-release tag: `"2.28"` |
@@ -188,7 +188,7 @@ end
 print "{__file__}:{__line__}: {__args__.length} arguments on {__os__}/{__arch__}"
 ```
 
-All except `__args__` are constants fixed when the program is compiled. A program built with `--build` keeps the path, version, and platform it was built with. These names come after the program's own names: a variable, function, or import called `__os__` hides the built-in one.
+`__args__` is read when the program runs. In an executable written by `--build`, so are `__file__` and `__dir__`: they come from where the executable is when it starts, not where it was built, so a program can find files shipped next to it after it is moved or installed. The main file's `__file__` is the executable's own path and its `__dir__` is the executable's directory. An imported module below the main file's directory keeps its place relative to the executable: `lib/util.fw` gives `<executable dir>/lib/util.fw` and `<executable dir>/lib`. Other modules (packages, files outside the main file's directory), `-x CODE`, and URLs get the executable's directory as `__dir__`. When the program is only run (`flywheel file.fw`, `--run`), `__file__` and `__dir__` name the source files. The rest are constants fixed when the program is compiled; an executable keeps the version and platform it was built with. These names come after the program's own names: a variable, function, or import called `__os__` hides the built-in one.
 
 ## Collections and control flow
 

@@ -332,6 +332,7 @@ int compileProgram(const std::string &command, const std::string &filename,
     if (command == "desktop" || command == "serve" || command == "desktop+serve")
         options.entry = command;
     bool runs = command != "build";
+    options.relocatable = !runs;
 #ifdef FW_JIT
     if (runs) {
         std::string object;

@@ -342,6 +342,9 @@ struct Options {
     std::string *objectData = nullptr; // receives the object file in memory when set
     // The compiler executable, which the `flywheel` module runs (flywheel.run and friends).
     std::string compilerPath;
+    // Set for --build: __file__ and __dir__ are found at run time from the executable's location
+    // instead of naming the source tree it was built from.
+    bool relocatable = false;
     // Receives warnings (such as a `catch "Name"` that nothing throws) when set; otherwise
     // they are printed to stderr as file:line:column: warning: message.
     std::vector<Error> *warnings = nullptr;
