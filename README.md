@@ -4,6 +4,15 @@ A C++20 compiler that turns Flywheel source into LLVM IR, native object files, a
 
 Flywheel is currently in its **beta** phase: version **2.28 (beta-28)** (`flywheel --version`).
 
+## Why Flywheel
+
+- **Readable like a script, ships like C++.** Code reads with `print`, `match`, `when`, and `end`-closed blocks, and compiles through LLVM to a standalone native executable. You don't need an interpreter or a runtime to install.
+- **Markup is part of the language.** `<ul>{items.map(...)}</ul>` is a typed expression with escaped HTML serialization. The same file can be printed, exported, served over HTTP (`--serve`), or shown in a native desktop window (`--desktop`).
+- **The compiler catches more mistakes.** Units of measure (`100m + 10s` is a compile error), nullable types with narrowing, exhaustive `match`, and monomorphized generics are all checked when you compile.
+- **Memory is freed predictably.** Reference counting frees values as soon as they're unused, a cycle collector cleans up cycles, and games can choose when collection runs (`gc.step`, `gc.pause`).
+- **You can call C, C++, Rust, and Zig directly.** `import c`, `import++`, `import rust`, and `import zig` compile the source file and let you call its functions. Native panics and exceptions become catchable errors.
+- **The tooling ships with the compiler.** One `flywheel` binary includes the test runner with coverage, the formatter, the doc generator, the REPL, the language server, a race detector, and colored tracebacks. Packages come from [Pulley](../pulley/README.md).
+
 ## Build
 
 ```sh
