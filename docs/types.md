@@ -123,7 +123,9 @@ A class can define operators as methods named `operator` followed by the symbol:
 | `operator -()` | unary `-a` |
 | `operator ==(T other) returns bool` | `a == b`, and `a != b` as its negation |
 | `operator <(T other) returns bool` | `a < b`; also `>`, `<=`, `>=` unless those are defined |
-| `operator [](K key)` / `operator []=(K key, V value)` | `a[key]` and `a[key] = value` |
+| `operator [](K key)` / `operator []=(K key, V value)` | `a[key]` and `a[key] = value`; a `slice` parameter receives `a[i:j]` (see [slices](collections.md#slices)) |
+| `operator :(T other)` | `a:b` (otherwise a [slice](collections.md#slices) of two integers) |
+| `operator **(T other)` | `a ** b`, and `a **= b` |
 
 ```flywheel
 class Money
@@ -141,7 +143,7 @@ end
 print Money(150) + Money(275)    # $4.25
 ```
 
-The left operand selects the method, so `money * 2` works with `operator *(int k)` but `2 * money` does not. A class without `operator ==` keeps identity comparison (or `equals`, when it defines one). `function to_string returns string` sets how `print`, `string(x)`, and interpolation show an instance.
+The left operand selects the method, so `money * 2` works with `operator *(int k)` but `2 * money` does not. A class without `operator ==` keeps identity comparison (or `equals`, when it defines one). `x in object` calls `object.contains(x)` when the class (or struct) declares one. `function to_string returns string` sets how `print`, `string(x)`, and interpolation show an instance.
 
 ## Structs
 
@@ -184,6 +186,47 @@ print (a + b * 2).x, a == Vec2(3, 4), a
 Assigning a class instance or a collection shares it instead; `deep_copy(value)` copies everything a value reaches in one call, for saving and restoring a whole state (see [deep copies](runtime.md#deep-copies)).
 
 An array of structs (like an array of numbers) keeps its elements in one contiguous block: `particles[i]` and `particles[i] = p` read and write that block in place, with no allocation, so a loop over tens of thousands of structs runs at close to the speed of the same loop in C. The block is also what a [native function](modules.md#structs-arrays-and-callbacks) receives for a pointer parameter. Stored anywhere else (a map value, a class field, a closure), a struct is kept in a small heap object and copied out when read; local variables, parameters, and results never touch the heap.
+
+## Built-in vectors
+
+`vector2`, `vector3`, and `vector4` are structs that every program has without an import. Their components are whole numbers (`int`), for grid cells, tiles, voxels, and directions: y points up (north), x right (east), z forward, and w ana. For geometry with fractions, use [vecmath](../stdlib/README.md#vecmath)'s `Vec2`, `Vec3`, and `Vec4`. A program's own declaration or import of one of these names takes precedence.
+
+They are written in three ways. The markup form is a void element (no closing tag); its attributes are whole numbers or `{expression}`, and components left out are 0:
+
+```flywheel
+var a = vector3(1, 2, 3)
+var b = vector3(x=1, y=2, z=3)
+var c = <vector3 x=1 y=2 z=3>
+int n = 4
+var d = <vector2 x={n} y=-1>
+print a == b and b == c, d                # true <vector2 x=4 y=-1>
+```
+
+`v.x`, `v.y`, `v.z`, and `v.w` are the components, assignable like any struct field (`v.x += 1`); `v[0]`, `v[1]`, ... read them by position. Methods return a new vector, each taking a distance that defaults to 1; `v .= up()` moves `v` itself:
+
+| Type | Moves |
+|---|---|
+| `vector2` | `up()`/`north()`, `down()`/`south()`, `left()`/`west()`, `right()`/`east()`, `movex(n)`, `movey(n)` |
+| `vector3` | those, and `forward()`, `backward()`, `movez(n)` |
+| `vector4` | those, and `ana()` (toward +w), `kata()` (toward -w), `movew(n)` |
+
+```flywheel
+var player = <vector2 x=0 y=0>
+player .= north(2)
+player .= east()
+print player                              # <vector2 x=1 y=2>
+print vector4().ana(3).kata().forward()   # <vector4 x=0 y=0 z=1 w=2>
+```
+
+`a:b` lists every cell from `a` to `b`, both included, one unit step at a time. Each step moves along the axis with the most distance left (the later axis first on a tie: w, z, y, then x), so the path stays close to the straight line:
+
+```flywheel
+print <vector2 x=0 y=0>:<vector2 x=2 y=2>
+# [<vector2 x=0 y=0>, <vector2 x=0 y=1>, <vector2 x=1 y=1>, <vector2 x=1 y=2>, <vector2 x=2 y=2>]
+for cell in spawn:goal run visit(cell)
+```
+
+Also: `+` and `-` (vectors), unary `-`, `*` and `//` by an `int`, `==`, `dot`, `cross` (vector3), `length()` (a `double`), `length_squared()`, `distance(other)`, `manhattan(other)` (steps along the grid), `chebyshev(other)` (king moves), `abs()`, `sign()`, `min(other)`, `max(other)`, `clamp(low, high)`, `scaled(other)` (component by component), `neighbors()` (the cells one step away along each axis), `turned_left()`/`turned_right()` (vector2), `extend(n)` (one dimension more), `xy()`/`xyz()` (fewer), and `to_array()`. They print as their markup: `<vector2 x=1 y=2>`.
 
 ## Inheritance
 

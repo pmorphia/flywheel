@@ -705,6 +705,10 @@ class Navigator {
                           "__flywheel__", "__impl__", "__os__", "__arch__"})
             if (seen.insert(name).second)
                 out.push_back({name, "constant"});
+        // The built-in types of the prelude (stdlib/fw/_prelude.fw).
+        for (auto name : {"vector2", "vector3", "vector4", "slice"})
+            if (seen.insert(name).second)
+                out.push_back({name, "class"});
         return out;
     }
     static std::vector<std::string> nativeMembers(const std::string &module) {

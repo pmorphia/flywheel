@@ -190,6 +190,15 @@ std::string formatObject(Object *object, bool nested, std::set<Object *> &active
             return formatSlot(slots[0], false, active, depth + 1) +
                    (index < units->size() ? (*units)[index] : "");
         }
+        if (auto hook = textHooks().find(object->classId); hook != textHooks().end()) {
+            // The class's own to_string; an error it raises stays pending for the caller.
+            auto text = hook->second(object);
+            if (!text)
+                return "";
+            auto out = text->text;
+            release(text);
+            return out;
+        }
         // Members of enums with data (Shape.Empty) print without parentheses when fieldless.
         if (slots.empty() && object->text.find('.') != std::string::npos &&
             object->text.find('<') == std::string::npos)

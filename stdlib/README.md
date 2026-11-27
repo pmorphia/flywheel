@@ -5,6 +5,7 @@ Libraries are compiler-resolved declarations backed by C++ runtime functions; no
 | Module | Contents |
 |---|---|
 | core (implicit) | `print`, `input`, `typeof`, `len`, casts, `string(value)`, strings, collections, `Result` |
+| built in (implicit) | `vector2`, `vector3`, `vector4` — [built-in vectors](../docs/types.md#built-in-vectors); `slice` (`a:b`) — [slices](../docs/collections.md#slices) |
 | `collections` | `range` |
 | `desktop` | native windows with events and JavaScript bindings — [desktop](../docs/desktop.md) |
 | `flywheel` | run other Flywheel files and get their return values — [flywheel](#flywheel) |
@@ -436,7 +437,7 @@ print rng.integer(1, 6) == saved.integer(1, 6)   # true
 
 ### vecmath
 
-Vectors, matrices, and quaternions for games and graphics, all [structs](../docs/types.md#structs): they are copied like numbers, cost nothing to create, and are stored contiguously in arrays. Angles are in degrees. `Vec2` follows screen conventions (y down, angles clockwise from +x); `Vec3` has y up. Matrices are column-major, as shaders read them, and multiply column vectors: `a * b` applies `b` first.
+Vectors, matrices, and quaternions for games and graphics, in `double`s (for whole-number grid positions, the built-in [`vector2`, `vector3`, and `vector4`](../docs/types.md#built-in-vectors) need no import), all [structs](../docs/types.md#structs): they are copied like numbers, cost nothing to create, and are stored contiguously in arrays. Angles are in degrees. `Vec2` follows screen conventions (y down, angles clockwise from +x); `Vec3` has y up. Matrices are column-major, as shaders read them, and multiply column vectors: `a * b` applies `b` first.
 
 | Type | Operations |
 |---|---|

@@ -864,6 +864,9 @@ void fw_register_destructor(const void *id, void (*destroy)(Object *), const cha
     destructors()[id].push_back({destroy, name});
     anyDestructors = true;
 }
+void fw_register_text(const void *id, Object *(*hook)(Object *)) {
+    textHooks()[id] = hook;
+}
 void fw_register_class(const char *name, const void *id) {
     std::lock_guard<std::mutex> lock(classRegistryMutex);
     classRegistry[name] = id;

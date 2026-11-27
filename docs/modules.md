@@ -11,9 +11,31 @@ import package.formatting as formatting
 
 `import helpers` binds a namespace; use `helpers.add(2, 3)`, `helpers.counter`, or `helpers.Person("Danny")`. Module-qualified types work in declarations and signatures, for example `helpers.Person user = helpers.Person("Danny")`. Components can be qualified, such as `<widgets.Title>Hello</widgets.Title>`, or imported by wildcard.
 
-Resolution searches the importing file's directory first, then the entry file's directory. Dots become directory separators (`package.formatting` means `package/formatting`). Within each directory, `.fw` is tried before `.fly`. Next come installed packages (see [packages](tooling.md#packages)): every `.flywheel-modules` directory at or above the importing file (nearest first), then the Flywheel installation's `modules` directory. `import shapes` loads the main module of the `shapes` package and `import shapes.geometry` its `geometry.fw`. Then library modules (`csv`, `url`, `log`, `args`, `bigint`, `decimal`, `cogwheel`, which are written in Flywheel and built into the compiler) and native modules. A local file takes precedence over a package or library module with the same name. Imports bind the last path segment unless an `as` alias is provided. Importing the same module under the same name twice is allowed and changes nothing; binding two different modules to one name is a `duplicate import` error.
+Resolution searches the importing file's directory first, then the entry file's directory (a leading `.` or `@` names the directory instead; see [navigating directories](#navigating-directories)). Dots become directory separators (`package.formatting` means `package/formatting`). Within each directory, `.fw` is tried before `.fly`. Next come installed packages (see [packages](tooling.md#packages)): every `.flywheel-modules` directory at or above the importing file (nearest first), then the Flywheel installation's `modules` directory. `import shapes` loads the main module of the `shapes` package and `import shapes.geometry` its `geometry.fw`. Then library modules (`csv`, `url`, `log`, `args`, `bigint`, `decimal`, `cogwheel`, which are written in Flywheel and built into the compiler) and native modules. A local file takes precedence over a package or library module with the same name. Imports bind the last path segment unless an `as` alias is provided. Importing the same module under the same name twice is allowed and changes nothing; binding two different modules to one name is a `duplicate import` error.
 
 Modules are identified by canonical file path and included once, even when imported through multiple aliases or dependencies. Initialization runs in dependency order, preserving source import order among dependencies. Import cycles are rejected with a diagnostic showing the path chain. Reading a module global through a function before its initializer completes raises `RuntimeError`, preventing access to an uninitialized reference. Independent modules have separate symbol namespaces. Imported names are resolved in their defining module; caller locals cannot change a function's or field's default expression bindings.
+
+## Navigating directories
+
+A leading dot starts an import at the importing file's own directory, and each further dot goes up one directory. `@` starts at the project root: the nearest directory at or above the entry file that holds a `pulley.toml`, or the entry file's directory when none does. Dots after the start are directories, as in every import:
+
+```flywheel
+# in src/game/play.fw
+import .rules                  # src/game/rules.fw
+import .ai.planner             # src/game/ai/planner.fw
+import ..world                 # src/world.fw
+import ...shared.util          # shared/util.fw
+import @lib.ui.button          # <project root>/lib/ui/button.fw
+import "@/lib/ui/theme.fw"     # a path from the project root
+```
+
+These imports look only where they say (no search of the entry directory, packages, or library modules), so a file's imports keep working wherever it is run from or imported by. Relative and `@` imports are bound to their last name, as other imports are.
+
+A group imports several modules of one directory: `import ui.{button, slider as s, theme.*}` is `import ui.button`, `import ui.slider as s`, and `import ui.theme.*`. Groups work after a relative start too (`import ..{world, rules}`, `import @lib.{ui, audio}`) and may span lines.
+
+A directory is a module when it holds its main module: `import ui` (or `import .ui`) loads `ui/ui.fw`, or else `ui/main.fw` or `ui/lib.fw` (or the `main` file a `pulley.toml` in `ui/` names, as for a package), and `import ui.button` still loads `ui/button.fw`. A file `ui.fw` next to the directory takes precedence, and a directory never takes the name of a native or library module, so a project's `web/` folder does not hide `import web`.
+
+When a module is missing, the error names where it looked and suggests a close spelling from the files and directories there: `module '.helprs' not found (looked for src/game/helprs.fw, .fly, and a helprs/ directory module); did you mean '.helpers'?`.
 
 ## String, path, and URL imports
 
@@ -174,7 +196,7 @@ These modifiers apply to top-level functions, classes, interfaces, enums, compon
 
 `import helpers.*` imports that module's own public declarations. Private declarations and imported namespaces are not re-exported, unless a module re-exports one explicitly with `public import name.*`: its public names then also belong to the re-exporting module, through qualified access (`ap.Vec2`) and wildcard imports alike, and they are the same declarations (Aperture's `ap.Vec2` is `vecmath.Vec2`). Collisions with another wildcard export, an import alias, or a local top-level declaration are compile errors. Exported `const` bindings remain immutable through qualified access. Mutable module globals retain shared identity across aliases.
 
-Native libraries (`core`, `collections`, `compress`, `crypto`, `desktop`, `encoding`, `flywheel`, `fs`, `gc`, `html`, `io`, `json`, `math`, `net`, `os`, `regex`, `sqlite`, `svg`, `testing`, `thread`, `time`, `toml`, `uuid`, `web`, and `yaml`) and library modules written in Flywheel (`args`, `bigint`, `cogwheel`, `csv`, `decimal`, `log`, `url`, and `vecmath`) support qualified imports and aliases; see the [library reference](../stdlib/README.md). Native wildcard imports apply to the tag sets `html.*` and `svg.*`; local modules support wildcard imports for all their public declarations. [Element families](html-dom.md#element-families) declared in a module are visible in that module and in modules that import it. Generic classes and functions can be used across modules with type arguments, such as `shapes.Box<int>`. Packages are installed by [Pulley](tooling.md#packages).
+Native libraries (`core`, `collections`, `compress`, `crypto`, `desktop`, `encoding`, `flywheel`, `fs`, `gc`, `html`, `io`, `json`, `math`, `net`, `os`, `regex`, `sqlite`, `svg`, `testing`, `thread`, `time`, `toml`, `uuid`, `web`, and `yaml`) and library modules written in Flywheel (`args`, `bigint`, `cogwheel`, `csv`, `decimal`, `log`, `url`, and `vecmath`; the built-in `vector2`, `vector3`, `vector4`, and `slice` types come from one more, `_prelude`, which a program uses without importing it) support qualified imports and aliases; see the [library reference](../stdlib/README.md). Native wildcard imports apply to the tag sets `html.*` and `svg.*`; local modules support wildcard imports for all their public declarations. [Element families](html-dom.md#element-families) declared in a module are visible in that module and in modules that import it. Generic classes and functions can be used across modules with type arguments, such as `shapes.Box<int>`. Packages are installed by [Pulley](tooling.md#packages).
 
 A local module named like a native library takes precedence, so a file `gc.fw` next to the entry file replaces `import gc`.
 

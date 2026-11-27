@@ -544,6 +544,13 @@ std::unordered_map<const void *, std::vector<std::pair<Destructor, const char *>
 }
 bool anyDestructors = false;
 void runDestructors(Object *p); // after PendingError
+// `to_string` methods by class identity: an instance (or boxed struct) inside a collection
+// formats with its own to_string. Registered before the program runs.
+using TextHook = Object *(*)(Object *);
+std::unordered_map<const void *, TextHook> &textHooks() {
+    static auto *table = new std::unordered_map<const void *, TextHook>;
+    return *table;
+}
 void release(Object *p) {
     if (!p)
         return;

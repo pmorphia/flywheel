@@ -5092,6 +5092,93 @@ NEGATIVE.update({
     "hot_functions": ('import hot\nhot.start()\n', "hot has reload and enabled"),
 })
 
+# 2.29: built-in vector2/3/4 and slice types (stdlib/fw/_prelude.fw), a:b slices and operator :,
+# named arguments, x .= member, x++ / x--, and ** / **=.
+POSITIVE.update({
+    'builtin_vectors': (
+        'var a = vector3(1, 2, 3)\nvar b = vector3(x=1, y=2, z=3)\nvar c = <vector3 x=1 y=2 z=3>\nprint a, a == b, b == c, a.x + a.y + a.z\nvar p = <vector2 x=0 y=0>\nprint p.up(), p.north(2), p.down(), p.south(), p.left(), p.west(), p.right(), p.east(3)\nprint p.movex(5), p.movey(-1), p.up().right().up()\nvar q = vector3()\nprint q.forward(), q.backward(2), q.movez(4), q.up().east()\nvar r = <vector4 w=1>\nprint r.ana(), r.kata(2), r.movew(3), r.forward().up()\nprint <vector2 x=0 y=0>:<vector2 x=2 y=2>\nprint vector3(0, 0, 0):vector3(1, 1, 0)\nprint vector2(3, 0):vector2(1, 0), vector2(5, 5):vector2(5, 5)\nint n = 4\nvar m = <vector2 x={n} y={n * 2}>\nprint m, m + vector2(1, 1), m - vector2(1, 1), m * 2, m // 3, -m\nprint m[0], m[1], m.dot(vector2(1, 2)), m.length_squared(), vector2(3, 4).length()\nprint m.manhattan(vector2()), m.chebyshev(vector2()), vector2(-2, 3).abs(), vector2(-2, 0).sign()\nprint vector3(1, 0, 0).cross(vector3(0, 1, 0)), vector2(1, 2).extend(3), vector4(1, 2, 3, 4).xyz()\nprint vector2(1, 1).neighbors().length, vector3().neighbors().length, vector4().neighbors().length\nprint vector2(9, -9).clamp(vector2(0, 0), vector2(5, 5)), vector2(1, 0).turned_left()\nvar pos = vector2(0, 0)\npos .= up()\npos .= right(3)\npos.x += 1\nprint pos\nvector2[] path = []\nfor cell in <vector2 x=0 y=0>:<vector2 x=1 y=2> do\n    path.push(cell)\nend\nprint path.length, path[path.length - 1], vector2(1, 2) in path\n',
+        '<vector3 x=1 y=2 z=3> true true 6\n<vector2 x=0 y=1> <vector2 x=0 y=2> <vector2 x=0 y=-1> <vector2 x=0 y=-1> <vector2 x=-1 y=0> <vector2 x=-1 y=0> <vector2 x=1 y=0> <vector2 x=3 y=0>\n<vector2 x=5 y=0> <vector2 x=0 y=-1> <vector2 x=1 y=2>\n<vector3 x=0 y=0 z=1> <vector3 x=0 y=0 z=-2> <vector3 x=0 y=0 z=4> <vector3 x=1 y=1 z=0>\n<vector4 x=0 y=0 z=0 w=2> <vector4 x=0 y=0 z=0 w=-1> <vector4 x=0 y=0 z=0 w=4> <vector4 x=0 y=1 z=1 w=1>\n[<vector2 x=0 y=0>, <vector2 x=0 y=1>, <vector2 x=1 y=1>, <vector2 x=1 y=2>, <vector2 x=2 y=2>]\n[<vector3 x=0 y=0 z=0>, <vector3 x=0 y=1 z=0>, <vector3 x=1 y=1 z=0>]\n[<vector2 x=3 y=0>, <vector2 x=2 y=0>, <vector2 x=1 y=0>] [<vector2 x=5 y=5>]\n<vector2 x=4 y=8> <vector2 x=5 y=9> <vector2 x=3 y=7> <vector2 x=8 y=16> <vector2 x=1 y=2> <vector2 x=-4 y=-8>\n4 8 20 80 5\n12 8 <vector2 x=2 y=3> <vector2 x=-1 y=0>\n<vector3 x=0 y=0 z=1> <vector3 x=1 y=2 z=3> <vector3 x=1 y=2 z=3>\n4 6 8\n<vector2 x=5 y=0> <vector2 x=0 y=1>\n<vector2 x=4 y=1>\n4 <vector2 x=1 y=2> true\n'),
+    'slices': (
+        'var text = "hello world"\nprint text[0:5], text[6:], text[:5], text[-5:], text[:-6], text[::-1], text[::2], text[1:8:3]\nprint text[20:], text[3:1], "[" + text[5:6] + "]", "ünïcode"[1:4]\nint[] xs = [1, 2, 3, 4, 5, 6]\nprint xs[1:3], xs[:2], xs[4:], xs[:-1], xs[-2:], xs[::-1], xs[1::2], xs[::3], xs[:]\nprint xs[5:1:-1], xs[-1:-4:-1], xs[10:20]\nstring[] words = ["a", "b", "c", "d"]\nprint words[1:3], words[::-1]\nslice s = 1:4\nprint s, s.start, s.stop, s.step, s.length(), s.to_array(), xs[s], text[s]\nvar stepped = 10:0:-3\nprint stepped, stepped.length(), stepped.to_array(), 7 in stepped, 8 in stepped\nfor i in 0:3 do\n    print i\nend\nint total = 0\nfor i in 1:101 do\n    total += i\nend\nprint total, 3 in 0:10, 10 in 0:10, (0:10:2).contains(4)\nprint (2:6).positions(10), (-3:100).positions(5), (0:0).length()\nint lo = 2\nint? hi = null\nprint xs[lo:hi otherwise 4]\nclass Rows\n    string[] rows = ["r0", "r1", "r2", "r3"]\n    function operator [](slice part) returns string[]\n        string[] out = []\n        for i in part.positions(this.rows.length) do\n            out.push(this.rows[i])\n        end\n        return out\n    end\nend\nvar rows = Rows()\nprint rows[1:3], rows[::-1], rows[2:]\nclass Span\n    int from\n    int to\n    function operator :(Span other) returns Span\n        return Span(this.from, other.to)\n    end\nend\nvar joined = Span(1, 2):Span(5, 9)\nprint joined.from, joined.to\nvar m = {"a": 1, "b": 2}\nmap<int, string> names = {1: "one"}\nprint m["b"], names[1], "{text[0:5]}"\n',
+        'hello world hello world hello dlrow olleh hlowrd eoo\n  [ ] nïc\n[2, 3] [1, 2] [5, 6] [1, 2, 3, 4, 5] [5, 6] [6, 5, 4, 3, 2, 1] [2, 4, 6] [1, 4] [1, 2, 3, 4, 5, 6]\n[6, 5, 4, 3] [6, 5, 4] []\n["b", "c"] ["d", "c", "b", "a"]\n1:4 1 4 1 3 [1, 2, 3] [2, 3, 4] ell\n10:0:-3 4 [10, 7, 4, 1] true false\n0\n1\n2\n5050 true false true\n[2, 3, 4, 5] [2, 3, 4] 0\n[3, 4]\n["r1", "r2"] ["r3", "r2", "r1", "r0"] ["r2", "r3"]\n1 9\n2 one hello\n'),
+    'named_arguments': (
+        'function greet(string name, string greeting = "Hello", string mark = "!") returns string\n    return "{greeting}, {name}{mark}"\nend\nprint greet("Ann"), greet("Ann", mark="?"), greet(mark=".", name="Bo"), greet("Cy", "Hi", mark="")\nclass Window\n    string title\n    int width = 640\n    int height = 480\n    function resize(int width = 0, int height = 0) returns string\n        return "{width}x{height}"\n    end\nend\nvar w = Window("main", height=100)\nprint w.title, w.width, w.height, w.resize(height=5), w.resize(width=3)\nclass Account\n    string owner\n    int balance\n    constructor(string owner, int balance = 10)\n        this.owner = owner\n        this.balance = balance\n    end\nend\nvar acct = Account(balance=99, owner="Dee")\nprint acct.owner, acct.balance, Account("Eve").balance\nstruct Size\n    int w = 1\n    int h = 1\nend\nprint Size(h=3), Size(2), Size()\nfunction pick<T>(T first, T second, bool swap = false) returns T\n    return second if swap else first\nend\nprint pick(1, 2, swap=true), pick(second="b", first="a")\n',
+        'Hello, Ann! Hello, Ann? Hello, Bo. Hi, Cy\nmain 640 100 0x5 3x0\nDee 99 10\nSize(w=1, h=3) Size(w=2, h=1) Size(w=1, h=1)\n2 a\n'),
+    'increment_member_assign_power': (
+        'string name = "  danny  "\nname .= trim()\nname .= upper()\nprint name\nvar words = "a,b,c"\nwords .= split(",").join("-")\nprint words\nint n = 5\nn++\nn++\nn--\n++n\n--n\n--n\nprint n\nint[] counts = [0, 0]\ncounts[1]++\ncounts[1]++\ncounts[0]--\nprint counts\nprint 2 ** 10, -2 ** 2, 2 ** 3 ** 2, 2.0 ** -1, 9 ** 0.5, 3 ** 0\nint p = 3\np **= 3\ndouble d = 2\nd **= 3\nprint p, d\nint a = 7\nint b = 2\nprint a--b, a - -b, a-b\n',
+        'DANNY\na-b-c\n5\n[-1, 2]\n1024 -4 512 0.5 3 1\n27 8\n9 9 5\n'),
+})
+POSITIVE.update({
+    # Only an interpolation uses the prelude: its sub-parser's use still loads it.
+    "prelude_from_interpolation": ('var xs = [1, 2, 3]\nprint "{xs[1:]} {2 ** 3} {<vector2 x=1>}"\n',
+                                   '[2, 3] 8 <vector2 x=1 y=0>\n'),
+})
+NEGATIVE.update({
+    "named_unknown": ('function f(int a) returns int\n    return a\nend\nprint f(b=1)\n', "has no parameter 'b' (it takes a)"),
+    "named_twice": ('var v = vector2(x=1, x=2)\n', "argument 'x' is given twice"),
+    "named_missing": ('function f(int a, int b) returns int\n    return a + b\nend\nprint f(b=1)\n', "missing argument 'a'"),
+    "named_positional_after": ('function f(int a, int b) returns int\n    return a\nend\nprint f(a=1, 2)\n', "positional arguments come before named ones"),
+    "named_builtin": ('print len(x=1)\n', "named arguments (x=...) work in calls"),
+    "vector_markup_fraction": ('var v = <vector2 x=1.5>\n', "must be a whole number or {expression}"),
+    "vector_markup_axis": ('var v = <vector2 z=1>\n', "vector2 has the components xy, not 'z'"),
+    "slice_strings": ('print "a":"b"\n', "':' makes a slice of two integers"),
+    "slice_map": ('var m = {"a": 1}\nprint m[0:1]\n', "slices pick part of a string or an array"),
+    "member_assign_needs_member": ('int x = 1\nx .= 2\n', "'.=' expects a member after it"),
+    "power_strings": ('print "a" ** 2\n', "operator '**' requires numbers"),
+})
+TRAPS.update({
+    "power_overflow": ('print 10 ** 19\n', "integer overflow"),
+    "power_negative": ('print 2 ** -1\n', "an integer power needs an exponent of 0 or more"),
+    "slice_zero_step": ('print [1, 2][::0]\n', "a slice step cannot be 0"),
+})
+MODULE_CASES.extend([
+    (
+        "relative_imports",
+        {
+            "main.fw": "import .game.play\nprint play.run()",
+            "game/play.fw": "import .rules\nimport ..shared.util\nfunction run() returns string\n    return rules.name() + \" \" + util.name()\nend",
+            "game/rules.fw": "function name() returns string\n    return \"rules\"\nend",
+            "shared/util.fw": "function name() returns string\n    return \"util\"\nend",
+        },
+        "rules util\n",
+    ),
+    (
+        "project_root_and_groups",
+        {
+            "pulley.toml": "[package]\nname = \"demo\"\n",
+            "main.fw": "import .src.app",
+            "src/app.fw": "import @lib.ui\nimport @lib.ui.{button, slider as s}\nimport \"@/lib/ui/button.fw\" as b2\nprint ui.name(), button.label(), s.label(), b2.label()",
+            "lib/ui/ui.fw": "function name() returns string\n    return \"ui\"\nend",
+            "lib/ui/button.fw": "function label() returns string\n    return \"button\"\nend",
+            "lib/ui/slider.fw": "function label() returns string\n    return \"slider\"\nend",
+        },
+        "ui button slider button\n",
+    ),
+    (
+        "directory_module",
+        {
+            "main.fw": "import shapes\nimport shapes.{circle, square.*}\nprint shapes.count(), circle.area(2), side()",
+            "shapes/main.fw": "function count() returns int\n    return 2\nend",
+            "shapes/circle.fw": "function area(int r) returns int\n    return 3 * r * r\nend",
+            "shapes/square.fw": "function side() returns int\n    return 4\nend",
+        },
+        "2 12 4\n",
+    ),
+    (
+        "prelude_shadowed",
+        {
+            "main.fw": "import geometry.*\nprint vector2(1, 2).sum(), vector3(1, 2, 3)\nvar v = <vector3 x=1>\nprint v",
+            "geometry.fw": "class vector2\n    int a\n    int b\n    function sum() returns int\n        return this.a + this.b\n    end\nend",
+        },
+        "3 <vector3 x=1 y=2 z=3>\n<vector3 x=1 y=0 z=0>\n",
+    ),
+])
+MODULE_ERRORS.extend([
+    ("relative_missing_suggests", {"main.fw": "import .helprs", "helpers.fw": ""}, "did you mean '.helpers'?"),
+    ("missing_suggests", {"main.fw": "import helprs", "helpers.fw": ""}, "did you mean 'helpers'?"),
+    ("relative_missing_path", {"main.fw": "import ..nowhere"}, "module '..nowhere' not found (looked for"),
+])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

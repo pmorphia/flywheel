@@ -239,6 +239,11 @@ struct Program {
     // top-level function with a hidden name, Class$member; `Class.member` resolves to it. Maps
     // the hidden name to its class and access ("", "private", or "protected").
     std::map<std::string, std::pair<std::string, std::string>> statics;
+    // Set by the parser when the source uses the built-in vector2/3/4 or slice types (or `a:b`):
+    // the module loader then makes the prelude's names (stdlib/fw/_prelude.fw) visible in it.
+    bool usesPrelude = false;
+    // Merged program: the hidden prefix of the prelude's names ("$m3$"), empty when not loaded.
+    std::string prelude;
 };
 class Parser {
     std::vector<Token> tokens;
@@ -278,6 +283,12 @@ class Parser {
     void runElse(Stmt &s);     // `else run call` / `else if condition run call` after a run body
     std::vector<SP> pending; // extra statements produced by the last statement (destructuring)
     bool noTernary = false;  // case patterns: `if` starts the guard, not `x if c else y`
+    // Map literal keys and the parts of a subscript slice end at ':' instead of reading `a:b`;
+    // brackets inside them start a fresh context.
+    int colonStop = 0;
+    bool usesPrelude = false; // names vector2/3/4 or slice, or writes a slice (see Program)
+    EP subscript();          // the index of `x[...]`: an expression, or a slice `a:b:c` with parts left out
+    EP callArgument();       // an argument in parentheses: an expression or `name=value`
     bool modifierAhead();    // public/private/protected/static (soft keywords) start a declaration
     std::vector<EP> decorators(); // `memoize function f` / `register class C`: the decorators
     EP spawn();              // `spawn call`: the call on a new thread (a thread.task)

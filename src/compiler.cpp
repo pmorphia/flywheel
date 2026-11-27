@@ -1345,7 +1345,8 @@ end
             "fw_class_id",      "fw_enum_register", "fw_register_class", "fw_set_args",
             "fw_gc_collect",    "fw_gc_pending",    "fw_error_matches_name", "fw_foreign_cstr",
             "fw_gc_pause",      "fw_gc_resume",     "fw_gc_paused",     "fw_gc_threshold",
-            "fw_quantity_register", "fw_register_destructor", "fw_thread_wait_all",
+            "fw_quantity_register", "fw_register_destructor", "fw_register_text",
+            "fw_thread_wait_all",
             "fw_thread_detach", "fw_build_begin", "fw_build_text", "fw_build_int",
             "fw_build_real",    "fw_build_string",  "fw_trace"};
         if (!safe.count(name))
@@ -2388,11 +2389,36 @@ end
                     return negate(apply("operator<", a, c));
             }
             static const std::set<std::string> arithmetic = {"+", "-", "*", "/", "//", "%",
-                                                             "<", "<=", ">", ">="};
+                                                             "<", "<=", ">", ">=", ":", "**"};
             if (arithmetic.count(op))
                 error(std::string(a.t.structure() ? "struct " : "class ") + displayName(a.t.name) +
                       " does not define operator " + op +
                       "; declare `function operator " + op + "(...)`");
+        }
+        if (op == "**") {
+            // Powers: integers stay integers (checked for overflow); otherwise a double.
+            if (!a.t.numeric() || !c.t.numeric() || a.t.name == "bool" || c.t.name == "bool")
+                error("operator '**' requires numbers, got " + displayName(a.t.name) + " and " +
+                      displayName(c.t.name));
+            if (a.t.integer() && c.t.integer())
+                return convert(preludeCall("__power_int", {convert(a, Ty{"i64"}, true),
+                                                           convert(c, Ty{"i64"}, true)}),
+                               Ty{"i64"});
+            auto x = convert(a, Ty{"double"}, true), y = convert(c, Ty{"double"}, true);
+            return {b.CreateBinaryIntrinsic(llvm::Intrinsic::pow, x.v, y.v), Ty{"double"}};
+        }
+        if (op == ":") {
+            // `a:b` with integers is a slice: the numbers a, a+1, ... up to (not including) b.
+            if (!a.t.integer() || !c.t.integer() || a.t.name == "bool" || c.t.name == "bool")
+                error("':' makes a slice of two integers, such as 1:5, or calls an operator : "
+                      "that a class or struct declares; got " + displayName(a.t.name) + " and " +
+                      displayName(c.t.name));
+            auto name = preludeName("slice");
+            llvm::Value *out = llvm::PoisonValue::get(ll(Ty{name}));
+            out = writeField(out, 0, convert(a, Ty{"i64"}));
+            out = writeField(out, 1, convert(c, Ty{"i64"}));
+            out = writeField(out, 2, {i64(1), Ty{"i64"}});
+            return {out, Ty{name}};
         }
         if (op == "+" && ((a.t.name == "string" && c.t.name == "char") ||
                           (a.t.name == "char" && c.t.name == "string")))
@@ -2833,6 +2859,62 @@ end
         return {objectCall("fw_map_new", {frame, i64(mapKeyKind(t.parts()[0]) | (1LL << 40))}), t};
     }
     // Calls receiver.method(args...) with already evaluated values.
+    // Named arguments (`f(1, step=2)`, `vector3(x=1, z=3)`) move to their parameters' positions.
+    // A parameter left out before a later given one becomes a "$default" placeholder, which the
+    // argument loops treat as not supplied (see `given`).
+    void bindNamed(Expr &e, const std::vector<Param> &params, const std::string &what) {
+        size_t first = e.args.size();
+        for (size_t i = 1; i < e.args.size(); ++i)
+            if (e.args[i]->kind == "named") {
+                first = i;
+                break;
+            }
+        if (first == e.args.size())
+            return;
+        if (first - 1 > params.size())
+            error("too many arguments to " + what);
+        std::vector<EP> slots(params.size());
+        for (size_t i = 1; i < first; ++i)
+            slots[i - 1] = std::move(e.args[i]);
+        for (size_t i = first; i < e.args.size(); ++i) {
+            auto &arg = e.args[i];
+            if (arg->kind != "named")
+                error("positional arguments come before named ones (name=value)");
+            size_t at = 0;
+            while (at < params.size() && params[at].name != arg->text)
+                ++at;
+            if (at == params.size()) {
+                std::string names;
+                for (auto &param : params)
+                    names += (names.empty() ? "" : ", ") + param.name;
+                error(what + " has no parameter '" + arg->text + "'" +
+                      (names.empty() ? "" : " (it takes " + names + ")"));
+            }
+            if (slots[at])
+                error("argument '" + arg->text + "' is given twice");
+            slots[at] = std::move(arg->args[0]);
+        }
+        size_t last = slots.size();
+        while (last > 0 && !slots[last - 1])
+            --last;
+        auto callee = std::move(e.args[0]);
+        e.args.clear();
+        e.args.push_back(std::move(callee));
+        for (size_t i = 0; i < last; ++i) {
+            if (!slots[i]) {
+                if (!params[i].value)
+                    error("missing argument '" + params[i].name + "' to " + what);
+                slots[i] = std::make_unique<Expr>();
+                slots[i]->kind = "$default";
+                slots[i]->loc = e.loc;
+            }
+            e.args.push_back(std::move(slots[i]));
+        }
+    }
+    // Whether argument i (0-based, after the callee) was supplied.
+    static bool given(const Expr &e, size_t i) {
+        return i + 1 < e.args.size() && e.args[i + 1]->kind != "$default";
+    }
     Val callNamedMethod(Val receiver, const std::string &method, std::vector<Val> args) {
         scopes.emplace_back();
         Expr call;
@@ -3261,6 +3343,15 @@ end
                                          Ty expected);
     std::string instantiateFunction(const std::string &base, const std::vector<Ty> &arguments);
     std::optional<Val> genericCall(Expr &e, const std::string &name, Ty expected);
+    // The prelude's built-in slice type (stdlib/fw/_prelude.fw), and calls of its helpers.
+    std::string preludeName(const std::string &name) {
+        if (p.prelude.empty())
+            error("internal: the prelude is not loaded");
+        return p.prelude + name;
+    }
+    bool sliceType(const Ty &t) { return !p.prelude.empty() && t.name == p.prelude + "slice"; }
+    Val preludeCall(const std::string &name, std::vector<Val> args, Ty expected = Ty{});
+    std::optional<Val> sliceIndex(Val obj, Expr &position);
     uint64_t hiddenCount = 0;
     Val constructorValue(const std::string &className, Ty to);
     Val boundMethod(Val receiver, const std::string &method);
@@ -3840,6 +3931,30 @@ end
                          {classId(name), functions.at(cls + ".$destroy").function,
                           b.CreateGlobalString(displayName(name))});
         }
+        // Instances inside collections format with their class's to_string (the runtime calls
+        // it through a wrapper that takes the instance, or the boxed struct).
+        for (auto &[name, c] : classes) {
+            if (c->isInterface || !c->typeParams.empty())
+                continue;
+            auto key = resolveMethod(name, "to_string");
+            if (key.empty() || !functions.count(key) || !functions.at(key).function ||
+                !functions.at(key).ast->params.empty() || functions.at(key).result.name != "string")
+                continue;
+            auto method = functions.at(key).function;
+            auto hook = llvm::Function::Create(
+                llvm::FunctionType::get(b.getPtrTy(), {b.getPtrTy()}, false),
+                llvm::GlobalValue::InternalLinkage, "fly.text." + name, module);
+            llvm::IRBuilder<> body(llvm::BasicBlock::Create(ctx, "entry", hook));
+            llvm::Value *self = hook->getArg(0);
+            if (c->isStruct)
+                self = unboxStruct(body, self, Ty{name});
+            if (method->arg_size() != 1 || method->getArg(0)->getType() != self->getType()) {
+                hook->eraseFromParent();
+                continue;
+            }
+            body.CreateRet(body.CreateCall(method, {self}));
+            call("fw_register_text", b.getVoidTy(), {classId(name), hook});
+        }
         for (auto &ns : p.unitNamespaces) {
             std::string units;
             for (auto &u : ns.units)
@@ -4099,6 +4214,11 @@ void Compiler::statement(Stmt &s) {
 Val Compiler::valueOf(Expr &e, Ty expected) {
     location = e.loc;
     debugLocation();
+    if (e.kind == "named")
+        error("named arguments (" + e.text +
+              "=...) work in calls of functions, methods, and constructors");
+    if (e.kind == "slice" || e.kind == "omitted" || e.kind == "$default")
+        error("a slice with parts left out (xs[a:], xs[:b]) is written only inside brackets");
     if (e.kind == "name")
         checkStatic(e.text);
     if (e.kind == "name" || e.kind == "member") {
@@ -4351,6 +4471,8 @@ Val Compiler::valueOf(Expr &e, Ty expected) {
     if (e.kind == "index") {
         auto obj = value(*e.args[0]);
         auto &position = *e.args[1];
+        if (auto sliced = sliceIndex(obj, position))
+            return *sliced;
         if ((obj.t.name == "string" || obj.t.sequence()) && position.kind == "binary" &&
             !position.grouped && (position.text == ".." || position.text == "..<")) {
             auto from = convert(value(*position.args[0]), Ty{"i64"});
@@ -4649,8 +4771,16 @@ Val Compiler::valueOf(Expr &e, Ty expected) {
                                        i64(0)),
                         Ty{"bool"}};
             }
+            // `x in object` asks a class or struct with contains(x): `i in 0:10`.
+            if (classes.count(c.t.name) && !resolveMethod(c.t.name, "contains").empty()) {
+                auto found = callNamedMethod(c, "contains", {a});
+                if (found.t.name != "bool")
+                    error(displayName(c.t.name) + ".contains must return bool for `in`");
+                return found;
+            }
             if (!c.t.sequence())
-                error("membership requires an array, homogeneous tuple, string, or map");
+                error("membership requires an array, homogeneous tuple, string, map, or a class "
+                      "with contains(x)");
             a = convert(a, c.t.item());
             if (a.t.structure())
                 return {b.CreateICmpSGE(structIndexOf(c, a), i64(0)), Ty{"bool"}};
@@ -5159,13 +5289,14 @@ Val Compiler::invoke(Expr &e, Ty expected) {
             if (resolveMethod(target, "init").empty()) {
                 // The base class's generated constructor: assign its fields positionally.
                 auto &base = *classes.at(target);
+                bindNamed(e, base.fields, "super.constructor of " + displayName(target));
                 if (e.args.size() - 1 > base.fields.size())
                     error("too many arguments to super.constructor for " + displayName(target));
                 for (size_t i = 0; i < base.fields.size(); ++i) {
                     auto &f = base.fields[i];
                     Ty t = type(f.type);
                     Val v;
-                    if (i + 1 < e.args.size())
+                    if (given(e, i))
                         v = value(*e.args[i + 1], t);
                     else if (f.value)
                         v = defaultValue(*f.value, t);
@@ -5562,19 +5693,20 @@ Val Compiler::invoke(Expr &e, Ty expected) {
         // A struct is built from its fields in order; trailing fields with defaults may be
         // left out.
         auto c = classes.at(name);
+        bindNamed(e, c->fields, "struct " + displayName(name));
         if (e.args.size() - 1 > c->fields.size())
-            error("too many fields for struct " + name);
+            error("too many fields for struct " + displayName(name));
         llvm::Value *out = llvm::PoisonValue::get(ll(Ty{name}));
         for (size_t i = 0; i < c->fields.size(); ++i) {
             auto &f = c->fields[i];
             Ty t = type(f.type);
             Val x;
-            if (i + 1 < e.args.size())
+            if (given(e, i))
                 x = value(*e.args[i + 1], t);
             else if (f.value)
                 x = defaultValue(*f.value, t);
             else
-                error("missing field '" + f.name + "' of struct " + name);
+                error("missing field '" + f.name + "' of struct " + displayName(name));
             out = writeField(out, i, convert(x, t));
         }
         return {out, Ty{name}};
@@ -5598,14 +5730,15 @@ Val Compiler::invoke(Expr &e, Ty expected) {
             callMethod(obj, name, "init", e, true);
             return obj;
         }
+        bindNamed(e, c->fields, displayName(name));
         if (e.args.size() - 1 > c->fields.size())
-            error("too many constructor arguments for " + name);
+            error("too many constructor arguments for " + displayName(name));
         Val obj = newInstance(*c);
         for (size_t i = 0; i < c->fields.size(); ++i) {
             auto &f = c->fields[i];
             Ty t = type(f.type);
             Val x;
-            if (i + 1 < e.args.size())
+            if (given(e, i))
                 x = value(*e.args[i + 1], t);
             else if (f.value) {
                 x = defaultValue(*f.value, t);
@@ -5711,6 +5844,7 @@ Val Compiler::invoke(Expr &e, Ty expected) {
         auto &sig = signature(name);
         if (!sig.ast->owner.empty() && !method)
             error("method requires a receiver");
+        bindNamed(e, sig.ast->params, displayName(name));
         size_t supplied = e.args.size() - 1;
         if (supplied > sig.ast->params.size())
             error("too many arguments to " + name);
@@ -5721,7 +5855,7 @@ Val Compiler::invoke(Expr &e, Ty expected) {
             auto &param = sig.ast->params[i];
             Ty t = type(param.type);
             Val v;
-            if (i < supplied)
+            if (given(e, i))
                 v = sig.ast->foreign.empty() ? value(*e.args[i + 1], t)
                                              : foreignArgument(*e.args[i + 1], param, t);
             else if (param.value) {
@@ -8805,6 +8939,7 @@ std::optional<Val> Compiler::genericMethodCall(Val receiver, const std::string &
         return std::nullopt;
     auto &templ = *methodTemplates.at(key);
     auto ownerClass = key.substr(0, key.size() - name.size() - 1);
+    bindNamed(e, templ.params, displayName(key));
     std::vector<Ty> arguments;
     std::vector<Val> values;
     if (open != std::string::npos) {
@@ -8817,6 +8952,10 @@ std::optional<Val> Compiler::genericMethodCall(Val receiver, const std::string &
         std::set<std::string> names(templ.typeParams.begin(), templ.typeParams.end());
         std::map<std::string, std::string> bound;
         for (size_t i = 1; i < e.args.size(); ++i) {
+            if (e.args[i]->kind == "$default") {
+                values.push_back({});
+                continue;
+            }
             auto v = asFunction(value(*e.args[i]));
             if (v.t.classReference())
                 v = convert(v, constructorType(v.t.name.substr(6)));
@@ -8863,6 +9002,13 @@ std::optional<Val> Compiler::genericMethodCall(Val receiver, const std::string &
             call.args.push_back(clone(*e.args[i]));
     else
         for (auto &v : values) {
+            if (!v.v && v.t.name.empty()) {
+                auto placeholder = std::make_unique<Expr>();
+                placeholder->kind = "$default";
+                placeholder->loc = e.loc;
+                call.args.push_back(std::move(placeholder));
+                continue;
+            }
             auto hidden = "$g" + std::to_string(hiddenCount++);
             bind(hidden, v, true);
             call.args.push_back(syntheticName(hidden, e.loc));
@@ -8946,6 +9092,66 @@ std::string Compiler::instantiateFunction(const std::string &base,
 }
 // Calls of generic functions and classes: explicit `f<int>(x)` or arguments inferred from
 // the argument types (and, for constructors, from the expected type).
+Val Compiler::preludeCall(const std::string &name, std::vector<Val> args, Ty expected) {
+    scopes.emplace_back();
+    Expr call;
+    call.kind = "call";
+    call.loc = location;
+    call.args.push_back(syntheticName(preludeName(name), location));
+    for (auto &arg : args) {
+        auto hidden = "$s" + std::to_string(hiddenCount++);
+        bind(hidden, arg, true);
+        call.args.push_back(syntheticName(hidden, location));
+    }
+    auto result = invoke(call, expected);
+    releaseScopes(scopes.size() - 1);
+    scopes.pop_back();
+    return result;
+}
+// `text[1:3]`, `xs[::-1]`, `xs[part]` with a slice value: strings and arrays take the part the
+// slice picks (see slice.positions); a class receives the slice in its operator [].
+std::optional<Val> Compiler::sliceIndex(Val obj, Expr &position) {
+    bool literal = position.kind == "slice" ||
+                   (position.kind == "binary" && position.text == ":");
+    bool variable = false;
+    if (position.kind == "name" && !p.prelude.empty())
+        if (auto v = lookup(position.text))
+            variable = sliceType(v->type);
+    if (!literal && !variable)
+        return std::nullopt;
+    Val part;
+    if (position.kind == "slice") {
+        auto bound = [&](size_t i, int64_t fallback) -> Val {
+            auto &x = *position.args[i];
+            if (x.kind == "omitted")
+                return {i64(fallback), Ty{"i64"}};
+            auto v = value(x, Ty{"i64"});
+            if (!v.t.integer() || v.t.name == "bool")
+                error("slice parts are integers, got " + displayName(v.t.name));
+            return convert(v, Ty{"i64"});
+        };
+        auto start = bound(0, 0), stop = bound(1, 0), step = bound(2, 1);
+        part = preludeCall("__slice_of",
+                           {start, stop, step,
+                            {b.getInt1(position.args[0]->kind == "omitted"), Ty{"bool"}},
+                            {b.getInt1(position.args[1]->kind == "omitted"), Ty{"bool"}}});
+    } else
+        part = value(position);
+    if (!sliceType(part.t))
+        error("expected a slice, got " + displayName(part.t.name));
+    if (obj.t.name == "string")
+        return preludeCall("__slice_string", {obj, part});
+    if (obj.t.array())
+        return preludeCall("__slice_array", {obj, part});
+    if (classes.count(obj.t.name)) {
+        if (resolveMethod(obj.t.name, "operator[]").empty())
+            error(displayName(obj.t.name) +
+                  " cannot be sliced; declare `function operator [](slice part)`");
+        return callNamedMethod(obj, "operator[]", {part});
+    }
+    error("slices pick part of a string or an array, not " + displayName(obj.t.name) +
+          (obj.t.sequence() ? "; convert it with array(...) first" : ""));
+}
 std::optional<Val> Compiler::genericCall(Expr &e, const std::string &name, Ty expected) {
     if (classes.count(name) || functions.count(name))
         return std::nullopt; // already an instantiation
@@ -8975,6 +9181,17 @@ std::optional<Val> Compiler::genericCall(Expr &e, const std::string &name, Ty ex
         } else
             for (auto &param : functionTemplates.at(base)->params)
                 declared.push_back(param.type);
+        {
+            const std::vector<Param> *named = nullptr;
+            if (isClass) {
+                auto &templ = *templates.at(base);
+                auto init = std::find_if(templ.methods.begin(), templ.methods.end(),
+                                         [](Function &f) { return f.name == "init"; });
+                named = init != templ.methods.end() ? &init->params : &templ.fields;
+            } else
+                named = &functionTemplates.at(base)->params;
+            bindNamed(e, *named, displayName(base));
+        }
         std::set<std::string> names(params.begin(), params.end());
         std::map<std::string, std::string> bound;
         if (isClass && expected.name.rfind(base + "<", 0) == 0 && expected.name.back() == '>') {
@@ -8984,6 +9201,10 @@ std::optional<Val> Compiler::genericCall(Expr &e, const std::string &name, Ty ex
                 bound.emplace(params[i], parts[i]);
         }
         for (size_t i = 1; i < e.args.size(); ++i) {
+            if (e.args[i]->kind == "$default") {
+                values.push_back({});
+                continue;
+            }
             auto v = asFunction(value(*e.args[i]));
             if (v.t.classReference())
                 v = convert(v, constructorType(v.t.name.substr(6)));
@@ -9011,6 +9232,13 @@ std::optional<Val> Compiler::genericCall(Expr &e, const std::string &name, Ty ex
     // Arguments were evaluated for inference; pass them through hidden locals.
     scopes.emplace_back();
     for (auto &v : values) {
+        if (!v.v && v.t.name.empty()) {
+            auto placeholder = std::make_unique<Expr>();
+            placeholder->kind = "$default";
+            placeholder->loc = e.loc;
+            call.args.push_back(std::move(placeholder));
+            continue;
+        }
         auto hidden = "$g" + std::to_string(hiddenCount++);
         bind(hidden, v, true);
         call.args.push_back(syntheticName(hidden, e.loc));
@@ -9136,6 +9364,7 @@ Val Compiler::callMethod(Val receiver, const std::string &staticType, const std:
     if (sig.ast->isPrivate || sig.ast->isProtected)
         checkAccess(key.substr(0, key.size() - method.size() - 1), "method", method,
                     sig.ast->isProtected);
+    bindNamed(e, sig.ast->params, displayName(key));
     size_t supplied = e.args.size() - 1;
     if (supplied > sig.ast->params.size())
         error("too many arguments to " + displayName(key));
@@ -9144,7 +9373,7 @@ Val Compiler::callMethod(Val receiver, const std::string &staticType, const std:
         auto &param = sig.ast->params[i];
         Ty t = type(param.type);
         Val v;
-        if (i < supplied)
+        if (given(e, i))
             v = value(*e.args[i + 1], t);
         else if (param.value)
             v = defaultValue(*param.value, t);

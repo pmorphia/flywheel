@@ -2,7 +2,7 @@
 
 A C++20 compiler that turns Flywheel source into LLVM IR, native object files, and executables. Native markup and components become compiled element construction with escaped HTML serialization. Programs require neither Python nor a runtime interpreter.
 
-Flywheel is currently in its **beta** phase: version **2.28 (beta-28)** (`flywheel --version`).
+Flywheel is currently in its **beta** phase: version **2.29 (beta-29)** (`flywheel --version`).
 
 ## Why Flywheel
 
@@ -134,6 +134,27 @@ end
 var (label, count) = ["tokens", 3]
 print describe(Token.Number(1500)), "{label}: {count:>4}"
 ```
+
+## Vectors, slices, and named arguments
+
+`vector2`, `vector3`, and `vector4` are built in: whole-number positions and directions with compass and axis moves (`up`/`north`, `east`, `forward`, `ana`, `movex(n)`, ...), written `vector3(1, 2, 3)`, `vector3(x=1, y=2, z=3)`, or `<vector3 x=1 y=2 z=3>`. `a:b` between two vectors lists every cell from one to the other; between two integers it is a `slice`, which also picks parts of strings and arrays (`text[:5]`, `xs[-2:]`, `xs[::-1]`). Arguments can be passed by name, and `x .= f()` (`x = x.f()`), `x++`, `x--`, and `**` round out the operators. See [built-in vectors](docs/types.md#built-in-vectors), [slices](docs/collections.md#slices), and [assignment](docs/language.md#assignment).
+
+```flywheel
+var player = <vector2 x=0 y=0>
+player .= north(2)
+player.x++
+print player, <vector2 x=0 y=0>:<vector2 x=1 y=1>
+# <vector2 x=1 y=2> [<vector2 x=0 y=0>, <vector2 x=0 y=1>, <vector2 x=1 y=1>]
+
+print "hello world"[::-1], [1, 2, 3, 4][1:3], 2 ** 10     # dlrow olleh [2, 3] 1024
+function banner(string text, string fill = "-", int width = 20) returns string
+    var side = fill * ((width - text.length) // 2)
+    return side + text + side
+end
+print banner("hi", width=8), banner(fill="=", text="ok", width=6)     # ---hi--- ==ok==
+```
+
+Imports navigate directories: `import .rules` (next to this file), `import ..shared.util` (one directory up), `import @lib.ui` (from the project root), `import ui.{button, slider as s}` (several at once), and a directory with a main module is itself a module. See [navigating directories](docs/modules.md#navigating-directories).
 
 ## Reactive variables and units
 

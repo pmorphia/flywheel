@@ -12,17 +12,21 @@ This document records implemented provisional choices and current restrictions. 
 | unary | `not` | takes comparison/equality expression, binds above `and` |
 | 3 | `== !=` | chained |
 | 4 | `< <= > >= in is` | chained (`in` and `is` do not chain); strings order by code point |
-| 5 | `otherwise` | left; the right side is evaluated only when needed |
-| 6 | `.. ..<` | left (integer endpoints) |
-| 7 | `+ -` | left |
-| 8 | `* / // %` | left |
-| 9 | `as` | postfix checked cast |
+| 5 | `:` | left; a [slice](collections.md#slices) of integers, or a class's `operator :` |
+| 6 | `otherwise` | left; the right side is evaluated only when needed |
+| 7 | `.. ..<` | left (integer endpoints) |
+| 8 | `+ -` | left |
+| 9 | `* / // %` | left |
+| 10 | `as` | postfix checked cast |
 | unary | `+ -` | right |
+| 11 | `**` | right; binds tighter than a unary sign on its left (`-2 ** 2` is `-4`) |
 | postfix | calls, indexing, member access | left |
 
 `x if condition else y` is the conditional expression: `print "big" if n > 3 else "small"`. The condition must be `bool`. Its type is the expected type, or else the branches' common type: the wider of two numeric types, a shared base class, or a nullable type when one branch is `null` (`name if found else null` is `string?`). The `else` is required. Inside a `case` pattern, `if` starts the guard, so a conditional there needs parentheses.
 
 Comparisons chain: `a < b <= c` means `a < b and b <= c`, evaluating `b` once and stopping at the first false comparison. Equality operators chain among themselves (`a == b == c`); mixing levels does not chain, so `a == b < c` is `a == (b < c)`. Assignment is a statement. No implicit truthiness is allowed. Arithmetic evaluation is left to right.
+
+`a ** b` is a power. With two integers the result is an `int`, checked for overflow like every integer operation (`NumericError`), and the exponent must be 0 or more (`ValueError` otherwise; write `double(2) ** -1`). Any floating operand gives a `double`. `:` binds loosely, so `lo otherwise 0 : n - 1` is `(lo otherwise 0):(n - 1)`; inside a map literal's key, and inside the parts of a subscript slice, `:` ends the expression instead (`{a: b}` is a map entry), and parentheses make a slice there: `{(1:3): "x"}`.
 
 Integer `/` produces binary64, explicitly rounding operands as part of division; floating `/` preserves the common floating type. `//` is integer division for any numeric operands and always returns `int`: integers divide exactly, and floating operands divide and truncate toward zero (`7.5 // 2.0` is `3`, `-7.9 // 2` is `-3`), matching `%`, which follows the dividend's sign. `//=` is the compound form. Division by zero (including floating `//` by zero) and signed minimum divided/remaindered by -1 trap. Integer overflow is checked at all optimization levels.
 
@@ -51,6 +55,16 @@ A number directly followed by an identifier, with no space between them, is a qu
 `f(a,b)` is canonical. Outermost statement/declaration/assignment calls can omit parentheses, including markup arguments such as `print <h1>Hello</h1>` and `var tree = identity <p>Hello</p>`. Nested calls must be parenthesized. Known named functions and `print` accept signed outer arguments such as `print -7`; ambiguous member/function-valued calls with unary signs should use parentheses. A spaced `(` group followed by a binary operator, or by `.` or `[` written against it, begins the outer argument rather than an argument list: `print (1+2)*3` prints `9` and `time.sleep (delay in s).value` sleeps for `(delay in s).value`, while `print(1+2)*3` multiplies the call's result. Bare function names and member callable statements invoke zero-argument functions. `print a, b, c` prints its values separated by spaces.
 
 A bare class name is a class reference; a call constructs. Both `var window = desktop.window "my-window"` and `var window = desktop.window("my-window")` create a window, `desktop.window()` creates one with defaults, and `var Window = desktop.window` stores the class itself, which can later be called (`Window()`, `Window "title"`). This applies equally to user classes and through module aliases. See [classes and constructors](types.md#classes-and-constructors).
+
+Arguments in parentheses can be passed by name, after the positional ones: `greet("Ann", mark="?")`, `vector3(x=1, z=3)`, `Window("main", height=100)`. A name picks the parameter (or, for a generated constructor, the field) it belongs to; parameters left out use their defaults, even before a later named one. Naming an unknown parameter, naming one twice, a positional argument after a named one, and leaving out a parameter without a default are compile errors. Named arguments work with functions, methods, constructors (generated and `constructor`), struct construction, and generic functions; function values and native library functions take positional arguments only.
+
+```flywheel
+function greet(string name, string greeting = "Hello", string mark = "!") returns string
+    return "{greeting}, {name}{mark}"
+end
+print greet("Ann", mark="?")              # Hello, Ann?
+print greet(greeting="Hi", name="Bo")     # Hi, Bo!
+```
 
 Generated class constructors follow field order, accept defaults, and require all missing non-default fields. Classes can declare a `constructor` instead. Defaults resolve against module scope. Explicit return types support recursion; recursive inferred returns require an annotation. Non-void functions require returns on all paths; infinite-loop return analysis is conservative.
 
@@ -190,9 +204,32 @@ print "{__file__}:{__line__}: {__args__.length} arguments on {__os__}/{__arch__}
 
 `__args__` is read when the program runs. In an executable written by `--build`, so are `__file__` and `__dir__`: they come from where the executable is when it starts, not where it was built, so a program can find files shipped next to it after it is moved or installed. The main file's `__file__` is the executable's own path and its `__dir__` is the executable's directory. An imported module below the main file's directory keeps its place relative to the executable: `lib/util.fw` gives `<executable dir>/lib/util.fw` and `<executable dir>/lib`. Other modules (packages, files outside the main file's directory), `-x CODE`, and URLs get the executable's directory as `__dir__`. When the program is only run (`flywheel file.fw`, `--run`), `__file__` and `__dir__` name the source files. The rest are constants fixed when the program is compiled; an executable keeps the version and platform it was built with. These names come after the program's own names: a variable, function, or import called `__os__` hides the built-in one.
 
+## Assignment
+
+Assignment is a statement: `x = value`, and the compound forms `+=`, `-=`, `*=`, `/=`, `//=`, `%=`, and `**=`, where `x op= y` is `x = x op y` (using a class's operator method when it has one). The target may be a variable, a field (`player.score += 10`, `this.count -= 1`), an element (`counts[key] += 1`), or a field of a struct stored anywhere (`points[i].x *= 2`).
+
+`x++` and `x--` add and subtract 1 (`x += 1`); `++x` and `--x` at the start of a statement do the same. They are statements, not expressions, so `print x++` is an error, and elsewhere `--` is two minus signs: `a--b` is `a - (-b)`.
+
+`x .= member` is `x = x.member`: the member is read or called on the target and the result stored back. It reads well with methods that return a new value:
+
+```flywheel
+string name = "  danny  "
+name .= trim()
+name .= upper()
+print name                   # DANNY
+var position = vector2(0, 0)
+position .= north(2)         # position = position.north(2)
+var node = list.head
+while node != null do
+    node .= next             # walk a linked list
+end
+```
+
+The target is evaluated again for the member (`a[f()] .= upper()` calls `f` twice); store it in a variable first when that matters.
+
 ## Collections and control flow
 
-Arrays infer a homogeneous common type, or use the declared element type. Empty arrays require context. Heterogeneous literals infer tuples, with compile-time integer indices. Maps use `{key: value}` literals and sets `{a, b}`; `{}` is an empty map or set, depending on the expected type. See [collections](collections.md). Arrays use shared mutable identity and checked indices; `s[a..b]` and `s[a..<b]` slice strings and sequences.
+Arrays infer a homogeneous common type, or use the declared element type. Empty arrays require context. Heterogeneous literals infer tuples, with compile-time integer indices. Maps use `{key: value}` literals and sets `{a, b}`; `{}` is an empty map or set, depending on the expected type. See [collections](collections.md). Arrays use shared mutable identity and checked indices; `s[a..b]` and `s[a..<b]` slice strings and sequences, and `s[a:b]`, `s[a:]`, `s[:b]`, and `s[::-1]` slice them as in Python (see [slices](collections.md#slices)).
 
 `unless condition` is `if not (condition)`, with the same forms: `unless c do` ... `else do` ... `end`, `unless c run f()`, and `else unless c` in a chain (`else if` works after an `unless` too). Its condition must be `bool`.
 

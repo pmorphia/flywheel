@@ -135,6 +135,57 @@ for n in Countdown(3) do
 end
 ```
 
+## Slices
+
+`a:b` is a `slice`: the integers from `a` up to (not including) `b`. A third part is the step, `a:b:step`, which may be negative. Slices are values of the built-in `slice` type, a [struct](types.md#structs) with `start`, `stop`, and `step` fields:
+
+```flywheel
+slice s = 1:4
+print s, s.length(), s.to_array()        # 1:4 3 [1, 2, 3]
+for i in 10:0:-3 do
+    print i                               # 10, 7, 4, 1
+end
+print 5 in 0:10, (0:10:2).contains(3)     # true false
+```
+
+In a subscript, a slice picks part of a string or an array, as in Python. Either end may be left out (it then reaches the start or the end), negative ends count from the end, ends past either side are clamped, and the step may be negative:
+
+```flywheel
+var text = "hello world"
+print text[0:5], text[6:], text[-5:], text[::-1]     # hello world world dlrow olleh
+int[] xs = [1, 2, 3, 4, 5, 6]
+print xs[1:3], xs[:-1], xs[::2], xs[5:1:-1]          # [2, 3] [1, 2, 3, 4, 5] [1, 3, 5] [6, 5, 4, 3]
+print xs[s]                                          # a slice value works too: [2, 3, 4]
+```
+
+Slicing makes a new string or array (strings slice by character); it never raises for out-of-range ends, and a step of 0 raises `ValueError`. Inside the brackets `:` separates the parts, so a computed end is written as is: `xs[i + 1:n - 1]`, `xs[lo otherwise 0:]`.
+
+| `slice` member | |
+|---|---|
+| `start`, `stop`, `step` | the parts (`int`); a part left out in a subscript is a marker that `positions` resolves |
+| `length()`, `contains(n)` (also `n in s`), `to_array()` | the numbers of the slice; `for i in s` walks them |
+| `positions(length)` | the indices the slice picks from a sequence of `length` items, Python-style |
+| `bounds(length)` | `[first, past]`: the first index and the one past the last, for a sequence of `length` |
+| `to_string()` | `1:4`, `0:10:2`, `:3` |
+
+A class makes its own subscript slices by taking a `slice` in `operator []`; `positions` does the arithmetic:
+
+```flywheel
+class Rows
+    string[] rows = ["r0", "r1", "r2", "r3"]
+    function operator [](slice part) returns string[]
+        string[] out = []
+        for i in part.positions(this.rows.length) do
+            out.push(this.rows[i])
+        end
+        return out
+    end
+end
+print Rows()[1:3], Rows()[::-1]       # ["r1", "r2"] ["r3", "r2", "r1", "r0"]
+```
+
+A class or struct can also give `:` its own meaning with `operator :(T other)`, which `a:b` calls when `a` is an instance: the built-in [vectors](types.md#built-in-vectors) use it to list every cell between two points. `a:b:c` is `(a:b):c`, so a `slice` takes its step through its own `operator :`.
+
 ## Tuples and ranges
 
 Tuples have fixed length and statically known types at each position:

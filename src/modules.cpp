@@ -92,6 +92,73 @@ std::string languageName(const std::string &language) {
 class Loader {
     fs::path root;
     std::string rootUrl; // the entry file's URL directory when it was named by URL
+    // `import @name`: the nearest directory at or above the entry file with a pulley.toml, or the
+    // entry file's directory.
+    fs::path projectRoot;
+    std::string projectUrl;
+    // A module file in `directory`: name.fw or name.fly, or a directory module name/ holding its
+    // main module (as a package's: `main` in its pulley.toml, else name.fw, main.fw, or lib.fw).
+    static std::string moduleIn(const fs::path &directory, const std::string &relative) {
+        for (auto extension : {".fw", ".fly"}) {
+            auto candidate = directory / (relative + extension);
+            if (fs::is_regular_file(candidate))
+                return candidate.string();
+        }
+        auto folder = directory / relative;
+        if (fs::is_directory(folder)) {
+            auto stem = folder.filename().string();
+            auto main = folder / packageMain(folder.string(), stem);
+            if (fs::is_regular_file(main))
+                return main.string();
+        }
+        return "";
+    }
+    // Close spellings of a missing module among the files and directories next to the importer.
+    static std::string suggestion(const std::vector<fs::path> &directories, const std::string &name) {
+        auto distance = [](const std::string &a, const std::string &b) {
+            std::vector<size_t> row(b.size() + 1);
+            for (size_t j = 0; j <= b.size(); ++j)
+                row[j] = j;
+            for (size_t i = 1; i <= a.size(); ++i) {
+                size_t diagonal = row[0];
+                row[0] = i;
+                for (size_t j = 1; j <= b.size(); ++j) {
+                    size_t above = row[j];
+                    row[j] = std::min({row[j] + 1, row[j - 1] + 1,
+                                       diagonal + (a[i - 1] == b[j - 1] ? 0 : 1)});
+                    diagonal = above;
+                }
+            }
+            return row[b.size()];
+        };
+        auto last = name.substr(name.find_last_of(".@/") == std::string::npos
+                                    ? 0
+                                    : name.find_last_of(".@/") + 1);
+        auto folder = name.substr(0, name.size() - last.size());
+        folder.erase(0, folder.find_first_not_of(".@"));
+        std::replace(folder.begin(), folder.end(), '.', '/');
+        std::string best;
+        size_t bestDistance = std::max<size_t>(2, last.size() / 3) + 1;
+        for (auto &directory : directories) {
+            std::error_code error;
+            auto where = directory / folder;
+            if (!fs::is_directory(where, error))
+                continue;
+            for (auto &entry : fs::directory_iterator(where, error)) {
+                auto path = entry.path();
+                bool module = entry.is_directory(error) ||
+                              path.extension() == ".fw" || path.extension() == ".fly";
+                auto stem = entry.is_directory(error) ? path.filename().string() : path.stem().string();
+                if (!module || stem.empty() || stem[0] == '.' || stem == last)
+                    continue;
+                if (auto d = distance(stem, last); d < bestDistance) {
+                    bestDistance = d;
+                    best = name.substr(0, name.size() - last.size()) + stem;
+                }
+            }
+        }
+        return best.empty() ? "" : "; did you mean '" + best + "'?";
+    }
     std::map<std::string, std::string> packages; // the entry's packages: name -> directory
     std::map<std::string, std::map<std::string, std::string>> packagesByDirectory;
     // The packages a module sees: those of the .flywheel-modules directories at or above it
@@ -747,12 +814,58 @@ class Loader {
                 continue;
             }
             std::string found;
-            if (pathImport(name)) {
+            if ((name[0] == '.' || name[0] == '@') && !pathImport(name)) {
+                // `import .x` (the importing file's directory), `import ..x.y` (one directory up
+                // per extra dot), `import @x.y` (the project root).
+                if (library)
+                    throw Error(importLoc, "library modules cannot import files");
+                size_t dots = 0;
+                while (dots < name.size() && name[dots] == '.')
+                    ++dots;
+                auto rest = name.substr(name[0] == '@' ? 1 : dots);
+                auto relative = rest;
+                std::replace(relative.begin(), relative.end(), '.', '/');
+                if (remote) {
+                    std::string base = name[0] == '@' ? (projectUrl.empty() ? rootUrl : projectUrl)
+                                                      : urlDirectory(location);
+                    for (size_t i = 1; i < dots; ++i)
+                        base += "../";
+                    for (auto extension : {".fw", ".fly"}) {
+                        auto candidate = base + relative + extension;
+                        std::string contents;
+                        if (downloads.count(candidate) || tryFetchUrl(candidate, contents)) {
+                            downloads.emplace(candidate, contents);
+                            found = candidate;
+                            break;
+                        }
+                    }
+                    if (found.empty())
+                        throw Error(importLoc, "module '" + name + "' not found at " + base +
+                                                   relative + ".fw");
+                } else {
+                    fs::path base = name[0] == '@' ? projectRoot : path.parent_path();
+                    for (size_t i = 1; i < dots; ++i)
+                        base = base.parent_path();
+                    found = moduleIn(base, relative);
+                    if (found.empty())
+                        throw Error(importLoc,
+                                    "module '" + name + "' not found (looked for " +
+                                        (base / relative).lexically_normal().generic_string() +
+                                        ".fw, .fly, and a " + relative.substr(relative.rfind('/') + 1) +
+                                        "/ directory module)" + suggestion({base}, name));
+                }
+                if (canonicalLocation(found) == u.path)
+                    throw Error(importLoc, "module '" + name + "' imports itself");
+            } else if (pathImport(name)) {
                 // A file path or URL: relative paths start at the importing file (or its URL).
                 if (library)
                     throw Error(importLoc, "library modules cannot import files");
                 std::string target = name;
-                if (!isUrl(name) && remote && !fs::path(name).is_absolute())
+                // "@/lib/util.fw" starts at the project root.
+                if (target.rfind("@/", 0) == 0)
+                    target = remote ? (projectUrl.empty() ? rootUrl : projectUrl) + target.substr(2)
+                                    : (projectRoot / target.substr(2)).string();
+                else if (!isUrl(name) && remote && !fs::path(name).is_absolute())
                     target = urlDirectory(location) + name;
                 if (auto local = fileUrlPath(target); !local.empty())
                     target = local;
@@ -822,6 +935,19 @@ class Loader {
                 }
             }
             for (auto base : bases) {
+                // (Never for the names of native and library modules: a project's web/ folder
+                // does not hide `import web`.)
+                if (found.empty() && !native.count(name) && !libraryModules().count(name) &&
+                    fs::is_directory(base / relative)) {
+                    // A directory module: `import ui` loads ui/ui.fw (or ui/main.fw, ui/lib.fw).
+                    bool file = fs::is_regular_file(base / (relative + ".fw")) ||
+                                fs::is_regular_file(base / (relative + ".fly"));
+                    auto main = moduleIn(base, relative);
+                    if (!file && !main.empty() && fs::weakly_canonical(main).string() != u.path) {
+                        found = main;
+                        break;
+                    }
+                }
                 for (auto extension : {".fw", ".fly"}) {
                     auto candidate = base / (relative + extension);
                     if (fs::is_regular_file(candidate)) {
@@ -890,9 +1016,20 @@ class Loader {
                 if (name == "svg" && u.program.wildcards.count(alias))
                     u.svg = true;
             } else
-                throw Error(
-                    importLoc,
-                    "module '" + name + "' not found (searched " + searched(path, remote) + ")");
+                throw Error(importLoc,
+                            "module '" + name + "' not found (searched " + searched(path, remote) +
+                                ")" +
+                                (remote ? "" : suggestion({path.parent_path(), root}, name)));
+        }
+        // The built-in vector2/3/4 and slice types: the prelude's public names, wherever the
+        // module has no declaration or import of its own by that name.
+        if (u.program.usesPrelude && !(library && path.stem() == "_prelude")) {
+            auto &prelude = load(libraryPath("_prelude"), {1, 1, u.path});
+            merged.prelude = prelude.prefix;
+            u.unitModules.push_back(&prelude);
+            for (auto &[publicName, qualified] : visibleNames(prelude))
+                if (!u.names.count(publicName) && !u.program.imports.count(publicName))
+                    u.names[publicName] = qualified;
         }
         for (auto &family : u.program.families)
             for (auto &[tag, info] : family.tags)
@@ -974,6 +1111,15 @@ class Loader {
         }
         auto local = isUrl(file) ? fileUrlPath(file) : file;
         root = fs::absolute(local).parent_path();
+        projectRoot = root;
+        for (auto dir = root; !dir.empty(); dir = dir.parent_path()) {
+            if (fs::is_regular_file(dir / "pulley.toml")) {
+                projectRoot = dir;
+                break;
+            }
+            if (dir == dir.parent_path())
+                break;
+        }
         packages = packageRoots(fs::absolute(local).string());
         load(fs::absolute(local).string());
         return std::move(merged);

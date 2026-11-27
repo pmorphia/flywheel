@@ -165,8 +165,12 @@ std::set<std::string> scanVoidComponents(const std::string &s) {
     }
     return out;
 }
+// `<vector3 x=1 y=2 z=3>` is a vector value, written like a void element.
+bool vectorTag(const std::string &tag) {
+    return tag == "vector2" || tag == "vector3" || tag == "vector4";
+}
 bool voidTag(const std::string &tag) {
-    return htmlVoidTag(tag) || ambientVoidComponents.count(tag) ||
+    return htmlVoidTag(tag) || vectorTag(tag) || ambientVoidComponents.count(tag) ||
            (lexingVoidComponents && lexingVoidComponents->count(tag));
 }
 // The position after the '-->' closing the '<!--' comment at p. Markup comments are dropped,
@@ -362,18 +366,32 @@ int precedence(const std::string &s) {
         return 3;
     if (s == "<" || s == ">" || s == "<=" || s == ">=" || s == "in" || s == "is")
         return 4;
-    if (s == "as")
-        return 9;
-    if (s == "otherwise")
+    // `a:b` (a slice, or a class's `operator :`) binds looser than everything but comparisons,
+    // so `start otherwise 0 : n - 1` is `(start otherwise 0):(n - 1)`.
+    if (s == ":")
         return 5;
-    if (s == ".." || s == "..<")
+    if (s == "as")
+        return 10;
+    if (s == "otherwise")
         return 6;
-    if (s == "+" || s == "-")
+    if (s == ".." || s == "..<")
         return 7;
-    if (s == "*" || s == "/" || s == "//" || s == "%")
+    if (s == "+" || s == "-")
         return 8;
+    if (s == "*" || s == "/" || s == "//" || s == "%")
+        return 9;
+    // `a ** b`: binds tighter than unary minus on its left (-2 ** 2 is -4), right associative.
+    if (s == "**")
+        return 11;
     return 0;
 }
+// Sets a parser flag for a scope and restores it afterwards.
+struct FlagScope {
+    int &flag;
+    int saved;
+    FlagScope(int &f, int value) : flag(f), saved(f) { flag = value; }
+    ~FlagScope() { flag = saved; }
+};
 bool comparison(const std::string &s) {
     return s == "==" || s == "!=" || s == "<" || s == ">" || s == "<=" || s == ">=";
 }
@@ -526,7 +544,7 @@ std::vector<Token> lex(const std::string &source) {
                 auto &last = out.back();
                 static const std::set<std::string> joins = {
                     "+",  "-",  "*",  "/",  "//", "%",  "==", "!=", "<=", ">=", "=",  "+=",
-                    "-=", "*=", "/=", "//=", "%=", "..", "..<", ",",  "=>"};
+                    "-=", "*=", "/=", "//=", "%=", "..", "..<", ",",  "=>", "**", "**=", ".="};
                 bool wildcard = last.text == "*" && out.size() > 1 &&
                                 (out[out.size() - 2].text == "." || out[out.size() - 2].text == ":");
                 if ((last.kind == "op" && joins.count(last.text) && !wildcard) ||
@@ -644,18 +662,39 @@ std::vector<Token> lex(const std::string &source) {
             continue;
         }
         std::string op(1, c);
+        // `x++` and `x--` (after a name, `)` or `]`, ending the statement) and `++x` / `--x`
+        // (starting a statement) are increments; elsewhere `--` stays two minus signs (`a--b`).
+        if ((c == '+' || c == '-') && p + 1 < source.size() && source[p + 1] == c) {
+            auto after = p + 2 < source.size() ? source[p + 2] : '\n';
+            bool ends = after == ' ' || after == '\t' || after == '\r' || after == '\n' ||
+                        after == ';' || after == '#';
+            bool postfix = !out.empty() && !expected && ends && p > 0 &&
+                           source[p - 1] != ' ' && source[p - 1] != '\t' &&
+                           (out.back().kind == "id" || out.back().text == ")" ||
+                            out.back().text == "]");
+            bool prefix = (out.empty() || out.back().kind == "nl" || out.back().text == "do" ||
+                           out.back().text == "else") &&
+                          p + 2 < source.size() && letterScalar(static_cast<unsigned char>(after));
+            if (postfix || prefix) {
+                emit("op", std::string(2, c), p + 2);
+                expected = false;
+                continue;
+            }
+        }
         if (source.compare(p, 3, "//=") == 0)
             op = "//=";
+        else if (source.compare(p, 3, "**=") == 0)
+            op = "**=";
         else if (p + 1 < source.size()) {
             auto two = source.substr(p, 2);
             if (two == "==" || two == "!=" || two == "<=" || two == ">=" || two == "+=" ||
                 two == "-=" || two == "*=" || two == "/=" || two == "%=" || two == "//" ||
-                two == ".." || two == "=>" || two == "??")
+                two == ".." || two == "=>" || two == "??" || two == ".=" || two == "**")
                 op = two;
         }
         if (op == ".." && p + 2 < source.size() && source[p + 2] == '<')
             op = "..<";
-        if (std::string("+-*/%=!<>()[]{}.,?:").find(c) == std::string::npos)
+        if (std::string("+-*/%=!<>()[]{}.,?:@").find(c) == std::string::npos)
             throw Error(loc, "invalid character");
         if (c == '(' || c == '[' || c == '{')
             ++group;
@@ -984,6 +1023,7 @@ EP Parser::stringExpr(const Token &t) {
             auto value = sub.expression();
             if (sub.peek().kind != "eof")
                 throw Error(t.loc, "invalid interpolation expression");
+            usesPrelude = usesPrelude || sub.usesPrelude;
             {
                 // string literals keep their raw text: the expression's place in the file
                 int line = t.loc.line, column = t.loc.column + 1 + static_cast<int>(p + 1);
@@ -1041,6 +1081,7 @@ EP Parser::markup() {
         auto value = sub.expression();
         if (sub.peek().kind != "eof")
             throw Error(token.loc, "invalid markup interpolation");
+        usesPrelude = usesPrelude || sub.usesPrelude;
         {
             int line = token.loc.line, column = token.loc.column + static_cast<int>(p + 1);
             for (size_t q = 0; q <= p; ++q)
@@ -1181,6 +1222,43 @@ EP Parser::markup() {
     auto e = element();
     if (p != s.size())
         throw Error(token.loc, "unexpected text after markup");
+    if (vectorTag(e->text)) {
+        // `<vector2 x=1 y={n}>` is the call vector2(x=1, y=n). Unquoted and quoted values are
+        // whole numbers; `{expression}` passes any expression.
+        auto call = node("call", "", token.loc);
+        call->args.push_back(node("name", e->text, token.loc));
+        static const std::string axes = "xyzw";
+        size_t dimensions = static_cast<size_t>(e->text.back() - '0');
+        for (size_t i = 0; i < e->names.size(); ++i) {
+            auto &attribute = e->names[i];
+            auto &value = e->args[i];
+            if (attribute.size() != 1 || axes.find(attribute[0]) >= dimensions)
+                throw Error(token.loc, e->text + " has the components " + axes.substr(0, dimensions) +
+                                           ", not '" + attribute + "'");
+            if (value->kind == "string") {
+                auto text = value->text;
+                size_t digits = text[0] == '-' || text[0] == '+' ? 1 : 0;
+                if (value->outer || digits == text.size() ||
+                    text.find_first_not_of("0123456789", digits) != std::string::npos)
+                    throw Error(token.loc, "<" + e->text + "> component '" + attribute +
+                                               "' must be a whole number or {expression}, such as " +
+                                               attribute + "=3");
+                auto number = node("int", text.substr(digits), token.loc);
+                if (text[0] == '-') {
+                    auto negative = node("unary", "-", token.loc);
+                    negative->args.push_back(std::move(number));
+                    number = std::move(negative);
+                }
+                value = std::move(number);
+            }
+            auto named = node("named", attribute, token.loc);
+            named->args.push_back(std::move(value));
+            call->args.push_back(std::move(named));
+        }
+        if (e->args.size() > e->names.size())
+            throw Error(token.loc, "<" + e->text + "> is a value and holds no children");
+        return call;
+    }
     return e;
 }
 void Parser::spanFrom(Expr &e, int line, int column) {
@@ -1253,13 +1331,15 @@ EP Parser::prefixInner() {
         e = node("null", "", t.loc);
     else if (accept("-") || accept("+") || accept("not")) {
         e = node("unary", t.text, t.loc);
-        e->args.push_back(expression(t.text == "not" ? 2 : 9));
+        e->args.push_back(expression(t.text == "not" ? 2 : 10));
         return e;
     } else if (accept("(")) {
+        FlagScope fresh(colonStop, 0);
         e = expression();
         expect(")");
         e->grouped = true;
     } else if (accept("[")) {
+        FlagScope fresh(colonStop, 0);
         e = node("array", "", t.loc);
         if (!accept("]")) {
             do {
@@ -1270,14 +1350,19 @@ EP Parser::prefixInner() {
     } else if (accept("{")) {
         // {k: v, ...} is a map literal and {a, b, ...} a set literal; {} is an empty map or set.
         e = node("map", "", t.loc);
+        FlagScope fresh(colonStop, 0);
+        auto key = [&] {
+            FlagScope keys(colonStop, 1); // `{a: b}` is a map entry, not the slice a:b
+            return expression();
+        };
         if (!accept("}")) {
-            e->args.push_back(expression());
+            e->args.push_back(key());
             if (!accept(":"))
                 e->kind = "set";
             else
                 e->args.push_back(expression());
             while (accept(",")) {
-                e->args.push_back(expression());
+                e->args.push_back(e->kind == "map" ? key() : expression());
                 if (e->kind == "map") {
                     expect(":");
                     e->args.push_back(expression());
@@ -1355,19 +1440,25 @@ EP Parser::prefixInner() {
             n->args.push_back(std::move(e));
             e = std::move(n);
         } else if (accept("(")) {
+            FlagScope fresh(colonStop, 0);
             auto n = node("call", "", t.loc);
             n->args.push_back(std::move(e));
             if (!accept(")")) {
                 do {
-                    n->args.push_back(expression());
+                    n->args.push_back(callArgument());
+                    if (n->args.back()->kind != "named" && n->args.size() > 2 &&
+                        n->args[n->args.size() - 2]->kind == "named")
+                        throw Error(n->args.back()->loc,
+                                    "positional arguments come before named ones (name=value)");
                 } while (accept(","));
                 expect(")");
             }
             e = std::move(n);
         } else if (accept("[")) {
+            FlagScope fresh(colonStop, 0);
             auto n = node("index", "", t.loc);
             n->args.push_back(std::move(e));
-            n->args.push_back(expression());
+            n->args.push_back(subscript());
             expect("]");
             e = std::move(n);
         } else
@@ -1456,10 +1547,50 @@ EP Parser::which(EP sequence) {
     n->args.push_back(std::move(fn));
     return n;
 }
+// `name=value` in a call's parentheses passes a named argument: `vector3(x=1, y=2, z=3)`.
+EP Parser::callArgument() {
+    if (peek().kind == "id" && peek(1).kind == "op" && peek(1).text == "=") {
+        auto name = take();
+        take();
+        auto n = node("named", name.text, name.loc);
+        n->args.push_back(expression());
+        return n;
+    }
+    return expression();
+}
+// `x[i]`, or a slice: `x[a:b]`, `x[a:b:step]`, with any part left out (`x[:3]`, `x[2:]`,
+// `x[::-1]`). A slice is a "slice" node of three parts, "omitted" where none was written.
+EP Parser::subscript() {
+    auto loc = peek().loc;
+    auto part = [&]() -> EP {
+        if (peek().text == ":" || peek().text == "]")
+            return node("omitted", "", peek().loc);
+        FlagScope parts(colonStop, 1);
+        return expression();
+    };
+    auto first = part();
+    if (peek().text != ":" || peek().kind != "op") {
+        if (first->kind == "omitted")
+            throw Error(loc, "expected an index");
+        return first;
+    }
+    usesPrelude = true;
+    auto n = node("slice", "", loc);
+    n->args.push_back(std::move(first));
+    take();
+    n->args.push_back(part());
+    if (peek().text == ":" && peek().kind == "op") {
+        take();
+        n->args.push_back(part());
+    } else
+        n->args.push_back(node("omitted", "", loc));
+    return n;
+}
 EP Parser::operators(EP e, int level) {
     if (peek().kind == "op" && peek().text == "??")
         throw Error(peek().loc, "'?\?' was renamed to 'otherwise': write 'a otherwise b'");
-    while ((peek().kind == "op" || peek().kind == "id") && precedence(peek().text) > level) {
+    while ((peek().kind == "op" || peek().kind == "id") && precedence(peek().text) > level &&
+           !(colonStop && peek().kind == "op" && peek().text == ":")) {
         if (peek().text == "is" || peek().text == "as") {
             // x is Type tests a runtime class; x as Type is a checked downcast.
             auto op = take();
@@ -1483,10 +1614,12 @@ EP Parser::operators(EP e, int level) {
             spanAfter(*this, *e, *e);
             continue;
         }
+        if (op.text == ":" || op.text == "**")
+            usesPrelude = true;
         // `a otherwise b` is the null fallback, internally the binary operator "??".
         auto n = node("binary", op.text == "otherwise" ? "??" : op.text, op.loc);
         n->args.push_back(std::move(e));
-        n->args.push_back(expression(precedence(op.text)));
+        n->args.push_back(expression(precedence(op.text) - (op.text == "**" ? 1 : 0)));
         spanAfter(*this, *n, *n->args[0]);
         if (peek().kind == "op" && peek().text == "??")
             throw Error(peek().loc, "'?\?' was renamed to 'otherwise': write 'a otherwise b'");
@@ -1635,7 +1768,8 @@ std::vector<SP> Parser::runBody() {
     s->target = outer();
     if (peek().kind == "op" && (peek().text == "=" || peek().text == "+=" || peek().text == "-=" ||
                                 peek().text == "*=" || peek().text == "/=" ||
-                                peek().text == "//=" || peek().text == "%="))
+                                peek().text == "//=" || peek().text == "%=" || peek().text == "**=" ||
+                                peek().text == ".=" || peek().text == "++" || peek().text == "--"))
         throw Error(peek().loc, usage + "; assignments need 'do' ... 'end'");
     // A bare name or member calls it with no arguments, as a statement does: `run main_loop`.
     auto &kind = s->target->kind;
@@ -1721,7 +1855,8 @@ SP Parser::statementInner() {
         // with the message when the condition is false. It becomes
         // `if not (condition) do throw AssertionError(message) end`.
         static const std::set<std::string> notKeyword = {"=",  "+=", "-=", "*=", "/=", "//=",
-                                                         "%=", ".",  "[",  ")",  ","};
+                                                         "%=", "**=", ".=", "++", "--", ".",
+                                                         "[",  ")",  ","};
         if (!notKeyword.count(peek(1).text) || peek(1).kind != "op") {
             auto loc = take().loc;
             EP condition, message;
@@ -2081,9 +2216,45 @@ SP Parser::statementInner() {
         finish();
         return s;
     }
+    // `++x` / `--x` and `x++` / `x--` add or subtract 1: `x += 1`.
+    auto increment = [&](const Token &op) {
+        s->kind = "assign";
+        s->op = op.text == "++" ? "+=" : "-=";
+        s->expr = node("int", "1", op.loc);
+    };
+    if (peek().kind == "op" && (peek().text == "++" || peek().text == "--")) {
+        auto op = take();
+        s->target = outer();
+        increment(op);
+        finish();
+        return s;
+    }
+    size_t targetStart = index(0);
     s->target = outer();
-    if (peek().text == "=" || peek().text == "+=" || peek().text == "-=" || peek().text == "*=" ||
-        peek().text == "/=" || peek().text == "//=" || peek().text == "%=") {
+    if (peek().kind == "op" && (peek().text == "++" || peek().text == "--")) {
+        increment(take());
+    } else if (peek().kind == "op" && peek().text == ".=") {
+        // `x .= f(a)` is `x = x.f(a)`: the target's tokens are read again before the member.
+        size_t at = index(0);
+        auto op = take();
+        if (peek().kind != "id")
+            throw Error(op.loc, "'.=' expects a member after it, such as 'name .= upper()'");
+        std::vector<Token> copy;
+        for (size_t i = targetStart; i < at; ++i)
+            if (tokens[i].kind != "nl")
+                copy.push_back(tokens[i]);
+        Token dot = op;
+        dot.text = ".";
+        dot.spaced = false;
+        copy.push_back(dot);
+        tokens[index(0)].spaced = false;
+        tokens.insert(tokens.begin() + static_cast<std::ptrdiff_t>(pos), copy.begin(), copy.end());
+        s->kind = "assign";
+        s->op = "=";
+        s->expr = outer();
+    } else if (peek().text == "=" || peek().text == "+=" || peek().text == "-=" ||
+               peek().text == "*=" || peek().text == "/=" || peek().text == "//=" ||
+               peek().text == "%=" || peek().text == "**=") {
         s->kind = "assign";
         s->op = take().text;
         s->expr = outer();
@@ -2356,7 +2527,8 @@ Function Parser::function(const std::string &owner, bool signatureOnly,
         take();
         auto op = take();
         static const std::set<std::string> overloadable = {"+", "-", "*", "/",  "//", "%",
-                                                           "==", "<", "<=", ">", ">=", "["};
+                                                           "==", "<", "<=", ">", ">=", "[",
+                                                           ":", "**"};
         if (!overloadable.count(op.text))
             throw Error(op.loc, "operator '" + op.text + "' cannot be overloaded");
         f.name = "operator" + op.text;
@@ -2419,6 +2591,12 @@ Parser::Parser(std::vector<Token> t) : tokens(std::move(t)), voidComponents(ambi
         if (tokens[i].kind == "id" && tokens[i].text == "void" && tokens[i + 1].kind == "id" &&
             tokens[i + 1].text == "component" && tokens[i + 2].kind == "id")
             voidComponents.insert(tokens[i + 2].text);
+    // The built-in vector and slice types live in a library module (stdlib/fw/_prelude.fw)
+    // that a program loads only when it names them or writes a slice.
+    for (auto &token : tokens)
+        if ((token.kind == "id" && (token.text == "slice" || vectorTag(token.text))) ||
+            (token.kind == "markup" && token.text.rfind("<vector", 0) == 0))
+            usesPrelude = true;
 }
 Program Parser::parse() {
     Program p;
@@ -2477,7 +2655,10 @@ Program Parser::parse() {
             // `import rust name`, `import zig name`. A module named c, cxx, rust, or zig is
             // imported with a string: `import "c"`.
             std::string kind;
-            if (peek().text == "+" && peek().kind == "op" && !peek().spaced &&
+            if (peek().text == "++" && peek().kind == "op" && !peek().spaced) {
+                take(); // `import++` lexes as an increment token
+                kind = "cxx";
+            } else if (peek().text == "+" && peek().kind == "op" && !peek().spaced &&
                 peek(1).text == "+" && !peek(1).spaced) {
                 take();
                 take();
@@ -2487,13 +2668,64 @@ Program Parser::parse() {
                        peek().kind == "id" && (peek(1).kind == "id" || peek(1).kind == "string") &&
                        peek(1).text != "as")
                 kind = take().text;
-            std::string name;
-            bool wildcard = false, path = false;
+            // One module: its name (dotted, a path, or relative: ".x", "..x.y", "@x.y"), the
+            // name it is bound to, and whether it is a wildcard import.
+            auto addImport = [&](std::string name, std::string alias, bool wildcard, bool path,
+                                 Location nameLoc, bool aliased) {
+                if (!kind.empty() && wildcard)
+                    throw Error(nameLoc, "native imports cannot be wildcards");
+                if (!aliased) {
+                    if (path) {
+                        // The file name without its extension: "https://x.org/lib/util.fw" is `util`.
+                        auto base = name.substr(0, name.find_first_of("?#"));
+                        while (!base.empty() && (base.back() == '/' || base.back() == '\\'))
+                            base.pop_back();
+                        base = base.substr(base.find_last_of("/\\") == std::string::npos
+                                               ? 0
+                                               : base.find_last_of("/\\") + 1);
+                        alias = base.substr(0, base.find('.'));
+                    } else
+                        alias = name.substr(name.find_last_of(".@") == std::string::npos
+                                                ? 0
+                                                : name.find_last_of(".@") + 1);
+                    if (!wildcard && (alias.empty() || identifierEnd(alias, 0) != alias.size() ||
+                                      std::isdigit(static_cast<unsigned char>(alias[0]))))
+                        throw Error(nameLoc, "cannot name the module imported from \"" + name +
+                                                 "\"; add `as name`");
+                }
+                if (!kind.empty())
+                    p.importKinds[alias] = kind;
+                if (wildcard)
+                    p.wildcards.insert(alias);
+                if (reexport) {
+                    if (!wildcard || !kind.empty())
+                        throw Error(nameLoc, "`public import` re-exports a whole module: write "
+                                             "`public import " + name + ".*`");
+                    p.reexports.insert(alias);
+                }
+                if (wildcard && name == "html")
+                    p.html = true;
+                if (wildcard && name == "svg")
+                    p.svg = true;
+                // `import time.time` names the time unit namespace, which `import time` brings.
+                if (!path && name == "time.time")
+                    name = "time";
+                // Importing the same module under the same name again changes nothing.
+                if (p.imports.count(alias) && p.imports.at(alias) == name && !path &&
+                    p.wildcards.count(alias) == static_cast<size_t>(wildcard))
+                    return;
+                if (p.imports.count(alias))
+                    throw Error(peek().loc, "duplicate import '" + alias + "'");
+                p.imports[alias] = name;
+                p.importOrder.push_back(alias);
+                p.importLocations[alias] = tokens[pos - 1].loc;
+            };
             auto nameLoc = peek().loc;
             if (peek().kind == "string") {
                 // `import "helpers"` is `import helpers`; a string can also name a file
                 // (`import "lib/util.fw"`) or a URL (`import "https://example.com/util.fw"`).
-                name = take().text;
+                std::string name = take().text;
+                bool wildcard = false;
                 if (name.size() > 2 && name.compare(name.size() - 2, 2, ".*") == 0) {
                     wildcard = true;
                     name.resize(name.size() - 2);
@@ -2512,73 +2744,80 @@ Program Parser::parse() {
                     if (name.size() > n && name.compare(name.size() - n, n, extension) == 0)
                         dotted = false;
                 }
-                path = !dotted;
+                bool path = !dotted;
                 if (name.empty())
                     throw Error(nameLoc, "import needs a module name");
                 if (path && wildcard)
                     throw Error(nameLoc, "wildcard imports need a module name, not a path");
-            } else {
-                name = identifier().text;
-                while (accept(".")) {
-                    if (accept("*")) {
-                        wildcard = true;
-                        break;
-                    }
-                    name += "." + identifier().text;
+                std::string alias;
+                bool aliased = accept("as");
+                if (aliased) {
+                    if (wildcard)
+                        throw Error(peek().loc, "wildcard imports cannot have an alias");
+                    alias = identifier().text;
                 }
-            }
-            if (!kind.empty() && wildcard)
-                throw Error(nameLoc, "native imports cannot be wildcards");
-            std::string alias;
-            if (path) {
-                // The file name without its extension: "https://x.org/lib/util.fw" is `util`.
-                auto base = name.substr(0, name.find_first_of("?#"));
-                while (!base.empty() && (base.back() == '/' || base.back() == '\\'))
-                    base.pop_back();
-                base = base.substr(base.find_last_of("/\\") == std::string::npos
-                                       ? 0
-                                       : base.find_last_of("/\\") + 1);
-                alias = base.substr(0, base.find('.'));
-            } else
-                alias = name.substr(
-                    name.find_last_of('.') == std::string::npos ? 0 : name.find_last_of('.') + 1);
-            if (accept("as")) {
-                if (wildcard)
-                    throw Error(peek().loc, "wildcard imports cannot have an alias");
-                alias = identifier().text;
-            } else if (alias.empty() || identifierEnd(alias, 0) != alias.size() ||
-                       std::isdigit(static_cast<unsigned char>(alias[0])))
-                throw Error(nameLoc, "cannot name the module imported from \"" + name +
-                                         "\"; add `as name`");
-            if (!kind.empty())
-                p.importKinds[alias] = kind;
-            if (wildcard)
-                p.wildcards.insert(alias);
-            if (reexport) {
-                if (!wildcard || !kind.empty())
-                    throw Error(nameLoc, "`public import` re-exports a whole module: write "
-                                         "`public import " + name + ".*`");
-                p.reexports.insert(alias);
-            }
-            if (wildcard && name == "html")
-                p.html = true;
-            if (wildcard && name == "svg")
-                p.svg = true;
-            // `import time.time` names the time unit namespace, which `import time` brings.
-            if (!path && name == "time.time")
-                name = "time";
-            // Importing the same module under the same name again changes nothing.
-            if (p.imports.count(alias) && p.imports.at(alias) == name && !path &&
-                p.wildcards.count(alias) == static_cast<size_t>(wildcard)) {
-                finish();
+                addImport(name, alias, wildcard, path, nameLoc, aliased);
             } else {
-                if (p.imports.count(alias))
-                    throw Error(peek().loc, "duplicate import '" + alias + "'");
-                p.imports[alias] = name;
-                p.importOrder.push_back(alias);
-                p.importLocations[alias] = tokens[pos - 1].loc;
-                finish();
+                // A leading `.` starts at the importing file's directory and each further dot
+                // goes up one (`import ..shared.util`); `@` starts at the project root.
+                std::string prefix;
+                while (peek().kind == "op" && (peek().text == "." || peek().text == ".." ||
+                                               peek().text == "@") &&
+                       (prefix.empty() || !peek().spaced)) {
+                    if (peek().text == "@" && !prefix.empty())
+                        throw Error(peek().loc, "'@' (the project root) starts an import name");
+                    prefix += take().text;
+                    if (prefix[0] == '@' && peek().text == "." && !peek().spaced)
+                        throw Error(peek().loc, "write `import @lib.util`, with no '.' after '@'");
+                }
+                // `import ui.{button, slider as s, theme.*}` imports several modules of ui.
+                std::function<void(const std::string &)> entries = [&](const std::string &head) {
+                    auto loc = peek().loc;
+                    std::string name = head;
+                    bool wildcard = false;
+                    if (!(name.empty() || name.back() == '.' || name.back() == '@'))
+                        throw Error(loc, "expected a module name");
+                    name += identifier().text;
+                    while (accept(".")) {
+                        if (accept("*")) {
+                            wildcard = true;
+                            break;
+                        }
+                        if (accept("{")) {
+                            do {
+                                newlines();
+                                if (peek().text == "}")
+                                    break;
+                                entries(name + ".");
+                                newlines();
+                            } while (accept(","));
+                            expect("}");
+                            return;
+                        }
+                        name += "." + identifier().text;
+                    }
+                    std::string alias;
+                    bool aliased = accept("as");
+                    if (aliased) {
+                        if (wildcard)
+                            throw Error(peek().loc, "wildcard imports cannot have an alias");
+                        alias = identifier().text;
+                    }
+                    addImport(name, alias, wildcard, false, loc, aliased);
+                };
+                if (!prefix.empty() && accept("{")) {
+                    do {
+                        newlines();
+                        if (peek().text == "}")
+                            break;
+                        entries(prefix);
+                        newlines();
+                    } while (accept(","));
+                    expect("}");
+                } else
+                    entries(prefix);
             }
+            finish();
         } else if (peek().text == "function" && peek(1).text != "(")
             p.functions.push_back(function());
         else if (accept("enum")) {
@@ -3029,6 +3268,7 @@ Program Parser::parse() {
     if (!deferUnits)
         lowerUnits(p);
     lowerReactive(p);
+    p.usesPrelude = usesPrelude;
     return p;
 }
 EP clone(const Expr &e) {

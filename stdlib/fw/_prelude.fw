@@ -1,0 +1,612 @@
+# The built-in vector2, vector3, vector4, and slice types. Every program sees these names without
+# an import, unless it declares or imports something with the same name itself.
+#
+#     var spawn = vector3(1, 2, 3)              # or vector3(x=1, y=2, z=3), or <vector3 x=1 y=2 z=3>
+#     spawn .= up()                             # spawn = spawn.up(): vector3(1, 3, 3)
+#     print "hello"[1:4], [1, 2, 3, 4][::-1]    # ell [4, 3, 2, 1]
+#     for p in <vector2 x=0 y=0>:<vector2 x=2 y=1> run print p
+#
+# Vectors hold whole numbers: grid cells, tiles, voxels, and steps. y points up (north), x right
+# (east), z forward, and w ana. For geometry with fractions, use vecmath's Vec2, Vec3, and Vec4.
+# Methods return a new vector; `v .= right(2)` moves v itself.
+import math
+
+# Marks a slice end left out in a subscript (`xs[2:]`); see slice.positions.
+private const int OPEN = -9223372036854775807 - 1
+
+private function sign_of(int n) returns int
+    if n > 0 do
+        return 1
+    end
+    return -1 if n < 0 else 0
+end
+private function absolute(int n) returns int
+    return -n if n < 0 else n
+end
+
+# The cells from `a` to `b`, both included, one unit step at a time: each step moves along the
+# axis with the most distance left, the later axis first on a tie (w, z, y, then x).
+private function steps(int[] a, int[] b) returns int[][]
+    int[][] out = [a.copy()]
+    var at = a.copy()
+    while true do
+        int axis = -1
+        int most = 0
+        for i in 0..<at.length do
+            var left = absolute(b[i] - at[i])
+            if left > 0 and left >= most do
+                most = left
+                axis = i
+            end
+        end
+        if axis < 0 do
+            return out
+        end
+        at[axis] += sign_of(b[axis] - at[axis])
+        out.push(at.copy())
+    end
+    return out
+end
+
+private function axis_value(string kind, int[] values, int i) returns int
+    if i < 0 or i >= values.length do
+        throw IndexError("{kind} index {i} is out of range 0..<{values.length}")
+    end
+    return values[i]
+end
+
+# A position or direction in 2D, in whole numbers: <vector2 x=1 y=2>.
+struct vector2
+    int x = 0
+    int y = 0
+
+    function up(int n = 1) returns vector2
+        return vector2(this.x, this.y + n)
+    end
+    function down(int n = 1) returns vector2
+        return vector2(this.x, this.y - n)
+    end
+    function left(int n = 1) returns vector2
+        return vector2(this.x - n, this.y)
+    end
+    function right(int n = 1) returns vector2
+        return vector2(this.x + n, this.y)
+    end
+    function north(int n = 1) returns vector2
+        return this.up(n)
+    end
+    function south(int n = 1) returns vector2
+        return this.down(n)
+    end
+    function west(int n = 1) returns vector2
+        return this.left(n)
+    end
+    function east(int n = 1) returns vector2
+        return this.right(n)
+    end
+    function movex(int n = 1) returns vector2
+        return vector2(this.x + n, this.y)
+    end
+    function movey(int n = 1) returns vector2
+        return vector2(this.x, this.y + n)
+    end
+
+    function operator +(vector2 other) returns vector2
+        return vector2(this.x + other.x, this.y + other.y)
+    end
+    function operator -(vector2 other) returns vector2
+        return vector2(this.x - other.x, this.y - other.y)
+    end
+    function operator -() returns vector2
+        return vector2(-this.x, -this.y)
+    end
+    function operator *(int k) returns vector2
+        return vector2(this.x * k, this.y * k)
+    end
+    function operator //(int k) returns vector2
+        return vector2(this.x // k, this.y // k)
+    end
+    function operator [](int i) returns int
+        return axis_value("vector2", this.to_array(), i)
+    end
+    # Every cell from this vector to `to`, both included: <vector2 x=0 y=0>:<vector2 x=1 y=1> is
+    # [<vector2 x=0 y=0>, <vector2 x=0 y=1>, <vector2 x=1 y=1>].
+    function operator :(vector2 to) returns vector2[]
+        vector2[] out = []
+        for p in steps(this.to_array(), to.to_array()) do
+            out.push(vector2(p[0], p[1]))
+        end
+        return out
+    end
+
+    # Each component multiplied by the other's.
+    function scaled(vector2 other) returns vector2
+        return vector2(this.x * other.x, this.y * other.y)
+    end
+    function dot(vector2 other) returns int
+        return this.x * other.x + this.y * other.y
+    end
+    function length() returns double
+        return math.sqrt(double(this.dot(this)))
+    end
+    function length_squared() returns int
+        return this.dot(this)
+    end
+    function distance(vector2 other) returns double
+        return (other - this).length()
+    end
+    # Steps between the two along the grid (taxicab distance).
+    function manhattan(vector2 other) returns int
+        return absolute(other.x - this.x) + absolute(other.y - this.y)
+    end
+    # The largest difference on any axis: king moves on a chessboard.
+    function chebyshev(vector2 other) returns int
+        return math.max(absolute(other.x - this.x), absolute(other.y - this.y))
+    end
+    function abs() returns vector2
+        return vector2(absolute(this.x), absolute(this.y))
+    end
+    # -1, 0, or 1 on each axis: the direction of each step toward this vector.
+    function sign() returns vector2
+        return vector2(sign_of(this.x), sign_of(this.y))
+    end
+    function min(vector2 other) returns vector2
+        return vector2(math.min(this.x, other.x), math.min(this.y, other.y))
+    end
+    function max(vector2 other) returns vector2
+        return vector2(math.max(this.x, other.x), math.max(this.y, other.y))
+    end
+    function clamp(vector2 low, vector2 high) returns vector2
+        return this.max(low).min(high)
+    end
+    # The cells one step away along each axis: right, left, up, down.
+    function neighbors() returns vector2[]
+        return [this.right(), this.left(), this.up(), this.down()]
+    end
+    # A quarter turn counterclockwise (y up), around the origin.
+    function turned_left() returns vector2
+        return vector2(-this.y, this.x)
+    end
+    function turned_right() returns vector2
+        return vector2(this.y, -this.x)
+    end
+    function extend(int z = 0) returns vector3
+        return vector3(this.x, this.y, z)
+    end
+    function to_array() returns int[]
+        return [this.x, this.y]
+    end
+    function to_string() returns string
+        return "<vector2 x={this.x} y={this.y}>"
+    end
+end
+
+# A position or direction in 3D, in whole numbers: <vector3 x=1 y=2 z=3>. y is up, z forward.
+struct vector3
+    int x = 0
+    int y = 0
+    int z = 0
+
+    function up(int n = 1) returns vector3
+        return vector3(this.x, this.y + n, this.z)
+    end
+    function down(int n = 1) returns vector3
+        return vector3(this.x, this.y - n, this.z)
+    end
+    function left(int n = 1) returns vector3
+        return vector3(this.x - n, this.y, this.z)
+    end
+    function right(int n = 1) returns vector3
+        return vector3(this.x + n, this.y, this.z)
+    end
+    function north(int n = 1) returns vector3
+        return this.up(n)
+    end
+    function south(int n = 1) returns vector3
+        return this.down(n)
+    end
+    function west(int n = 1) returns vector3
+        return this.left(n)
+    end
+    function east(int n = 1) returns vector3
+        return this.right(n)
+    end
+    function forward(int n = 1) returns vector3
+        return vector3(this.x, this.y, this.z + n)
+    end
+    function backward(int n = 1) returns vector3
+        return vector3(this.x, this.y, this.z - n)
+    end
+    function movex(int n = 1) returns vector3
+        return vector3(this.x + n, this.y, this.z)
+    end
+    function movey(int n = 1) returns vector3
+        return vector3(this.x, this.y + n, this.z)
+    end
+    function movez(int n = 1) returns vector3
+        return vector3(this.x, this.y, this.z + n)
+    end
+
+    function operator +(vector3 other) returns vector3
+        return vector3(this.x + other.x, this.y + other.y, this.z + other.z)
+    end
+    function operator -(vector3 other) returns vector3
+        return vector3(this.x - other.x, this.y - other.y, this.z - other.z)
+    end
+    function operator -() returns vector3
+        return vector3(-this.x, -this.y, -this.z)
+    end
+    function operator *(int k) returns vector3
+        return vector3(this.x * k, this.y * k, this.z * k)
+    end
+    function operator //(int k) returns vector3
+        return vector3(this.x // k, this.y // k, this.z // k)
+    end
+    function operator [](int i) returns int
+        return axis_value("vector3", this.to_array(), i)
+    end
+    # Every cell from this vector to `to`, both included, one unit step at a time.
+    function operator :(vector3 to) returns vector3[]
+        vector3[] out = []
+        for p in steps(this.to_array(), to.to_array()) do
+            out.push(vector3(p[0], p[1], p[2]))
+        end
+        return out
+    end
+
+    function scaled(vector3 other) returns vector3
+        return vector3(this.x * other.x, this.y * other.y, this.z * other.z)
+    end
+    function dot(vector3 other) returns int
+        return this.x * other.x + this.y * other.y + this.z * other.z
+    end
+    function cross(vector3 other) returns vector3
+        return vector3(this.y * other.z - this.z * other.y, this.z * other.x - this.x * other.z,
+                       this.x * other.y - this.y * other.x)
+    end
+    function length() returns double
+        return math.sqrt(double(this.dot(this)))
+    end
+    function length_squared() returns int
+        return this.dot(this)
+    end
+    function distance(vector3 other) returns double
+        return (other - this).length()
+    end
+    function manhattan(vector3 other) returns int
+        return absolute(other.x - this.x) + absolute(other.y - this.y) + absolute(other.z - this.z)
+    end
+    function chebyshev(vector3 other) returns int
+        return math.max(absolute(other.x - this.x), absolute(other.y - this.y),
+                        absolute(other.z - this.z))
+    end
+    function abs() returns vector3
+        return vector3(absolute(this.x), absolute(this.y), absolute(this.z))
+    end
+    function sign() returns vector3
+        return vector3(sign_of(this.x), sign_of(this.y), sign_of(this.z))
+    end
+    function min(vector3 other) returns vector3
+        return vector3(math.min(this.x, other.x), math.min(this.y, other.y), math.min(this.z, other.z))
+    end
+    function max(vector3 other) returns vector3
+        return vector3(math.max(this.x, other.x), math.max(this.y, other.y), math.max(this.z, other.z))
+    end
+    function clamp(vector3 low, vector3 high) returns vector3
+        return this.max(low).min(high)
+    end
+    # The cells one step away along each axis: right, left, up, down, forward, backward.
+    function neighbors() returns vector3[]
+        return [this.right(), this.left(), this.up(), this.down(), this.forward(), this.backward()]
+    end
+    function xy() returns vector2
+        return vector2(this.x, this.y)
+    end
+    function extend(int w = 0) returns vector4
+        return vector4(this.x, this.y, this.z, w)
+    end
+    function to_array() returns int[]
+        return [this.x, this.y, this.z]
+    end
+    function to_string() returns string
+        return "<vector3 x={this.x} y={this.y} z={this.z}>"
+    end
+end
+
+# A position or direction in 4D, in whole numbers: <vector4 x=1 y=2 z=3 w=4>. w runs ana
+# (toward +w) and kata (toward -w).
+struct vector4
+    int x = 0
+    int y = 0
+    int z = 0
+    int w = 0
+
+    function up(int n = 1) returns vector4
+        return vector4(this.x, this.y + n, this.z, this.w)
+    end
+    function down(int n = 1) returns vector4
+        return vector4(this.x, this.y - n, this.z, this.w)
+    end
+    function left(int n = 1) returns vector4
+        return vector4(this.x - n, this.y, this.z, this.w)
+    end
+    function right(int n = 1) returns vector4
+        return vector4(this.x + n, this.y, this.z, this.w)
+    end
+    function north(int n = 1) returns vector4
+        return this.up(n)
+    end
+    function south(int n = 1) returns vector4
+        return this.down(n)
+    end
+    function west(int n = 1) returns vector4
+        return this.left(n)
+    end
+    function east(int n = 1) returns vector4
+        return this.right(n)
+    end
+    function forward(int n = 1) returns vector4
+        return vector4(this.x, this.y, this.z + n, this.w)
+    end
+    function backward(int n = 1) returns vector4
+        return vector4(this.x, this.y, this.z - n, this.w)
+    end
+    function ana(int n = 1) returns vector4
+        return vector4(this.x, this.y, this.z, this.w + n)
+    end
+    function kata(int n = 1) returns vector4
+        return vector4(this.x, this.y, this.z, this.w - n)
+    end
+    function movex(int n = 1) returns vector4
+        return vector4(this.x + n, this.y, this.z, this.w)
+    end
+    function movey(int n = 1) returns vector4
+        return vector4(this.x, this.y + n, this.z, this.w)
+    end
+    function movez(int n = 1) returns vector4
+        return vector4(this.x, this.y, this.z + n, this.w)
+    end
+    function movew(int n = 1) returns vector4
+        return vector4(this.x, this.y, this.z, this.w + n)
+    end
+
+    function operator +(vector4 other) returns vector4
+        return vector4(this.x + other.x, this.y + other.y, this.z + other.z, this.w + other.w)
+    end
+    function operator -(vector4 other) returns vector4
+        return vector4(this.x - other.x, this.y - other.y, this.z - other.z, this.w - other.w)
+    end
+    function operator -() returns vector4
+        return vector4(-this.x, -this.y, -this.z, -this.w)
+    end
+    function operator *(int k) returns vector4
+        return vector4(this.x * k, this.y * k, this.z * k, this.w * k)
+    end
+    function operator //(int k) returns vector4
+        return vector4(this.x // k, this.y // k, this.z // k, this.w // k)
+    end
+    function operator [](int i) returns int
+        return axis_value("vector4", this.to_array(), i)
+    end
+    # Every cell from this vector to `to`, both included, one unit step at a time.
+    function operator :(vector4 to) returns vector4[]
+        vector4[] out = []
+        for p in steps(this.to_array(), to.to_array()) do
+            out.push(vector4(p[0], p[1], p[2], p[3]))
+        end
+        return out
+    end
+
+    function scaled(vector4 other) returns vector4
+        return vector4(this.x * other.x, this.y * other.y, this.z * other.z, this.w * other.w)
+    end
+    function dot(vector4 other) returns int
+        return this.x * other.x + this.y * other.y + this.z * other.z + this.w * other.w
+    end
+    function length() returns double
+        return math.sqrt(double(this.dot(this)))
+    end
+    function length_squared() returns int
+        return this.dot(this)
+    end
+    function distance(vector4 other) returns double
+        return (other - this).length()
+    end
+    function manhattan(vector4 other) returns int
+        return absolute(other.x - this.x) + absolute(other.y - this.y) + absolute(other.z - this.z) +
+               absolute(other.w - this.w)
+    end
+    function chebyshev(vector4 other) returns int
+        return math.max(absolute(other.x - this.x), absolute(other.y - this.y),
+                        absolute(other.z - this.z), absolute(other.w - this.w))
+    end
+    function abs() returns vector4
+        return vector4(absolute(this.x), absolute(this.y), absolute(this.z), absolute(this.w))
+    end
+    function sign() returns vector4
+        return vector4(sign_of(this.x), sign_of(this.y), sign_of(this.z), sign_of(this.w))
+    end
+    function min(vector4 other) returns vector4
+        return vector4(math.min(this.x, other.x), math.min(this.y, other.y), math.min(this.z, other.z),
+                       math.min(this.w, other.w))
+    end
+    function max(vector4 other) returns vector4
+        return vector4(math.max(this.x, other.x), math.max(this.y, other.y), math.max(this.z, other.z),
+                       math.max(this.w, other.w))
+    end
+    function clamp(vector4 low, vector4 high) returns vector4
+        return this.max(low).min(high)
+    end
+    # The cells one step away along each axis: right, left, up, down, forward, backward, ana, kata.
+    function neighbors() returns vector4[]
+        return [this.right(), this.left(), this.up(), this.down(), this.forward(), this.backward(),
+                this.ana(), this.kata()]
+    end
+    function xy() returns vector2
+        return vector2(this.x, this.y)
+    end
+    function xyz() returns vector3
+        return vector3(this.x, this.y, this.z)
+    end
+    function to_array() returns int[]
+        return [this.x, this.y, this.z, this.w]
+    end
+    function to_string() returns string
+        return "<vector4 x={this.x} y={this.y} z={this.z} w={this.w}>"
+    end
+end
+
+# Walks a slice's numbers for `for i in a:b`.
+private class SliceSteps
+    int at
+    int stop
+    int step
+    function next() returns int?
+        if (this.step > 0 and this.at >= this.stop) or (this.step < 0 and this.at <= this.stop) do
+            return null
+        end
+        var value = this.at
+        this.at += this.step
+        return value
+    end
+end
+
+# The numbers from start up to (not including) stop, step apart: `1:5` is 1, 2, 3, 4, and
+# `10:0:-3` is 10, 7, 4, 1. In a subscript it picks part of a string or array: "hello"[1:3] is
+# "el", xs[:2] the first two items, xs[-2:] the last two, and xs[::-1] all of them reversed.
+struct slice
+    int start = 0
+    int stop = 0
+    int step = 1
+
+    # `a:b:step`
+    function operator :(int step) returns slice
+        if step == 0 do
+            throw ValueError("a slice step cannot be 0")
+        end
+        return slice(this.start, this.stop, step)
+    end
+    function iterator() returns SliceSteps
+        if this.start == OPEN or this.stop == OPEN do
+            throw ValueError("a slice with an end left out has no numbers of its own; use positions(length)")
+        end
+        return SliceSteps(this.start, this.stop, this.step)
+    end
+    # How many numbers the slice holds.
+    function length() returns int
+        if this.step > 0 and this.stop > this.start do
+            return (this.stop - this.start + this.step - 1) // this.step
+        end
+        if this.step < 0 and this.stop < this.start do
+            return (this.start - this.stop - this.step - 1) // -this.step
+        end
+        return 0
+    end
+    function contains(int n) returns bool
+        if this.step > 0 do
+            return n >= this.start and n < this.stop and (n - this.start) % this.step == 0
+        end
+        return n <= this.start and n > this.stop and (this.start - n) % -this.step == 0
+    end
+    function to_array() returns int[]
+        int[] out = []
+        for i in this do
+            out.push(i)
+        end
+        return out
+    end
+    # The indices this slice picks from a sequence of `length` items, in order. Negative ends count
+    # from the end, ends past either side are clamped, and ends left out (`xs[:3]`, `xs[::-1]`)
+    # reach the start or the end, as in Python.
+    function positions(int length) returns int[]
+        if this.step == 0 do
+            throw ValueError("a slice step cannot be 0")
+        end
+        var bounds = this.bounds(length)
+        int[] out = []
+        int i = bounds[0]
+        while (this.step > 0 and i < bounds[1]) or (this.step < 0 and i > bounds[1]) do
+            out.push(i)
+            i += this.step
+        end
+        return out
+    end
+    # [first, past]: the first index and the index past the last one, for a sequence of `length`.
+    function bounds(int length) returns int[]
+        var forward = this.step > 0
+        int low = 0 if forward else -1
+        int high = length if forward else length - 1
+        int first = this.start
+        if first == OPEN do
+            first = low if forward else high
+        else if first < 0 do
+            first = math.max(first + length, low)
+        else do
+            first = math.min(first, high)
+        end
+        int past = this.stop
+        if past == OPEN do
+            past = high if forward else low
+        else if past < 0 do
+            past = math.max(past + length, low)
+        else do
+            past = math.min(past, high)
+        end
+        return [first, past]
+    end
+    function to_string() returns string
+        var from = "" if this.start == OPEN else "{this.start}"
+        var to = "" if this.stop == OPEN else "{this.stop}"
+        return "{from}:{to}" if this.step == 1 else "{from}:{to}:{this.step}"
+    end
+end
+
+# xs[a:b:step] with parts left out; the compiler and interpreters call these for subscripts.
+function __slice_of(int start, int stop, int step, bool open_start, bool open_stop) returns slice
+    if step == 0 do
+        throw ValueError("a slice step cannot be 0")
+    end
+    return slice(OPEN if open_start else start, OPEN if open_stop else stop, step)
+end
+function __slice_string(string text, slice part) returns string
+    if part.step == 1 do
+        var bounds = part.bounds(text.length)
+        return text.slice(bounds[0], math.max(bounds[0], bounds[1]))
+    end
+    var out = ""
+    for i in part.positions(text.length) do
+        out += text[i]
+    end
+    return out
+end
+function __slice_array<T>(T[] items, slice part) returns T[]
+    if part.step == 1 do
+        var bounds = part.bounds(items.length)
+        return items.slice(bounds[0], math.max(bounds[0], bounds[1]))
+    end
+    T[] out = []
+    for i in part.positions(items.length) do
+        out.push(items[i])
+    end
+    return out
+end
+
+# `a ** b` with integers: checked like every integer operation, so overflow raises NumericError.
+function __power_int(int base, int exponent) returns int
+    if exponent < 0 do
+        throw ValueError("an integer power needs an exponent of 0 or more; write double({base}) ** {exponent}")
+    end
+    int result = 1
+    int factor = base
+    int left = exponent
+    while left > 0 do
+        if left % 2 == 1 do
+            result *= factor
+        end
+        left //= 2
+        if left > 0 do
+            factor *= factor
+        end
+    end
+    return result
+end
